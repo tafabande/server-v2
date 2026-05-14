@@ -4,6 +4,7 @@ from fastapi import WebSocket
 class ConnectionManager:
     def __init__(self) -> None:
         self._connections: set[WebSocket] = set()
+        self._active_sessions: dict[WebSocket, dict] = {}
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -11,6 +12,14 @@ class ConnectionManager:
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._connections.discard(websocket)
+        self._active_sessions.pop(websocket, None)
+
+    def set_session_data(self, websocket: WebSocket, data: dict) -> None:
+        if websocket in self._connections:
+            self._active_sessions[websocket] = data
+
+    def get_active_sessions(self) -> list[dict]:
+        return list(self._active_sessions.values())
 
     async def broadcast(self, payload: dict) -> None:
         stale: list[WebSocket] = []

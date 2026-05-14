@@ -93,6 +93,10 @@ app.mount("/thumbs", StaticFiles(directory="thumbs"), name="thumbs")
 app.mount("/temp", StaticFiles(directory="temp"), name="temp")
 
 
-@app.get("/", include_in_schema=False)
-async def root() -> FileResponse:
+# Catch-all route to support SPA frontend routing
+@app.get("/{full_path:path}", include_in_schema=False)
+async def catch_all(request: Request, full_path: str):
+    # Only serve index.html for paths that don't look like file requests (no dot in the last segment)
+    # or specific frontend routes we want to handle.
+    # For a pure SPA, we can just return index.html for everything not caught by previous routers/mounts.
     return FileResponse(Path("static/index.html"))

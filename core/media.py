@@ -231,57 +231,97 @@ def media_source_path(media: MediaMetadata) -> Path:
 def build_hls_command(source_path: Path, output_dir: Path) -> list[str]:
     manifest = output_dir / "index.m3u8"
     
-    # Check for NVIDIA Hardware Acceleration
+    # Check for Hardware Acceleration
     has_nvenc = False
+    has_qsv = False
     try:
         check = subprocess.run([settings.ffmpeg_path, "-encoders"], capture_output=True, text=True)
         has_nvenc = "h264_nvenc" in check.stdout
+        has_qsv = "h264_qsv" in check.stdout
     except Exception:
         pass
 
-    video_encoder = "h264_nvenc" if has_nvenc else "libx264"
-    preset = "p4" if has_nvenc else "veryfast"
+    video_encoder = "h264_nvenc" if has_nvenc else ("h264_qsv" if has_qsv else "libx264")
+    preset = "p4" if has_nvenc else ("balanced" if has_qsv else "veryfast")
+    
+    # ABR Variants: 800k, 1200k, 2000k
+    # For simplicity in this implementation, we'll create a single multi-bitrate stream 
+    # or just use a robust single stream with ABR-friendly settings if complex master playlists are too much for now.
+    # Actually, the requirement asks for variants.
     
     return [
         settings.ffmpeg_path,
         "-y",
         "-i", str(source_path),
-        "-c:v", video_encoder,
-        "-preset", preset,
-        "-g", "48", # Align GOP with 2-second segments (at 24fps)
-        "-sc_threshold", "0",
-        "-c:a", "aac",
-        "-b:a", "128k",
+        "-filter_complex", "[0:v]split=3[v1][v2][v3]; [v1]scale=w=640:h=360:force_original_aspect_ratio=decrease[v1out]; [v2]scale=w=1280:h=720:force_original_aspect_ratio=decrease[v2out]; [v3]scale=w=1920:h=1080:force_original_aspect_ratio=decrease[v3out]",
+        "-map", "[v1out]", "-c:v:0", video_encoder, "-b:v:0", "800k", "-maxrate:v:0", "850k", "-bufsize:v:0", "1200k",
+        "-map", "[v2out]", "-c:v:1", video_encoder, "-b:v:1", "1200k", "-maxrate:v:1", "1300k", "-bufsize:v:1", "2000k",
+        "-map", "[v3out]", "-c:v:2", video_encoder, "-b:v:2", "2000k", "-maxrate:v:2", "2200k", "-bufsize:v:2", "3000k",
+        "-map", "0:a", "-c:a", "aac", "-b:a", "128k",
         "-f", "hls",
-        "-hls_time", "2", # 2-second segments for "Netflix-style" low latency
+        "-hls_time", "2",
         "-hls_playlist_type", "vod",
-        "-hls_segment_filename", str(output_dir / "segment_%03d.ts"),
-        str(manifest),
+        "-hls_flags", "independent_segments",
+        "-hls_segment_type", "fmp4",
+        "-master_pl_name", "master.m3u8",
+        "-var_stream_map", "v:0,a:0 v:1,a:0 v:2,a:0",
+        "-hls_segment_filename", str(output_dir / "stream_%v/data%03d.m4s"),
+        str(output_dir / "stream_%v.m3u8"),
     ]
 
 
 async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata) -> Path:
+    import asyncio
+    from core.events import socket_manager
+    
     output_dir = hls_output_dir(media.id)
-    manifest = output_dir / "index.m3u8"
+    master_manifest = output_dir / "master.m3u8"
     output_dir.mkdir(parents=True, exist_ok=True)
-    if manifest.exists():
-        return manifest
+    
+    if master_manifest.exists():
+        return master_manifest
 
     if not ffmpeg_available():
         logger.error("FFmpeg not found in path")
         raise FileOperationError("FFmpeg is required for HLS transcoding but is not installed.")
 
-    logger.info(f"Starting HLS transcoding for media ID {media.id}")
-    completed = subprocess.run(build_hls_command(media_source_path(media), output_dir), capture_output=True, text=True)
-    if completed.returncode != 0:
-        logger.error(f"FFmpeg failed with return code {completed.returncode}: {completed.stderr}")
+    logger.info(f"Starting ABR HLS transcoding for media ID {media.id}")
+    
+    command = build_hls_command(media_source_path(media), output_dir)
+    
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    # Task to capture stderr (where FFmpeg logs progress) and broadcast it
+    async def log_reader(stream):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            log_line = line.decode().strip()
+            if log_line:
+                await socket_manager.broadcast({
+                    "type": "transcoding-log",
+                    "media_id": media.id,
+                    "line": log_line
+                })
+
+    asyncio.create_task(log_reader(process.stderr))
+    
+    returncode = await process.wait()
+    
+    if returncode != 0:
+        logger.error(f"FFmpeg failed with return code {returncode}")
         media.hls_status = "error"
         await session.commit()
         raise FileOperationError(f"HLS generation failed for media ID {media.id}.")
 
     media.hls_status = "ready"
     await session.commit()
-    return manifest
+    return master_manifest
 
 
 async def build_stream_response(session: AsyncSession, media: MediaMetadata) -> dict:
@@ -291,14 +331,14 @@ async def build_stream_response(session: AsyncSession, media: MediaMetadata) -> 
     # Non-blocking HLS launch
     import asyncio
     output_dir = hls_output_dir(media.id)
-    manifest = output_dir / "index.m3u8"
+    manifest = output_dir / "master.m3u8"
     
     if not manifest.exists():
         # Start the transcode in the background instead of waiting
         asyncio.create_task(ensure_hls_manifest(session, media))
-        return {"mode": "hls", "url": f"/temp/hls/{media.id}/index.m3u8", "status": "preparing"}
+        return {"mode": "hls", "url": f"/temp/hls/{media.id}/master.m3u8", "status": "preparing"}
 
-    return {"mode": "hls", "url": f"/temp/hls/{media.id}/index.m3u8", "status": "ready"}
+    return {"mode": "hls", "url": f"/temp/hls/{media.id}/master.m3u8", "status": "ready"}
 
 
 async def log_play_event(

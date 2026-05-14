@@ -41,6 +41,9 @@ export class ApiClient {
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent("mediahub-unauthorized"));
+      }
       let detail = "Request failed.";
       try {
         const payload = await response.json();
@@ -60,9 +63,10 @@ export class ApiClient {
   }
 
   async login(username, password) {
-    return this.request("/api/auth/login", {
+    return this.request("/api/auth/token", {
       method: "POST",
-      json: { username, password },
+      body: new URLSearchParams({ username, password }),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
   }
 

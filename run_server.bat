@@ -61,11 +61,12 @@ echo.
 
 echo [%date% %time%] --- Launching Uvicorn --- >> "%SETUP_LOG%"
 
-:: Auto-open the browser
-start "" "http://%LOCAL_IP%:8000"
+:: Launch browser in background after delay (increased to 10s for stability)
+start /b cmd /c "timeout /t 10 /nobreak >nul && start http://%LOCAL_IP%:8000"
 
-:: Start Uvicorn (it will automatically ignore venv/ due to our updated .gitignore)
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+:: Start Uvicorn
+:: We exclude folders that are frequently written to (logs, temp, thumbs) to prevent infinite reload loops.
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
 
 pause
 

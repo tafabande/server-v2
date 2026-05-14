@@ -8,6 +8,17 @@ import { SocketClient } from "./socket-client.js";
 import { UIManager } from "./ui-manager.js";
 
 export class MediaHubApp {
+  constructor() {
+    this.api = new ApiClient();
+    this.state = {
+      user: null,
+      token: "",
+      library: [],
+      listing: null,
+      currentPath: "",
+      settings: {},
+      socketState: "disconnected",
+    };
     this.elements = this.collectElements();
     
     // Global error boundary for the JS app
@@ -18,71 +29,71 @@ export class MediaHubApp {
 
     try {
       this.ui = new UIManager({
-      banner: this.elements.statusBanner,
-      bannerText: this.elements.statusBannerText,
-      connectionPill: this.elements.connectionPill,
-      activityLabel: this.elements.activityLabel,
-      sessionRole: this.elements.sessionRole,
-      toastRoot: this.elements.toastRoot,
-      confirmDialog: this.elements.confirmDialog,
-      confirmTitle: this.elements.confirmTitle,
-      confirmMessage: this.elements.confirmMessage,
-      confirmAccept: this.elements.confirmAccept,
-      promptDialog: this.elements.promptDialog,
-      promptForm: this.elements.promptForm,
-      promptTitle: this.elements.promptTitle,
-      promptMessage: this.elements.promptMessage,
-      promptLabel: this.elements.promptLabel,
-      promptInput: this.elements.promptInput,
-      promptCancel: this.elements.promptCancel,
-    });
+        banner: this.elements.statusBanner,
+        bannerText: this.elements.statusBannerText,
+        connectionPill: this.elements.connectionPill,
+        activityLabel: this.elements.activityLabel,
+        sessionRole: this.elements.sessionRole,
+        toastRoot: this.elements.toastRoot,
+        confirmDialog: this.elements.confirmDialog,
+        confirmTitle: this.elements.confirmTitle,
+        confirmMessage: this.elements.confirmMessage,
+        confirmAccept: this.elements.confirmAccept,
+        promptDialog: this.elements.promptDialog,
+        promptForm: this.elements.promptForm,
+        promptTitle: this.elements.promptTitle,
+        promptMessage: this.elements.promptMessage,
+        promptLabel: this.elements.promptLabel,
+        promptInput: this.elements.promptInput,
+        promptCancel: this.elements.promptCancel,
+      });
 
-    this.galleryManager = new GalleryManager({
-      root: this.elements.galleryRoot,
-      hero: {
-        title: this.elements.heroTitle,
-        description: this.elements.heroDescription,
-        thumb: this.elements.heroThumb,
-        badge: this.elements.heroBadge,
-        play: this.elements.heroPlay,
-        meta: this.elements.heroMetadata,
-      },
-      onPlay: (media) => this.playMedia(media),
-    });
+      this.galleryManager = new GalleryManager({
+        root: this.elements.galleryRoot,
+        hero: {
+          title: this.elements.heroTitle,
+          description: this.elements.heroDescription,
+          thumb: this.elements.heroThumb,
+          badge: this.elements.heroBadge,
+          play: this.elements.heroPlay,
+          meta: this.elements.heroMetadata,
+        },
+        onPlay: (media) => this.playMedia(media),
+      });
 
-    this.playerManager = new PlayerManager({
-      dialog: this.elements.playerModal,
-      video: this.elements.playerVideo,
-      title: this.elements.playerTitle,
-      status: this.elements.playerStatus,
-      onEvent: async (mediaId, payload) => {
-        try {
-          await this.api.recordPlayback(mediaId, payload);
-        } catch {
-          // Playback telemetry should not interrupt the player.
-        }
-      },
-    });
+      this.playerManager = new PlayerManager({
+        dialog: this.elements.playerModal,
+        video: this.elements.playerVideo,
+        title: this.elements.playerTitle,
+        status: this.elements.playerStatus,
+        onEvent: async (mediaId, payload) => {
+          try {
+            await this.api.recordPlayback(mediaId, payload);
+          } catch {
+            // Playback telemetry should not interrupt the player.
+          }
+        },
+      });
 
-    this.explorerManager = new ExplorerManager({
-      root: this.elements.explorerRoot,
-      pathLabel: this.elements.explorerPath,
-      summaryLabel: this.elements.explorerSummary,
-      onOpenDirectory: async (path) => this.openDirectory(path),
-      onPlayMedia: async (path) => this.playFromPath(path),
-      onRename: async (path) => this.renamePath(path),
-      onDelete: async (path) => this.deletePath(path),
-    });
+      this.explorerManager = new ExplorerManager({
+        root: this.elements.explorerRoot,
+        pathLabel: this.elements.explorerPath,
+        summaryLabel: this.elements.explorerSummary,
+        onOpenDirectory: async (path) => this.openDirectory(path),
+        onPlayMedia: async (path) => this.playFromPath(path),
+        onRename: async (path) => this.renamePath(path),
+        onDelete: async (path) => this.deletePath(path),
+      });
 
-    this.socketClient = new SocketClient({
-      onMessage: async (message) => this.handleSocketMessage(message),
-      onStateChange: (state) => this.handleSocketState(state),
-    });
+      this.socketClient = new SocketClient({
+        onMessage: async (message) => this.handleSocketMessage(message),
+        onStateChange: (state) => this.handleSocketState(state),
+      });
 
-    this.attachEventListeners();
-    this.renderDashboard();
-    this.explorerManager.clear();
-    this.updatePermissions();
+      this.attachEventListeners();
+      this.renderDashboard();
+      this.explorerManager.clear();
+      this.updatePermissions();
     } catch (err) {
       console.error("MediaHub Initialization Failure:", err);
       this.handleCriticalError(err);

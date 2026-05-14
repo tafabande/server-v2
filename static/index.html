@@ -23,133 +23,47 @@
       </div>
     </div>
 
-    <div class="app-shell" style="opacity: 0; pointer-events: none;">
-      <header class="topbar">
-        <div class="brand-block">
-          <p class="eyebrow">Private LAN Streaming</p>
-          <div class="brand-row">
-            <h1 id="brand-title">MediaHub</h1>
-            <span id="connection-pill" class="session-pill" data-state="disconnected">Offline</span>
-          </div>
-          <p id="activity-label" class="section-note">
-            Authenticate to load your local library and live sync feed.
-          </p>
+    <div class="app-shell">
+      <aside class="sidebar" hidden>
+        <div class="sidebar-brand">
+          <h1 class="brand-text">MediaHub</h1>
+          <p class="brand-tag">LAN VAULT</p>
         </div>
+        
+        <nav class="sidebar-nav">
+          <a href="/" class="nav-link" data-link>
+            <span class="nav-icon">home</span>
+            <span class="nav-label">Home</span>
+          </a>
+          <a href="/library" class="nav-link" data-link>
+            <span class="nav-icon">grid_view</span>
+            <span class="nav-label">Library</span>
+          </a>
+          <a href="/explorer" class="nav-link" data-link>
+            <span class="nav-icon">folder_open</span>
+            <span class="nav-label">Explorer</span>
+          </a>
+          <hr class="nav-divider">
+          <a href="/admin" class="nav-link admin-only" data-link hidden>
+            <span class="nav-icon">dashboard</span>
+            <span class="nav-label">Admin</span>
+          </a>
+          <a href="/profile" class="nav-link" data-link>
+            <span class="nav-icon">person</span>
+            <span class="nav-label">Profile</span>
+          </a>
+        </nav>
 
-        <div class="topbar-actions">
-          <span id="session-role" class="session-pill" data-role="anonymous">Disconnected</span>
-          <button id="rescan-button" class="ghost-button" hidden>Rescan</button>
-          <button id="logout-button" class="ghost-button">End Session</button>
+        <div class="sidebar-footer">
+          <button id="logout-button" class="logout-btn">
+            <span class="nav-icon">logout</span>
+            <span class="nav-label">End Session</span>
+          </button>
         </div>
-      </header>
+      </aside>
 
-      <main class="layout">
-        <section class="hero-panel" id="hero-panel">
-          <div class="hero-copy">
-            <p class="hero-tag">Local vault / cinematic UI / realtime sync</p>
-            <h2 id="hero-title">Scan your library to begin.</h2>
-            <p id="hero-description">
-              MediaHub keeps every asset on your network while surfacing it like a polished home screen.
-            </p>
-
-            <div id="hero-metadata" class="hero-metadata"></div>
-
-            <div class="hero-actions">
-              <button id="hero-play" class="primary-button" disabled>Play Feature</button>
-              <button id="hero-open-folder" class="ghost-button">Open Folder</button>
-            </div>
-          </div>
-
-          <div class="hero-art">
-            <div class="hero-frame">
-              <img id="hero-thumb" src="/static/placeholder.svg" alt="Featured artwork" />
-              <div class="hero-overlay">
-                <span id="hero-badge" class="hero-badge">Offline Ready</span>
-              </div>
-            </div>
-
-            <div class="stats-grid">
-              <article class="metric-card">
-                <span class="metric-label">Titles</span>
-                <strong id="stat-titles" class="metric-value">0</strong>
-                <p class="metric-note">Indexed media files</p>
-              </article>
-              <article class="metric-card">
-                <span class="metric-label">Collections</span>
-                <strong id="stat-collections" class="metric-value">0</strong>
-                <p class="metric-note">Top-level library rows</p>
-              </article>
-              <article class="metric-card">
-                <span class="metric-label">Runtime</span>
-                <strong id="stat-runtime" class="metric-value">0h</strong>
-                <p class="metric-note">Known watch time</p>
-              </article>
-              <article class="metric-card">
-                <span class="metric-label">Protected</span>
-                <strong id="stat-locked" class="metric-value">0</strong>
-                <p class="metric-note">PIN-locked entries</p>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section id="status-banner" class="status-banner" data-tone="neutral" aria-live="polite">
-          <span id="status-banner-text">Waiting for authentication.</span>
-        </section>
-
-        <section class="content-grid">
-          <section class="library-panel">
-            <div class="section-header">
-              <div>
-                <p class="eyebrow">Discover</p>
-                <h3>Rows &amp; Carousels</h3>
-                <p id="library-status" class="section-note">Waiting for authentication.</p>
-              </div>
-
-              <label class="search-field">
-                <span class="sr-only">Search library</span>
-                <input id="library-search" type="search" placeholder="Search titles or folders" />
-              </label>
-            </div>
-
-            <div id="library-highlights" class="highlight-strip"></div>
-            <div id="gallery-root" class="gallery-root"></div>
-          </section>
-
-          <aside class="explorer-panel">
-            <div class="section-header">
-              <div>
-                <p class="eyebrow">Manage</p>
-                <h3>Explorer</h3>
-                <p id="explorer-summary" class="section-note">No folder loaded.</p>
-              </div>
-
-              <button id="go-up-button" class="ghost-button small-button">Up</button>
-            </div>
-
-            <div class="explorer-toolbar">
-              <label class="search-field">
-                <span class="sr-only">Filter current folder</span>
-                <input id="explorer-search" type="search" placeholder="Filter this folder" />
-              </label>
-            </div>
-
-            <div class="explorer-controls">
-              <label class="input-stack">
-                <span>Admin PIN for locked folders</span>
-                <input id="pin-input" type="password" maxlength="12" placeholder="1984" />
-              </label>
-
-              <label class="file-upload">
-                <span>Upload Media</span>
-                <input id="upload-input" type="file" />
-              </label>
-            </div>
-
-            <p id="explorer-path" class="path-label">shared_media/</p>
-            <div id="explorer-root" class="explorer-root"></div>
-          </aside>
-        </section>
+      <main class="main-content" id="app-shell-content">
+        <!-- Views injected here -->
       </main>
     </div>
 
@@ -197,26 +111,9 @@
 
     <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
 
-    <div id="auth-modal" class="auth-modal active">
-      <form id="login-form" class="auth-card">
-        <p class="eyebrow">Session Access</p>
-        <h2>Enter the LAN vault</h2>
-        <p class="section-note">
-          Default bootstrap credentials are <code>admin</code> / <code>admin123</code>.
-        </p>
-        <label class="input-stack">
-          <span>Username</span>
-          <input id="username-input" type="text" value="admin" autocomplete="username" required />
-        </label>
-        <label class="input-stack">
-          <span>Password</span>
-          <input id="password-input" type="password" value="admin123" autocomplete="current-password" required />
-        </label>
-        <button class="primary-button" type="submit">Start Session</button>
-        <p id="auth-error" class="error-text"></p>
-      </form>
-    </div>
 
+    <!-- Offline dependencies -->
+    <script src="/static/js/hls.js"></script>
     <script type="module" src="/static/js/app.js"></script>
   </body>
 </html>

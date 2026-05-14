@@ -45,6 +45,7 @@ def setup_logging():
     # Suppress noisy library logs if needed
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
 def get_logger(name: str):
     """Returns a logger with the specified name."""

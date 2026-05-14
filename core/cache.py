@@ -35,6 +35,20 @@ class MemoryCache:
     async def delete(self, key: str) -> None:
         self._store.pop(key, None)
 
+    async def keys(self, prefix: str) -> list[str]:
+        now = time.time()
+        keys: list[str] = []
+        for key, (_, expires_at) in list(self._store.items()):
+            if expires_at and expires_at < now:
+                self._store.pop(key, None)
+                continue
+            if key.startswith(prefix):
+                keys.append(key)
+        return keys
+
+    async def ping(self) -> bool:
+        return True
+
 
 class CacheBackend:
     def __init__(self) -> None:
@@ -57,6 +71,17 @@ class CacheBackend:
             await self._fallback.delete(key)
             return
         await self._client.delete(key)
+
+    async def keys(self, prefix: str) -> list[str]:
+        if not self._client:
+            return await self._fallback.keys(prefix)
+        values = await self._client.keys(f"{prefix}*")
+        return [value.decode("utf-8") if isinstance(value, bytes) else str(value) for value in values]
+
+    async def ping(self) -> bool:
+        if not self._client:
+            return await self._fallback.ping()
+        return bool(await self._client.ping())
 
 
 cache = CacheBackend()

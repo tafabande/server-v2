@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  mediahub-api:
+    build: .
+    image: mediahub:latest
+    container_name: mediahub-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./shared_media:/app/shared_media
+      - ./thumbs:/app/thumbs
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+      - ./mediahub.db:/app/mediahub.db
+      - ./.env:/app/.env
+    # GPU Passthrough for NVIDIA (optional, requires nvidia-container-toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu, video]
+    # For Intel/AMD GPU:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+
+  redis:
+    image: redis:alpine
+    container_name: mediahub-redis
+    restart: unless-stopped
+    networks:
+      - mediahub-net
+
+networks:
+  mediahub-net:
+    driver: bridge

@@ -72,6 +72,10 @@ class Settings:
     ffmpeg_path: str
     ffprobe_path: str
     cors_origins: list[str]
+    session_cookie_name: str
+    session_cookie_secure: bool
+    session_cookie_samesite: str
+    active_session_ttl_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -101,6 +105,10 @@ class Settings:
             ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
             ffprobe_path=os.getenv("FFPROBE_PATH", "ffprobe"),
             cors_origins=_env_list("CORS_ORIGINS", ["*"]),
+            session_cookie_name=os.getenv("SESSION_COOKIE_NAME", "mediahub_session"),
+            session_cookie_secure=_env_bool("SESSION_COOKIE_SECURE", False),
+            session_cookie_samesite=os.getenv("SESSION_COOKIE_SAMESITE", "lax"),
+            active_session_ttl_seconds=_env_int("ACTIVE_SESSION_TTL_SECONDS", 300),
         )
 
     def ensure_paths(self) -> None:
