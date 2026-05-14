@@ -1,0 +1,9 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+mediahub.db
+temp/hls/
+logs/
+thumbs/*.jpg
+thumbs/*.svg

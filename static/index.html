@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MediaHub</title>
+    <link rel="icon" type="image/svg+xml" href="/static/placeholder.svg">
+    <link rel="stylesheet" href="/static/css/styles.css" />
+  </head>
+  <body>
+    <div class="ambient-backdrop" aria-hidden="true">
+      <div class="aurora aurora-one"></div>
+      <div class="aurora aurora-two"></div>
+      <div class="aurora aurora-three"></div>
+    </div>
+    <div class="screen-noise" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <div id="boot-loader" class="boot-loader">
+      <div class="loader-content">
+        <div class="spinner"></div>
+        <p>Initializing MediaHub...</p>
+      </div>
+    </div>
+
+    <div class="app-shell" style="opacity: 0; pointer-events: none;">
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">Private LAN Streaming</p>
+          <div class="brand-row">
+            <h1 id="brand-title">MediaHub</h1>
+            <span id="connection-pill" class="session-pill" data-state="disconnected">Offline</span>
+          </div>
+          <p id="activity-label" class="section-note">
+            Authenticate to load your local library and live sync feed.
+          </p>
+        </div>
+
+        <div class="topbar-actions">
+          <span id="session-role" class="session-pill" data-role="anonymous">Disconnected</span>
+          <button id="rescan-button" class="ghost-button" hidden>Rescan</button>
+          <button id="logout-button" class="ghost-button">End Session</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="hero-panel" id="hero-panel">
+          <div class="hero-copy">
+            <p class="hero-tag">Local vault / cinematic UI / realtime sync</p>
+            <h2 id="hero-title">Scan your library to begin.</h2>
+            <p id="hero-description">
+              MediaHub keeps every asset on your network while surfacing it like a polished home screen.
+            </p>
+
+            <div id="hero-metadata" class="hero-metadata"></div>
+
+            <div class="hero-actions">
+              <button id="hero-play" class="primary-button" disabled>Play Feature</button>
+              <button id="hero-open-folder" class="ghost-button">Open Folder</button>
+            </div>
+          </div>
+
+          <div class="hero-art">
+            <div class="hero-frame">
+              <img id="hero-thumb" src="/static/placeholder.svg" alt="Featured artwork" />
+              <div class="hero-overlay">
+                <span id="hero-badge" class="hero-badge">Offline Ready</span>
+              </div>
+            </div>
+
+            <div class="stats-grid">
+              <article class="metric-card">
+                <span class="metric-label">Titles</span>
+                <strong id="stat-titles" class="metric-value">0</strong>
+                <p class="metric-note">Indexed media files</p>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">Collections</span>
+                <strong id="stat-collections" class="metric-value">0</strong>
+                <p class="metric-note">Top-level library rows</p>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">Runtime</span>
+                <strong id="stat-runtime" class="metric-value">0h</strong>
+                <p class="metric-note">Known watch time</p>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">Protected</span>
+                <strong id="stat-locked" class="metric-value">0</strong>
+                <p class="metric-note">PIN-locked entries</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="status-banner" class="status-banner" data-tone="neutral" aria-live="polite">
+          <span id="status-banner-text">Waiting for authentication.</span>
+        </section>
+
+        <section class="content-grid">
+          <section class="library-panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Discover</p>
+                <h3>Rows &amp; Carousels</h3>
+                <p id="library-status" class="section-note">Waiting for authentication.</p>
+              </div>
+
+              <label class="search-field">
+                <span class="sr-only">Search library</span>
+                <input id="library-search" type="search" placeholder="Search titles or folders" />
+              </label>
+            </div>
+
+            <div id="library-highlights" class="highlight-strip"></div>
+            <div id="gallery-root" class="gallery-root"></div>
+          </section>
+
+          <aside class="explorer-panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Manage</p>
+                <h3>Explorer</h3>
+                <p id="explorer-summary" class="section-note">No folder loaded.</p>
+              </div>
+
+              <button id="go-up-button" class="ghost-button small-button">Up</button>
+            </div>
+
+            <div class="explorer-toolbar">
+              <label class="search-field">
+                <span class="sr-only">Filter current folder</span>
+                <input id="explorer-search" type="search" placeholder="Filter this folder" />
+              </label>
+            </div>
+
+            <div class="explorer-controls">
+              <label class="input-stack">
+                <span>Admin PIN for locked folders</span>
+                <input id="pin-input" type="password" maxlength="12" placeholder="1984" />
+              </label>
+
+              <label class="file-upload">
+                <span>Upload Media</span>
+                <input id="upload-input" type="file" />
+              </label>
+            </div>
+
+            <p id="explorer-path" class="path-label">shared_media/</p>
+            <div id="explorer-root" class="explorer-root"></div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="player-modal" class="player-modal">
+      <div class="player-header">
+        <div>
+          <p class="eyebrow">Now Playing</p>
+          <h3 id="player-title">MediaHub</h3>
+        </div>
+        <button id="player-close" class="ghost-button">Close</button>
+      </div>
+      <video id="player-video" controls playsinline></video>
+      <p id="player-status" class="section-note player-status"></p>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="action-dialog">
+      <form method="dialog" class="dialog-card">
+        <p class="eyebrow">Confirm Action</p>
+        <h3 id="confirm-title">Confirm</h3>
+        <p id="confirm-message" class="section-note"></p>
+        <div class="dialog-actions">
+          <button type="submit" value="cancel" class="ghost-button">Cancel</button>
+          <button id="confirm-accept" type="submit" value="confirm" class="primary-button danger-button">
+            Confirm
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="prompt-dialog" class="action-dialog">
+      <form id="prompt-form" class="dialog-card">
+        <p class="eyebrow">Rename Item</p>
+        <h3 id="prompt-title">Rename entry</h3>
+        <p id="prompt-message" class="section-note"></p>
+        <label class="input-stack">
+          <span id="prompt-label">New name</span>
+          <input id="prompt-input" type="text" maxlength="255" required />
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="prompt-cancel" class="ghost-button">Cancel</button>
+          <button type="submit" class="primary-button">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+    <div id="auth-modal" class="auth-modal active">
+      <form id="login-form" class="auth-card">
+        <p class="eyebrow">Session Access</p>
+        <h2>Enter the LAN vault</h2>
+        <p class="section-note">
+          Default bootstrap credentials are <code>admin</code> / <code>admin123</code>.
+        </p>
+        <label class="input-stack">
+          <span>Username</span>
+          <input id="username-input" type="text" value="admin" autocomplete="username" required />
+        </label>
+        <label class="input-stack">
+          <span>Password</span>
+          <input id="password-input" type="password" value="admin123" autocomplete="current-password" required />
+        </label>
+        <button class="primary-button" type="submit">Start Session</button>
+        <p id="auth-error" class="error-text"></p>
+      </form>
+    </div>
+
+    <script type="module" src="/static/js/app.js"></script>
+  </body>
+</html>
