@@ -21,6 +21,7 @@ export class AdminView {
             <div class="tabs" id="admin-tabs">
                 <button class="tab active" data-tab="metrics">System</button>
                 <button class="tab" data-tab="users">Users</button>
+                <button class="tab" data-tab="requests">Requests</button>
                 <button class="tab" data-tab="audit">Audit Log</button>
             </div>
 
@@ -46,6 +47,7 @@ export class AdminView {
         switch (tab) {
             case 'metrics': return this._loadMetrics(content);
             case 'users': return this._loadUsers(content);
+            case 'requests': return this._loadRequests(content);
             case 'audit': return this._loadAudit(content);
         }
     }
@@ -147,6 +149,65 @@ export class AdminView {
                         await api.deleteUser(parseInt(btn.dataset.id));
                         toast('User deleted', 'success');
                         this._loadUsers(target);
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+        } catch (err) {
+            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+        }
+    }
+
+    async _loadRequests(target) {
+        try {
+            const requests = await api.getRequests();
+            if (!requests || requests.length === 0) {
+                target.innerHTML = '<div class="empty-state"><p>No pending requests</p></div>';
+                return;
+            }
+
+            target.innerHTML = `
+                <div class="surface" style="padding:0; overflow:hidden">
+                    <table class="table">
+                        <thead><tr><th>User</th><th>Type</th><th>Target</th><th>Date</th><th>Actions</th></tr></thead>
+                        <tbody>${requests.map(req => `
+                            <tr>
+                                <td><strong>${req.username}</strong></td>
+                                <td><span class="badge badge-accent">${req.request_type.replace('_', ' ')}</span></td>
+                                <td class="text-muted">${req.target_path || 'N/A'}</td>
+                                <td class="text-muted">${formatDateTime(req.created_at)}</td>
+                                <td>
+                                    ${req.status === 'pending' ? `
+                                        <div class="flex gap-sm">
+                                            <button class="btn btn-ghost btn-sm approve-btn" data-id="${req.id}">Approve</button>
+                                            <button class="btn btn-ghost btn-sm btn-danger deny-btn" data-id="${req.id}">Deny</button>
+                                        </div>
+                                    ` : `<span class="badge ${req.status === 'approved' ? 'badge-success' : 'badge-danger'}">${req.status}</span>`}
+                                </td>
+                            </tr>
+                        `).join('')}</tbody>
+                    </table>
+                </div>
+            `;
+
+            target.querySelectorAll('.approve-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const comment = prompt('Admin comment (optional):');
+                    try {
+                        await api.processRequest(parseInt(btn.dataset.id), 'approved', comment);
+                        toast('Request approved', 'success');
+                        this._loadRequests(target);
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+
+            target.querySelectorAll('.deny-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const comment = prompt('Reason for denial:');
+                    if (!comment) return;
+                    try {
+                        await api.processRequest(parseInt(btn.dataset.id), 'denied', comment);
+                        toast('Request denied', 'success');
+                        this._loadRequests(target);
                     } catch (err) { toast(err.message, 'error'); }
                 });
             });

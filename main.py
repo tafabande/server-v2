@@ -19,7 +19,7 @@ from core.bootstrap import bootstrap_application
 from core.database import init_db
 from core.exceptions import MediaHubError
 from core.logging import setup_logging, get_logger
-from routers import auth, files, media, playlists, system, users
+from routers import auth, files, media, playlists, requests, system, users
 
 
 # Initialize logging before settings are even fetched to ensure startup is logged
@@ -112,6 +112,7 @@ app.include_router(media.router, prefix="/api/media", tags=["media"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
+app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/thumbs", StaticFiles(directory=str(settings.thumbs_folder)), name="thumbs")

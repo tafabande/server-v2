@@ -358,7 +358,13 @@ export class PlayerManager {
             if (!res || !res.url) throw new Error("No stream URL");
 
             if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                this.hls = new Hls();
+                this.hls = new Hls({
+                    startLevel: -1,
+                    capLevelToPlayerSize: false,
+                    enableWorker: true,
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 60
+                });
                 this.hls.loadSource(res.url);
                 this.hls.attachMedia(this.video);
                 this.hls.on(Hls.Events.MANIFEST_PARSED, () => {

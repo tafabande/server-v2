@@ -97,7 +97,10 @@ export class HomeView {
                 if (!video) return;
                 
                 if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                    this._heroHls = new Hls({ startLevel: 0 }); // lowest quality for background
+                    this._heroHls = new Hls({ 
+                        startLevel: -1, 
+                        capLevelToPlayerSize: false 
+                    });
                     this._heroHls.loadSource(res.url);
                     this._heroHls.attachMedia(video);
                     this._heroHls.on(Hls.Events.MANIFEST_PARSED, () => {

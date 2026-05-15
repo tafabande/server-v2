@@ -31,6 +31,7 @@ export class ProfileView {
                             <div>
                                 <h2 style="font-size:1.15rem; font-weight:700">${user.username}</h2>
                                 <span class="badge badge-accent">${user.role}</span>
+                                ${user.is_adult ? '<span class="badge badge-danger">18+</span>' : '<span class="badge badge-muted">Minor</span>'}
                             </div>
                         </div>
                         <div class="flex gap-md text-sm text-muted mb-md">
@@ -43,7 +44,10 @@ export class ProfileView {
                                 <label>Bio</label>
                                 <textarea id="prof-bio" class="textarea" placeholder="A short bio...">${user.bio || ''}</textarea>
                             </div>
-                            <button type="submit" class="btn btn-accent btn-sm">Update Profile</button>
+                            <div class="flex gap-sm">
+                                <button type="submit" class="btn btn-accent btn-sm">Update Profile</button>
+                                ${!user.is_adult ? '<button type="button" id="req-adult-btn" class="btn btn-ghost btn-sm">🔞 Request 18+</button>' : ''}
+                            </div>
                         </form>
                     </div>
 
@@ -102,6 +106,18 @@ export class ProfileView {
             localStorage.removeItem('mediahub_token');
             localStorage.removeItem('mediahub_user');
             window.location.href = '/login';
+        });
+
+        document.getElementById('req-adult-btn')?.addEventListener('click', async () => {
+            const { confirm } = await import('../utils.js');
+            const yes = await confirm('Request 18+ Access', 'Do you want to request your account be elevated to 18+ status?');
+            if (!yes) return;
+            try {
+                await api.submitRequest('adult_elevation');
+                toast('Request submitted', 'success');
+            } catch (err) {
+                toast(err.message, 'error');
+            }
         });
     }
 

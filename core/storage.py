@@ -8,6 +8,10 @@ from fastapi import UploadFile, status
 from config import get_settings
 from core.exceptions import AccessDeniedError, MediaHubError, ResourceNotFoundError
 from core.logging import get_logger
+from core.database import AsyncSessionLocal
+from core.models import FolderSetting, MediaMetadata
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 settings = get_settings()
@@ -40,22 +44,62 @@ def _relative_text_for_path(path: Path) -> str:
     return relative_shared_path(candidate).lower()
 
 
-def is_path_locked(path: Path) -> bool:
-    parts = {piece for piece in _relative_text_for_path(path).split("/") if piece}
-    return bool(parts & settings.pin_keyword_set)
+async def is_path_locked(session: AsyncSession, path: Path) -> bool:
+    rel_path = _relative_text_for_path(path)
+    parts = {piece for piece in rel_path.split("/") if piece}
+    if bool(parts & settings.pin_keyword_set):
+        return True
+    
+
+    
+    # Check if this path or any parent is locked in DB
+    search_paths = [""]
+    current = ""
+    for part in rel_path.split("/"):
+        if not part: continue
+        current = f"{current}/{part}" if current else part
+        search_paths.append(current)
+    
+    result = await session.execute(
+        select(FolderSetting.is_locked).where(
+            FolderSetting.path.in_(search_paths),
+            FolderSetting.is_locked == True
+        )
+    )
+    return result.scalar() is not None
 
 
-def is_path_adult(path: Path) -> bool:
-    parts = {piece for piece in _relative_text_for_path(path).split("/") if piece}
-    return bool(parts & settings.adult_keyword_set)
+async def is_path_adult(session: AsyncSession, path: Path) -> bool:
+    rel_path = _relative_text_for_path(path)
+    parts = {piece for piece in rel_path.split("/") if piece}
+    if bool(parts & settings.adult_keyword_set):
+        return True
+        
 
 
-def ensure_pin_for_path(path: Path, pin: str | None) -> None:
-    if is_path_locked(path) and pin != settings.admin_pin:
+    # Check if this path or any parent is adult-only in DB
+    search_paths = [""]
+    current = ""
+    for part in rel_path.split("/"):
+        if not part: continue
+        current = f"{current}/{part}" if current else part
+        search_paths.append(current)
+
+    result = await session.execute(
+        select(FolderSetting.is_adult).where(
+            FolderSetting.path.in_(search_paths),
+            FolderSetting.is_adult == True
+        )
+    )
+    return result.scalar() is not None
+
+
+async def ensure_pin_for_path(session: AsyncSession, path: Path, pin: str | None) -> None:
+    if await is_path_locked(session, path) and pin != settings.admin_pin:
         raise AccessDeniedError("Valid admin PIN required for this resource.")
 
 
-async def list_directory(raw_path: str | None = None) -> tuple[str, str | None, list[dict]]:
+async def list_directory(raw_path: str | None = None, session: AsyncSession | None = None) -> tuple[str, str | None, list[dict]]:
     directory = resolve_shared_path(raw_path)
     if not directory.exists():
         raise ResourceNotFoundError(f"Directory not found: {raw_path}")
@@ -68,11 +112,9 @@ async def list_directory(raw_path: str | None = None) -> tuple[str, str | None, 
     )
 
     items = []
-    from core.database import AsyncSessionLocal
-    from sqlalchemy import select
-    from core.models import MediaMetadata
+
     
-    async with AsyncSessionLocal() as session:
+    async def process_entries(sess):
         for entry in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
             if entry.name.startswith("."): continue
             stat = entry.stat()
@@ -80,7 +122,7 @@ async def list_directory(raw_path: str | None = None) -> tuple[str, str | None, 
             is_media = is_media_file(entry)
             media_id = None
             if is_media:
-                res = await session.execute(select(MediaMetadata.id).where(MediaMetadata.relative_path == rel))
+                res = await sess.execute(select(MediaMetadata.id).where(MediaMetadata.relative_path == rel))
                 media_id = res.scalar()
             
             items.append(
@@ -90,11 +132,19 @@ async def list_directory(raw_path: str | None = None) -> tuple[str, str | None, 
                     "is_dir": entry.is_dir(),
                     "size": 0 if entry.is_dir() else stat.st_size,
                     "modified_at": datetime.fromtimestamp(stat.st_mtime),
-                    "locked": is_path_locked(entry),
+                    "locked": await is_path_locked(sess, entry),
+                    "adult_only": await is_path_adult(sess, entry),
                     "media": is_media,
                     "media_id": media_id,
                 }
             )
+
+    if session:
+        await process_entries(session)
+    else:
+        async with AsyncSessionLocal() as session_local:
+            await process_entries(session_local)
+
     return relative_path, parent, items
 
 

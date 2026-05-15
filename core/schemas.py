@@ -32,6 +32,7 @@ class UserRead(BaseModel):
     role: str
     preferences: dict
     display_name: str = ""
+    is_adult: bool = False
     avatar_url: str = ""
     bio: str = ""
     language: str = "en"
@@ -85,6 +86,7 @@ class FileItem(BaseModel):
     size: int
     modified_at: datetime
     locked: bool = False
+    adult_only: bool = False
     media: bool = False
 
 
@@ -273,3 +275,32 @@ class DashboardRead(BaseModel):
     active_sessions: list[ActiveSessionRead]
     recent_audits: list[AuditLogRead]
     transcode_logs: list[TranscodeLogEntry]
+
+
+class FolderSettingUpdate(BaseModel):
+    is_locked: bool | None = None
+    is_adult: bool | None = None
+
+
+class AccessRequestCreate(BaseModel):
+    request_type: str  # 'folder_access', 'adult_elevation'
+    target_path: str | None = None
+
+
+class AccessRequestRead(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    request_type: str
+    target_path: str | None = None
+    status: str
+    admin_comment: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AccessRequestAction(BaseModel):
+    status: str  # 'approved', 'denied'
+    admin_comment: str | None = None

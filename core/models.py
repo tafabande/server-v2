@@ -14,6 +14,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="family", nullable=False, index=True)
     pin: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    is_adult: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     preferences: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
@@ -23,6 +24,7 @@ class User(Base):
     play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="user")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
     playlists: Mapped[list["Playlist"]] = relationship(back_populates="owner")
+    access_requests: Mapped[list["AccessRequest"]] = relationship(back_populates="user")
 
 
 class MediaMetadata(Base):
@@ -147,3 +149,37 @@ class ServerStatus(Base):
     status: Mapped[str] = mapped_column(String(20), default="offline", nullable=False)
     media_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FolderSetting(Base):
+    __tablename__ = "folder_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    path: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_adult: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AccessRequest(Base):
+    __tablename__ = "access_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    request_type: Mapped[str] = mapped_column(String(30), nullable=False)  # 'folder_access', 'adult_elevation'
+    target_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)  # 'pending', 'approved', 'denied'
+    admin_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user: Mapped[User] = relationship(back_populates="access_requests")

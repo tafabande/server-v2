@@ -30,7 +30,7 @@ async def library(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaGroup]:
-    groups = await library_groups(session)
+    groups = await library_groups(session, is_adult=current_user.is_adult)
     return [MediaGroup(label=group["label"], items=group["items"]) for group in groups]
 
 
@@ -47,6 +47,11 @@ async def stream(
     if media.requires_pin and pin != settings.admin_pin:
         from core.exceptions import AccessDeniedError
         raise AccessDeniedError("Valid admin PIN required for this resource.")
+        
+    if media.adult_only and not current_user.is_adult:
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+
     return StreamResponse(**await build_stream_response(session, media))
 
 
@@ -63,9 +68,15 @@ async def stream_file(
     source = media_source_path(media)
     if media.stream_mode != "direct":
         raise HTTPException(status_code=400, detail="This media must be played through HLS.")
+        
     if media.requires_pin and pin != settings.admin_pin:
         from core.exceptions import AccessDeniedError
         raise AccessDeniedError("Valid admin PIN required for this resource.")
+        
+    if media.adult_only and not current_user.is_adult:
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+
     return FileResponse(source)
 
 

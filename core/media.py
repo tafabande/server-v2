@@ -7,13 +7,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from core.exceptions import FileOperationError, ResourceNotFoundError
 from core.logging import get_logger
-from core.models import AuditLog, MediaMetadata, PlayEvent
+from core.models import AuditLog, FolderSetting, MediaMetadata, PlayEvent
 from core.storage import is_media_file, is_path_adult, is_path_locked, relative_shared_path, resolve_shared_path
 
 
@@ -259,9 +259,27 @@ async def scan_media_library(session: AsyncSession) -> int:
         media.stream_mode = detect_stream_mode(target_path)
         media.hls_status = "ready" if media.stream_mode == "direct" else "pending"
         # We manually compute adult/pin for virtual relative paths
-        virtual_parts = {piece for piece in virtual_rel.lower().split("/") if piece}
-        media.requires_pin = bool(virtual_parts & settings.pin_keyword_set)
-        media.adult_only = bool(virtual_parts & settings.adult_keyword_set)
+
+
+        virtual_parts = [""]
+        current = ""
+        for part in virtual_rel.split("/"):
+            if not part: continue
+            current = f"{current}/{part}" if current else part
+            virtual_parts.append(current)
+
+        # Check DB settings for this file's folder(s)
+        db_res = await session.execute(
+            select(FolderSetting).where(FolderSetting.path.in_(virtual_parts))
+        )
+        db_settings = db_res.scalars().all()
+        
+        db_locked = any(s.is_locked for s in db_settings)
+        db_adult = any(s.is_adult for s in db_settings)
+
+        keyword_parts = {piece for piece in virtual_rel.lower().split("/") if piece}
+        media.requires_pin = db_locked or bool(keyword_parts & settings.pin_keyword_set)
+        media.adult_only = db_adult or bool(keyword_parts & settings.adult_keyword_set)
         
         media.last_scanned_at = datetime.now(UTC)
         media.width = probe.get("width")
@@ -282,8 +300,12 @@ async def scan_media_library(session: AsyncSession) -> int:
     return indexed
 
 
-async def library_groups(session: AsyncSession) -> list[dict]:
-    result = await session.execute(select(MediaMetadata).order_by(MediaMetadata.category, MediaMetadata.title))
+async def library_groups(session: AsyncSession, is_adult: bool = False) -> list[dict]:
+    query = select(MediaMetadata).order_by(MediaMetadata.category, MediaMetadata.title)
+    if not is_adult:
+        query = query.where(MediaMetadata.adult_only == False)
+        
+    result = await session.execute(query)
     groups: dict[str, list[MediaMetadata]] = {}
     for media in result.scalars():
         groups.setdefault(media.category, []).append(media)

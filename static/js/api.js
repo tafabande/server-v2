@@ -88,6 +88,12 @@ export class ApiClient {
   }
   rename(path, newName, pin = "") { return this.request("/api/files/rename", { method: "POST", query: { pin }, json: { path, new_name: newName } }); }
   deleteFile(path, pin = "") { return this.request("/api/files/delete", { method: "POST", query: { pin }, json: { path } }); }
+  updateFolderSettings(path, settings) { return this.request("/api/files/settings", { method: "POST", query: { path }, json: settings }); }
+
+  // === Requests ===
+  getRequests() { return this.request("/api/requests"); }
+  submitRequest(type, targetPath = null) { return this.request("/api/requests", { method: "POST", json: { request_type: type, target_path: targetPath } }); }
+  processRequest(requestId, status, comment = null) { return this.request(`/api/requests/${requestId}/action`, { method: "POST", json: { status, admin_comment: comment } }); }
 
   // === Playlists ===
   getPlaylists() { return this.request("/api/playlists"); }
