@@ -1,3 +1,10 @@
+import sys
+import asyncio
+
+# Fix for WinError 10038 and asyncio race conditions on Windows (esp. Python 3.12+)
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,7 +31,23 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    import socket
+    def get_lan_ip():
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    lan_ip = get_lan_ip()
     logger.info("Application starting up...")
+    logger.info(f"--- MediaHub Access Points ---")
+    logger.info(f"LOCAL: http://localhost:{settings.port}")
+    logger.info(f"LAN:   http://{lan_ip}:{settings.port}")
+    logger.info(f"------------------------------")
     
     # Start Zeroconf Discovery (Non-blocking)
     try:
@@ -91,8 +114,8 @@ app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/thumbs", StaticFiles(directory="thumbs"), name="thumbs")
-app.mount("/temp", StaticFiles(directory="temp"), name="temp")
+app.mount("/thumbs", StaticFiles(directory=str(settings.thumbs_folder)), name="thumbs")
+app.mount("/temp", StaticFiles(directory=str(settings.temp_folder)), name="temp")
 
 
 # Catch-all route to support SPA frontend routing

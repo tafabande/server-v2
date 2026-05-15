@@ -1,7 +1,7 @@
 /**
  * MediaHub — Explorer View (File Manager)
  */
-import { api } from '../app.js';
+import { api, player } from '../app.js';
 import { formatBytes, formatDate, toast, confirm } from '../utils.js';
 
 export class ExplorerView {
@@ -71,13 +71,14 @@ export class ExplorerView {
             return;
         }
 
-        list.innerHTML = `<div class="file-list">${items.map(item => `
-            <div class="file-row" data-path="${item.path}" data-is-dir="${item.is_dir}" data-name="${item.name}">
+        list.innerHTML = `<div class="file-list">${items.map((item, index) => `
+            <div class="file-row" data-index="${index}" data-path="${item.path}" data-is-dir="${item.is_dir}" data-name="${item.name}">
                 <span class="file-icon">${item.is_dir ? '📁' : (item.media ? '🎬' : '📄')}${item.locked ? ' 🔒' : ''}</span>
                 <span class="file-name">${item.name}</span>
                 <span class="file-meta">${item.is_dir ? '—' : formatBytes(item.size)}</span>
                 <span class="file-meta">${formatDate(item.modified_at)}</span>
                 <div class="file-actions">
+                    ${item.media ? `<button class="btn btn-ghost btn-sm play-btn" title="Play">▶️</button>` : ''}
                     <button class="btn btn-ghost btn-sm rename-btn" title="Rename">✏️</button>
                     <button class="btn btn-ghost btn-sm btn-danger delete-btn" title="Delete">🗑</button>
                 </div>
@@ -85,6 +86,7 @@ export class ExplorerView {
         `).join('')}</div>`;
 
         list.querySelectorAll('.file-row').forEach(row => {
+            const item = items[row.dataset.index];
             // Click to browse into dirs
             row.addEventListener('click', (e) => {
                 if (e.target.closest('.file-actions')) return;
@@ -92,6 +94,17 @@ export class ExplorerView {
                     this._browse(row.dataset.path);
                 }
             });
+
+            if (item.media) {
+                row.querySelector('.play-btn')?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (item.media_id) {
+                        player.play(item.media_id);
+                    } else {
+                        toast('This file has not been indexed yet. Please run a library scan.', 'warning');
+                    }
+                });
+            }
 
             row.querySelector('.rename-btn').addEventListener('click', (e) => {
                 e.stopPropagation();

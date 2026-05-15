@@ -27,7 +27,7 @@ async def browse(
 ) -> DirectoryListing:
     target = resolve_shared_path(path)
     ensure_pin_for_path(target, pin)
-    relative_path, parent, items = list_directory(path)
+    relative_path, parent, items = await list_directory(path)
     return DirectoryListing(path=relative_path, parent=parent, items=items)
 
 

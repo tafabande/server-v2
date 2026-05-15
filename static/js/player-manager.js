@@ -1,6 +1,5 @@
 /**
- * MediaHub — VHS/Synthwave Video Player Manager
- * Full custom controls with keyboard shortcuts and mobile gestures.
+ * MediaHub — Modern Cinematic Video Player Manager
  */
 import { api } from './app.js';
 
@@ -8,6 +7,7 @@ export class PlayerManager {
     constructor() {
         this.modal = document.getElementById('player-modal');
         this.video = document.getElementById('player-video');
+        this.drawer = document.getElementById('player-drawer');
         this.hls = null;
         this.currentMedia = null;
         this.queue = [];
@@ -15,52 +15,56 @@ export class PlayerManager {
         this.queueIndex = 0;
         this.isShuffle = false;
         this.controlsTimer = null;
+        this.lastTap = 0;
 
         this._bindElements();
         this._bindEvents();
         this._bindKeyboard();
-        this._bindMobileGestures();
+        this._bindGestures();
     }
 
     _bindElements() {
+        this.overlay = this.modal.querySelector('.player-overlay');
+        this.gestureOverlay = document.getElementById('gesture-overlay');
         this.transportTrack = document.getElementById('transport-track');
         this.transportFill = document.getElementById('transport-fill');
         this.transportCurrent = document.getElementById('transport-current');
         this.transportTotal = document.getElementById('transport-total');
-
-        this.tapeTitle = document.getElementById('tape-title');
-        this.tapeFormat = document.getElementById('tape-format');
-        this.tapeResolution = document.getElementById('tape-resolution');
-        this.tapeDuration = document.getElementById('tape-duration');
-        this.tapePosition = document.getElementById('tape-position');
-        this.tapeQuality = document.getElementById('tape-quality');
-
-        this.volumeBar = document.getElementById('volume-bar');
-        this.playerStatus = document.getElementById('player-status');
+        this.tapeTitle = document.getElementById('tape-title-display');
 
         this.btnPlay = document.getElementById('btn-play');
-        this.btnStop = document.getElementById('btn-stop');
-        this.btnRew = document.getElementById('btn-rew');
-        this.btnFf = document.getElementById('btn-ff');
         this.btnPrev = document.getElementById('btn-prev');
         this.btnNext = document.getElementById('btn-next');
         this.btnShuffle = document.getElementById('btn-shuffle');
-        this.btnEject = document.getElementById('btn-eject');
-        this.btnMute = document.getElementById('btn-mute');
-        this.btnFullscreen = document.getElementById('btn-fullscreen');
+        this.btnQueueToggle = document.getElementById('btn-queue-toggle');
+        this.btnBack = document.getElementById('btn-back');
+        this.btnSettings = document.getElementById('btn-settings');
+        
+        // Queue Sheet & Toast
+        this.queueSheet = document.getElementById('queue-sheet');
+        this.queueList = document.getElementById('queue-list');
+        this.playerToast = document.getElementById('player-toast');
+
+        // Drawer elements
+        this.drawerBack = document.getElementById('drawer-back-btn');
+        this.drawerTitle = document.getElementById('drawer-title');
+        this.mainMenu = document.getElementById('drawer-main-menu');
+        this.speedMenu = document.getElementById('drawer-speed-menu');
+        this.ratioMenu = document.getElementById('drawer-ratio-menu');
+        
+        this.valSpeed = document.getElementById('val-speed');
+        this.valRatio = document.getElementById('val-ratio');
+        this.valSubs = document.getElementById('val-subs');
     }
 
     _bindEvents() {
-        this.btnPlay.addEventListener('click', () => this.togglePlay());
-        this.btnStop.addEventListener('click', () => this.stop());
-        this.btnRew.addEventListener('click', () => this.seek(-10));
-        this.btnFf.addEventListener('click', () => this.seek(10));
-        this.btnPrev.addEventListener('click', () => this.playPrevious());
-        this.btnNext.addEventListener('click', () => this.playNext());
-        this.btnShuffle.addEventListener('click', () => this.toggleShuffle());
-        this.btnEject.addEventListener('click', () => this.eject());
-        this.btnMute.addEventListener('click', () => this.toggleMute());
-        this.btnFullscreen.addEventListener('click', () => this.toggleFullscreen());
+        this.btnPlay?.addEventListener('click', (e) => { e.stopPropagation(); this.togglePlay(); });
+        this.btnPrev?.addEventListener('click', (e) => { e.stopPropagation(); this.previous(); });
+        this.btnNext?.addEventListener('click', (e) => { e.stopPropagation(); this.next(); });
+        this.btnShuffle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleShuffle(); });
+        this.btnQueueToggle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleQueueSheet(); });
+        this.btnBack?.addEventListener('click', (e) => { e.stopPropagation(); this.eject(); });
+        this.btnSettings?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleDrawer(); });
 
         this.video.addEventListener('timeupdate', () => this._updateTransport());
         this.video.addEventListener('play', () => this._onPlayState(true));
@@ -68,27 +72,53 @@ export class PlayerManager {
         this.video.addEventListener('ended', () => this._onEnded());
         this.video.addEventListener('loadedmetadata', () => this._onLoaded());
 
-        // Transport click to seek
-        this.transportTrack.addEventListener('click', (e) => {
+        this.transportTrack?.addEventListener('click', (e) => {
+            e.stopPropagation();
             const rect = this.transportTrack.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
             this.video.currentTime = pct * this.video.duration;
+            this._showControls();
         });
 
-        // Volume segments click
-        this.volumeBar?.addEventListener('click', (e) => {
-            const seg = e.target.closest('.volume-seg');
-            if (!seg) return;
-            const level = parseInt(seg.dataset.seg) / 8;
-            this.video.volume = level;
-            this._updateVolumeLEDs();
+        // Drawer Logic
+        this.drawer?.addEventListener('click', (e) => e.stopPropagation());
+        this.drawerBack?.addEventListener('click', () => this._showMainMenu());
+        
+        this.mainMenu.querySelectorAll('.drawer-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const menu = item.dataset.menu;
+                if (menu === 'speed') this._showSubMenu('speed', 'Playback Speed');
+                if (menu === 'ratio') this._showSubMenu('ratio', 'Aspect Ratio');
+                if (item.id === 'item-subs') this.toggleSubtitles();
+            });
         });
 
-        // Show/hide controls on mouse movement
+        this.speedMenu.querySelectorAll('.drawer-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                const speed = parseFloat(opt.dataset.speed);
+                this.setPlaybackSpeed(speed);
+                this._showMainMenu();
+            });
+        });
+
+        this.ratioMenu.querySelectorAll('.drawer-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                const ratio = opt.dataset.ratio;
+                this.setAspectRatio(ratio);
+                this._showMainMenu();
+            });
+        });
+
         this.modal.addEventListener('mousemove', () => this._showControls());
-        this.modal.addEventListener('click', () => this._showControls());
-
-        // Dialog close
+        this.modal.addEventListener('click', () => {
+            if (this.drawer.classList.contains('open')) {
+                this.toggleDrawer(false);
+            } else if (this.queueSheet?.classList.contains('open')) {
+                this.toggleQueueSheet(false);
+            } else {
+                this._showControls();
+            }
+        });
         this.modal.addEventListener('close', () => this._cleanup());
     }
 
@@ -96,248 +126,359 @@ export class PlayerManager {
         document.addEventListener('keydown', (e) => {
             if (!this.modal.open) return;
             switch (e.key) {
-                case ' ':
-                    e.preventDefault();
-                    this.togglePlay();
-                    break;
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    this.seek(-10);
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    this.seek(10);
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    this.video.volume = Math.min(1, this.video.volume + 0.125);
-                    this._updateVolumeLEDs();
-                    break;
-                case 'ArrowDown':
-                    e.preventDefault();
-                    this.video.volume = Math.max(0, this.video.volume - 0.125);
-                    this._updateVolumeLEDs();
-                    break;
-                case 'n':
-                case 'N':
-                    this.playNext();
-                    break;
-                case 'p':
-                case 'P':
-                    this.playPrevious();
-                    break;
-                case 's':
-                case 'S':
-                    this.toggleShuffle();
-                    break;
-                case 'f':
-                case 'F':
-                    this.toggleFullscreen();
-                    break;
-                case 'm':
-                case 'M':
-                    this.toggleMute();
-                    break;
-                case 'Escape':
-                    this.eject();
+                case ' ': e.preventDefault(); this.togglePlay(); break;
+                case 'ArrowLeft': e.preventDefault(); this.seek(-10); break;
+                case 'ArrowRight': e.preventDefault(); this.seek(10); break;
+                case 's': case 'S': this.toggleShuffle(); break;
+                case 'q': case 'Q': this.toggleQueueSheet(); break;
+                case 'f': case 'F': this.toggleFullscreen(); break;
+                case 'Escape': 
+                    if (this.drawer.classList.contains('open')) this.toggleDrawer(false);
+                    else if (this.queueSheet?.classList.contains('open')) this.toggleQueueSheet(false);
+                    else this.eject(); 
                     break;
             }
         });
     }
 
-    _bindMobileGestures() {
-        let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
-        let lastTapTime = 0, lastTapX = 0;
+    _bindGestures() {
+        if (!this.gestureOverlay) return;
 
-        const screen = this.modal.querySelector('.player-screen');
-        if (!screen) return;
+        this.longPressTimer = null;
+        this.seekInterval = null;
+        this.isLongPress = false;
+        
+        // Per-zone state tracking for taps and double-taps
+        this._gestureState = {
+            left: { lastTap: 0, timer: null },
+            middle: { lastTap: 0, timer: null },
+            right: { lastTap: 0, timer: null }
+        };
 
-        screen.addEventListener('touchstart', (e) => {
-            const touch = e.touches[0];
-            touchStartX = touch.clientX;
-            touchStartY = touch.clientY;
-            touchStartTime = Date.now();
-        }, { passive: true });
+        const handleStart = (e, zone) => {
+            // Only handle primary pointer (left mouse button or first touch)
+            if (e.button !== undefined && e.button !== 0) return;
+            
+            // Prevent browser defaults for custom gestures
+            if (e.pointerType === 'touch') {
+                e.target.setPointerCapture(e.pointerId);
+            }
 
-        screen.addEventListener('touchend', (e) => {
-            const touch = e.changedTouches[0];
-            const dx = touch.clientX - touchStartX;
-            const dy = touch.clientY - touchStartY;
-            const elapsed = Date.now() - touchStartTime;
+            this.isLongPress = false;
+            clearTimeout(this.longPressTimer);
+            
+            this.longPressTimer = setTimeout(() => {
+                this.isLongPress = true;
+                this._handleLongPressStart(zone);
+            }, 500);
+        };
 
-            // Double-tap detection
+        const handleEnd = (e, zone) => {
+            clearTimeout(this.longPressTimer);
+            
+            if (this.isLongPress) {
+                this._handleLongPressEnd(zone);
+                this.isLongPress = false;
+                return;
+            }
+
+            const state = this._gestureState[zone];
             const now = Date.now();
-            if (elapsed < 200 && Math.abs(dx) < 30 && Math.abs(dy) < 30) {
-                if (now - lastTapTime < 300 && Math.abs(touch.clientX - lastTapX) < 50) {
-                    const half = window.innerWidth / 2;
-                    if (touch.clientX < half) this.seek(-10);
-                    else this.seek(10);
-                    lastTapTime = 0;
-                    return;
-                }
-                lastTapTime = now;
-                lastTapX = touch.clientX;
-            }
-
-            // Vertical swipe right side = volume
-            if (elapsed < 400 && Math.abs(dy) > 60 && Math.abs(dx) < 40) {
-                if (touchStartX > window.innerWidth * 0.6) {
-                    const delta = dy < 0 ? 0.125 : -0.125;
-                    this.video.volume = Math.max(0, Math.min(1, this.video.volume + delta));
-                    this._updateVolumeLEDs();
-                }
-            }
-        }, { passive: true });
-    }
-
-    play(mediaOrArray, startIndex = 0) {
-        if (Array.isArray(mediaOrArray)) {
-            this.originalQueue = [...mediaOrArray];
-            this.queue = [...mediaOrArray];
-            this.queueIndex = startIndex;
-        } else {
-            this.originalQueue = [mediaOrArray];
-            this.queue = [mediaOrArray];
-            this.queueIndex = 0;
-        }
-
-        if (this.isShuffle) {
-            this.shuffleQueue();
-        }
-
-        this._loadCurrent();
-    }
-
-    async _loadCurrent() {
-        if (this.queueIndex < 0 || this.queueIndex >= this.queue.length) return;
-        const media = this.queue[this.queueIndex];
-        
-        // Clean up previous stream
-        if (this.hls) {
-            this.hls.destroy();
-            this.hls = null;
-        }
-        this.video.src = '';
-        
-        this.currentMedia = media;
-        this._showControls();
-
-        // Update tape info
-        this.tapeTitle.textContent = media.title || '—';
-        this.tapeFormat.textContent = `${media.video_codec || '?'} / ${media.container || '?'}`;
-        this.tapeResolution.textContent = media.width && media.height ? `${media.width}×${media.height}` : '—';
-        this.tapeDuration.textContent = this._formatTime(media.duration_seconds || 0);
-        this.tapeQuality.textContent = media.hls_status === 'ready' ? 'HLS' : 'DIRECT';
-
-        this.playerStatus.textContent = 'Loading tape...';
-
-        try {
-            const stream = await api.stream(media.id);
-
-            if (stream.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                this.hls = new Hls({
-                    maxBufferLength: 30,
-                    enableWorker: true,
-                });
-                this.hls.loadSource(stream.url);
-                this.hls.attachMedia(this.video);
-                this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    this.video.play();
-                });
-                this.hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-                    const level = this.hls.levels[data.level];
-                    if (level) {
-                        this.tapeQuality.textContent = `${Math.round(level.bitrate / 1000)}k`;
-                    }
-                });
-                this.hls.on(Hls.Events.ERROR, (_, data) => {
-                    if (data.fatal) {
-                        this.playerStatus.textContent = `HLS Error: ${data.type}`;
-                    }
-                });
+            
+            if (now - state.lastTap < 300) {
+                // Double tap detected
+                clearTimeout(state.timer);
+                state.lastTap = 0;
+                this._handleDoubleTap(zone);
             } else {
-                this.video.src = stream.url;
-                this.video.play();
+                // Potential single tap
+                state.lastTap = now;
+                state.timer = setTimeout(() => {
+                    if (state.lastTap !== 0) {
+                        this._handleSingleTap(zone);
+                        state.lastTap = 0;
+                    }
+                }, 300);
             }
+        };
 
-            this.modal.showModal();
-        } catch (err) {
-            this.playerStatus.textContent = `Error: ${err.message}`;
-            console.error('Player error:', err);
-        }
+        const handleCancel = (e, zone) => {
+            clearTimeout(this.longPressTimer);
+            if (this.isLongPress) {
+                this._handleLongPressEnd(zone);
+            }
+            this.isLongPress = false;
+            
+            const state = this._gestureState[zone];
+            clearTimeout(state.timer);
+            state.lastTap = 0;
+        };
+
+        this.gestureOverlay.querySelectorAll('.gesture-zone').forEach(zoneEl => {
+            const zone = zoneEl.dataset.zone;
+            
+            // Pointer events are unified and more reliable
+            zoneEl.addEventListener('pointerdown', (e) => handleStart(e, zone));
+            zoneEl.addEventListener('pointerup', (e) => handleEnd(e, zone));
+            zoneEl.addEventListener('pointercancel', (e) => handleCancel(e, zone));
+            
+            // If pointer leaves, we should cancel the long press but not trigger a tap
+            zoneEl.addEventListener('pointerleave', (e) => {
+                if (this.isLongPress) {
+                    this._handleLongPressEnd(zone);
+                    this.isLongPress = false;
+                }
+                clearTimeout(this.longPressTimer);
+            });
+        });
     }
 
-    playNext() {
-        if (this.queueIndex < this.queue.length - 1) {
-            this.queueIndex++;
-            this._loadCurrent();
+    _handleSingleTap(zone) {
+        if (zone === 'middle') {
+            this.togglePlay();
+            this._triggerFeedback('play-pause');
         } else {
-            this.stop();
+            // Check if drawer or sheet is open first
+            if (this.drawer.classList.contains('open')) {
+                this.toggleDrawer(false);
+            } else if (this.queueSheet?.classList.contains('open')) {
+                this.toggleQueueSheet(false);
+            } else {
+                // Otherwise toggle controls
+                if (this.modal.classList.contains('controls-visible')) {
+                    this.hideControls();
+                } else {
+                    this._showControls();
+                }
+            }
         }
     }
 
-    playPrevious() {
-        if (this.video.currentTime > 3) {
-            this.video.currentTime = 0;
-        } else if (this.queueIndex > 0) {
-            this.queueIndex--;
-            this._loadCurrent();
+    _handleDoubleTap(zone) {
+        if (zone === 'left') {
+            this.seek(-10);
+            this._triggerFeedback('ripple-left');
+        } else if (zone === 'right') {
+            this.seek(10);
+            this._triggerFeedback('ripple-right');
         }
     }
 
-    toggleShuffle() {
-        this.isShuffle = !this.isShuffle;
-        this.btnShuffle?.classList.toggle('active', this.isShuffle);
-        
-        if (this.isShuffle) {
-            this.shuffleQueue();
+    _handleLongPressStart(zone) {
+        if (zone === 'middle') {
+            this.video.playbackRate = 2.0;
+            document.getElementById('speed-indicator').classList.add('visible');
+        } else if (zone === 'left') {
+            this.seekInterval = setInterval(() => this.seek(-2), 100);
+            this._triggerFeedback('ripple-left', true);
+        } else if (zone === 'right') {
+            this.seekInterval = setInterval(() => this.seek(2), 100);
+            this._triggerFeedback('ripple-right', true);
+        }
+    }
+
+    _handleLongPressEnd(zone) {
+        if (zone === 'middle') {
+            this.video.playbackRate = 1.0;
+            document.getElementById('speed-indicator').classList.remove('visible');
         } else {
-            // Restore original queue order, but keep the current item playing
-            const current = this.queue[this.queueIndex];
-            this.queue = [...this.originalQueue];
-            this.queueIndex = this.queue.indexOf(current);
-            if (this.queueIndex === -1) this.queueIndex = 0;
+            clearInterval(this.seekInterval);
+            this.seekInterval = null;
+            this._triggerFeedback('ripple-' + zone, false);
         }
     }
 
-    shuffleQueue() {
-        if (this.queue.length <= 1) return;
-        const current = this.queue[this.queueIndex];
-        
-        // Fisher-Yates shuffle starting from the next item
-        // Wait, just shuffle the whole array and put current at index 0
-        const itemsToShuffle = this.queue.filter(m => m !== current);
-        for (let i = itemsToShuffle.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [itemsToShuffle[i], itemsToShuffle[j]] = [itemsToShuffle[j], itemsToShuffle[i]];
+    _triggerFeedback(type, active = true) {
+        if (type === 'play-pause') {
+            const el = document.getElementById('play-pause-feedback');
+            const icon = el.querySelector('i');
+            icon.className = `v-icon icon-${this.video.paused ? 'pause' : 'play'}`;
+            el.classList.remove('animate');
+            void el.offsetWidth; // trigger reflow
+            el.classList.add('animate');
+        } else if (type.startsWith('ripple')) {
+            const el = document.getElementById(type);
+            if (active) {
+                el.classList.remove('animate');
+                void el.offsetWidth;
+                el.classList.add('animate');
+            }
         }
-        
-        if (current) {
-            this.queue = [current, ...itemsToShuffle];
-        } else {
-            this.queue = itemsToShuffle;
-        }
-        this.queueIndex = 0;
     }
 
     togglePlay() {
         if (this.video.paused) this.video.play();
         else this.video.pause();
+        this._showControls();
     }
 
-    stop() {
-        this.video.pause();
-        this.video.currentTime = 0;
-        this._onPlayState(false);
+    play(input, index = 0) {
+        if (Array.isArray(input)) {
+            this.originalQueue = [...input];
+            this.queue = [...input];
+            const selectedItem = this.queue[index];
+
+            if (this.isShuffle) {
+                this.shuffleQueue();
+                this.queueIndex = Math.max(0, this.queue.indexOf(selectedItem));
+            } else {
+                this.queueIndex = index;
+            }
+        } else {
+            const item = typeof input === 'object' ? input : { id: input, title: 'Loading...' };
+            this.originalQueue = [item];
+            this.queue = [item];
+            this.queueIndex = 0;
+        }
+
+        if (!this.modal.open) {
+            this.modal.showModal();
+        }
+        
+        this._loadCurrent();
+    }
+
+    async _loadCurrent() {
+        const media = this.queue[this.queueIndex];
+        if (!media) return;
+
+        this._cleanup();
+        this.currentMedia = media;
+        
+        // Update UI
+        if (this.tapeTitle) this.tapeTitle.textContent = media.title || 'Untitled';
+        const sideTitle = document.getElementById('tape-title');
+        if (sideTitle) sideTitle.textContent = media.title || 'Untitled';
+        
+        this._renderQueueSheet();
+        this._showControls();
+
+        try {
+            const res = await api.stream(media.id);
+            if (!res || !res.url) throw new Error("No stream URL");
+
+            if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                this.hls = new Hls();
+                this.hls.loadSource(res.url);
+                this.hls.attachMedia(this.video);
+                this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    this._startPlayback();
+                });
+            } else {
+                this.video.src = res.url;
+                this._startPlayback();
+            }
+        } catch (err) {
+            console.error("Playback error:", err);
+            this.showToast("Playback Error");
+        }
+    }
+
+    _startPlayback() {
+        if (this.currentMedia && this.currentMedia.last_position_seconds) {
+            this.video.currentTime = this.currentMedia.last_position_seconds;
+        }
+        this.video.play().catch(() => {
+            if (this.btnPlay) this.btnPlay.classList.add('pulse');
+        });
+    }
+
+    previous() {
+        if (this.queueIndex <= 0) return;
+        this.queueIndex--;
+        this._loadCurrent();
+    }
+
+    next() {
+        if (this.queueIndex >= this.queue.length - 1) return;
+        this.queueIndex++;
+        this._loadCurrent();
     }
 
     seek(seconds) {
         if (!this.video.duration) return;
         this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds));
+        this._showControls();
+    }
+
+    toggleShuffle() {
+        this.isShuffle = !this.isShuffle;
+        if (this.btnShuffle) {
+            this.btnShuffle.classList.toggle('active', this.isShuffle);
+        }
+
+        if (this.isShuffle) {
+            this.shuffleQueue();
+            this.queueIndex = 0; // Immediate skip to new index 0
+            this._loadCurrent();
+            this.showToast('Playlist Shuffled');
+        } else {
+            // Restore original order
+            const currentId = this.currentMedia?.id;
+            this.queue = [...this.originalQueue];
+            if (currentId) {
+                this.queueIndex = this.queue.findIndex(m => m.id === currentId);
+            }
+        }
+        this._showControls();
+        this._renderQueueSheet();
+    }
+
+    shuffleQueue() {
+        // Fisher-Yates Shuffle
+        for (let i = this.queue.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
+        }
+    }
+
+    toggleQueueSheet(show) {
+        const isOpen = show !== undefined ? show : !this.queueSheet.classList.contains('open');
+        this.queueSheet.classList.toggle('open', isOpen);
+        if (isOpen) {
+            this._renderQueueSheet();
+            this.toggleDrawer(false);
+            clearTimeout(this.controlsTimer);
+        } else {
+            this._showControls();
+        }
+    }
+
+    _renderQueueSheet() {
+        if (!this.queueList) return;
+        this.queueList.innerHTML = '';
+        
+        this.queue.forEach((media, index) => {
+            const item = document.createElement('div');
+            item.className = `queue-item ${index === this.queueIndex ? 'active' : ''}`;
+            
+            item.innerHTML = `
+                <span class="queue-item-index">${String(index + 1).padStart(2, '0')}</span>
+                <span class="queue-item-title">${media.title || 'Untitled'}</span>
+                ${index === this.queueIndex ? '<i class="v-icon icon-play" style="width:16px; height:16px;"></i>' : ''}
+            `;
+            
+            item.addEventListener('click', () => {
+                this.jumpToQueueIndex(index);
+                this.toggleQueueSheet(false);
+            });
+            this.queueList.appendChild(item);
+        });
+    }
+
+    jumpToQueueIndex(index) {
+        this.queueIndex = index;
+        this._loadCurrent();
+    }
+
+    showToast(message) {
+        if (!this.playerToast) return;
+        this.playerToast.textContent = message;
+        this.playerToast.classList.add('visible');
+        setTimeout(() => this.playerToast.classList.remove('visible'), 2000);
     }
 
     eject() {
-        // Save position before closing
         if (this.currentMedia && this.video.currentTime > 5) {
             api.recordPlayback(this.currentMedia.id, {
                 position_seconds: this.video.currentTime,
@@ -345,14 +486,7 @@ export class PlayerManager {
                 event_type: 'stop',
             }).catch(() => {});
         }
-
         this.modal.close();
-    }
-
-    toggleMute() {
-        this.video.muted = !this.video.muted;
-        this.btnMute.querySelector('.vhs-btn-icon').textContent = this.video.muted ? '🔇' : '🔊';
-        this._updateVolumeLEDs();
     }
 
     toggleFullscreen() {
@@ -360,16 +494,71 @@ export class PlayerManager {
         else this.modal.requestFullscreen?.();
     }
 
+    toggleDrawer(show) {
+        const isOpen = show !== undefined ? show : !this.drawer.classList.contains('open');
+        this.drawer.classList.toggle('open', isOpen);
+        if (isOpen) {
+            this._showMainMenu();
+            this.toggleQueueSheet(false);
+            clearTimeout(this.controlsTimer);
+        } else {
+            this._showControls();
+        }
+    }
+
+    _showMainMenu() {
+        this.mainMenu.hidden = false;
+        this.speedMenu.hidden = true;
+        this.ratioMenu.hidden = true;
+        this.drawerTitle.textContent = 'Settings';
+        this.drawerBack.classList.remove('visible');
+    }
+
+    _showSubMenu(id, title) {
+        this.mainMenu.hidden = true;
+        this.speedMenu.hidden = id !== 'speed';
+        this.ratioMenu.hidden = id !== 'ratio';
+        this.drawerTitle.textContent = title;
+        this.drawerBack.classList.add('visible');
+    }
+
+    setPlaybackSpeed(rate) {
+        this.video.playbackRate = rate;
+        this.valSpeed.textContent = `${rate}x`;
+        this.speedMenu.querySelectorAll('.drawer-option').forEach(opt => {
+            opt.classList.toggle('selected', parseFloat(opt.dataset.speed) === rate);
+        });
+    }
+
+    setAspectRatio(mode) {
+        this.video.style.objectFit = mode;
+        const labels = { contain: 'Fit', cover: 'Zoom', fill: 'Stretch' };
+        this.valRatio.textContent = labels[mode];
+        this.ratioMenu.querySelectorAll('.drawer-option').forEach(opt => {
+            opt.classList.toggle('selected', opt.dataset.ratio === mode);
+        });
+    }
+
+    toggleSubtitles() {
+        const tracks = this.video.textTracks;
+        if (!tracks || tracks.length === 0) return;
+        const current = Array.from(tracks).find(t => t.mode === 'showing');
+        if (current) {
+            current.mode = 'hidden';
+            this.valSubs.textContent = 'Off';
+        } else {
+            tracks[0].mode = 'showing';
+            this.valSubs.textContent = 'On';
+        }
+    }
+
     _onPlayState(playing) {
-        this.btnPlay.querySelector('.vhs-btn-icon').textContent = playing ? '⏸' : '▶';
-        this.btnPlay.querySelector('.vhs-btn-label').textContent = playing ? 'Pause' : 'Play';
-        this.btnPlay.classList.toggle('active', playing);
-        this.playerStatus.textContent = playing ? '▶ PLAY' : '⏸ PAUSED';
+        if (this.btnPlay) {
+            this.btnPlay.classList.toggle('active', playing);
+        }
     }
 
     _onEnded() {
-        this.playerStatus.textContent = '⏹ END OF TAPE';
-        this.btnPlay.classList.remove('active');
         if (this.currentMedia) {
             api.recordPlayback(this.currentMedia.id, {
                 position_seconds: this.video.duration,
@@ -377,26 +566,36 @@ export class PlayerManager {
                 event_type: 'complete',
             }).catch(() => {});
         }
-        
         if (this.queueIndex < this.queue.length - 1) {
-            setTimeout(() => this.playNext(), 1500);
+            setTimeout(() => { this.queueIndex++; this._loadCurrent(); }, 1000);
         }
     }
 
     _onLoaded() {
-        this.transportTotal.textContent = this._formatTimeSm(this.video.duration);
-        this.tapeDuration.textContent = this._formatTime(this.video.duration);
-        this._updateVolumeLEDs();
+        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(this.video.duration);
+        
+        const tapeDur = document.getElementById('tape-duration');
+        if (tapeDur) tapeDur.textContent = this._formatTime(this.video.duration);
+        
+        const tapeRes = document.getElementById('tape-resolution');
+        if (tapeRes) tapeRes.textContent = `${this.video.videoWidth}x${this.video.videoHeight}`;
+        
+        const tapeFormat = document.getElementById('tape-format');
+        if (tapeFormat) tapeFormat.textContent = this.currentMedia?.video_codec?.toUpperCase() || 'VIDEO';
+
+        const tapeQual = document.getElementById('tape-quality');
+        if (tapeQual) tapeQual.textContent = this.video.videoHeight >= 1080 ? 'FHD' : (this.video.videoHeight >= 720 ? 'HD' : 'SD');
     }
 
     _updateTransport() {
         if (!this.video.duration) return;
         const pct = (this.video.currentTime / this.video.duration) * 100;
-        this.transportFill.style.width = `${pct}%`;
-        this.transportCurrent.textContent = this._formatTimeSm(this.video.currentTime);
-        this.tapePosition.textContent = this._formatTime(this.video.currentTime);
+        if (this.transportFill) this.transportFill.style.width = `${pct}%`;
+        if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(this.video.currentTime);
 
-        // Periodic save
+        const tapePos = document.getElementById('tape-position');
+        if (tapePos) tapePos.textContent = this._formatTime(this.video.currentTime);
+
         if (this.currentMedia && Math.floor(this.video.currentTime) % 15 === 0 && this.video.currentTime > 5) {
             api.recordPlayback(this.currentMedia.id, {
                 position_seconds: this.video.currentTime,
@@ -406,59 +605,36 @@ export class PlayerManager {
         }
     }
 
-    _updateVolumeLEDs() {
-        const vol = this.video.muted ? 0 : this.video.volume;
-        const activeLevels = Math.round(vol * 8);
-        const segs = this.volumeBar.querySelectorAll('.volume-seg');
-
-        segs.forEach(seg => {
-            const level = parseInt(seg.dataset.seg);
-            const isOn = level <= activeLevels;
-
-            seg.classList.remove('on', 'green', 'yellow', 'red');
-            if (isOn) {
-                seg.classList.add('on');
-                if (level <= 5) seg.classList.add('green');
-                else if (level <= 7) seg.classList.add('yellow');
-                else seg.classList.add('red');
-            }
-        });
-    }
-
     _showControls() {
         this.modal.classList.add('controls-visible');
         clearTimeout(this.controlsTimer);
         this.controlsTimer = setTimeout(() => {
-            if (!this.video.paused) {
-                this.modal.classList.remove('controls-visible');
+            if (!this.video.paused && !this.drawer.classList.contains('open') && !this.queueSheet?.classList.contains('open')) {
+                this.hideControls();
             }
-        }, 3000);
+        }, 5000); // 5-second auto-hide
+    }
+
+    hideControls() {
+        this.modal.classList.remove('controls-visible');
     }
 
     _cleanup() {
-        if (this.hls) {
-            this.hls.destroy();
-            this.hls = null;
-        }
+        if (this.hls) { this.hls.destroy(); this.hls = null; }
         this.video.src = '';
         this.video.load();
-        this.transportFill.style.width = '0%';
+        if (this.transportFill) this.transportFill.style.width = '0%';
         this.currentMedia = null;
-        this.playerStatus.textContent = '';
+        this.toggleDrawer(false);
+        this.toggleQueueSheet(false);
     }
 
     _formatTime(s) {
-        if (!s || isNaN(s)) return '00:00:00';
+        if (!s || isNaN(s)) return '00:00';
         const h = Math.floor(s / 3600);
         const m = Math.floor((s % 3600) / 60);
         const sec = Math.floor(s % 60);
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    }
-
-    _formatTimeSm(s) {
-        if (!s || isNaN(s)) return '00:00';
-        const m = Math.floor(s / 60);
-        const sec = Math.floor(s % 60);
+        if (h > 0) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
         return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
     }
 }

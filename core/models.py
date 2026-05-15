@@ -143,7 +143,7 @@ class ServerStatus(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     server_name: Mapped[str] = mapped_column(String(120), nullable=False)
     ip_address: Mapped[str] = mapped_column(String(45), nullable=False)
-    port: Mapped[int] = mapped_column(Integer, default=8000, nullable=False)
+    port: Mapped[int] = mapped_column(Integer, default=51733, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="offline", nullable=False)
     media_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

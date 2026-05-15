@@ -128,63 +128,144 @@
       </div>
 
       <!-- Transport & Controls -->
-      <div class="player-controls">
-        <div class="transport-bar">
-          <span id="transport-current" class="transport-time">00:00</span>
-          <div id="transport-track" class="transport-track">
-            <div id="transport-fill" class="transport-fill" style="width: 0%"></div>
+      <div class="player-overlay">
+        <!-- Top Bar -->
+        <div class="player-scrim-top"></div>
+        <div class="player-top-bar">
+          <button class="vhs-btn btn-naked" id="btn-back" title="Back (Esc)">
+            <i class="v-icon icon-back"></i>
+          </button>
+          <div class="title-container">
+            <h2 id="tape-title-display" class="tape-title-main">Video Title</h2>
           </div>
-          <span id="transport-total" class="transport-time">00:00</span>
+          <button class="vhs-btn btn-naked" id="btn-settings" title="Settings">
+            <i class="v-icon icon-more"></i>
+          </button>
         </div>
 
-        <div class="flex-between">
-          <div class="vhs-buttons">
-            <button class="vhs-btn" id="btn-eject" title="Close (Esc)">
-              <span class="vhs-btn-icon">⏏</span>
-              <span class="vhs-btn-label">Eject</span>
+        <!-- Settings Drawer -->
+        <div id="player-drawer" class="player-drawer">
+          <div class="drawer-header">
+            <button class="drawer-back" id="drawer-back-btn">
+               <i class="v-icon icon-back"></i>
             </button>
-            <div class="vhs-spacer"></div>
-            <button class="vhs-btn" id="btn-shuffle" title="Shuffle Queue (S)">
-              <span class="vhs-btn-icon">🔀</span>
-              <span class="vhs-btn-label">Shuf</span>
-            </button>
-            <button class="vhs-btn" id="btn-prev" title="Previous Track (P)">
-              <span class="vhs-btn-icon">⏮</span>
-              <span class="vhs-btn-label">Prev</span>
-            </button>
-            <button class="vhs-btn" id="btn-rew" title="Rewind 10s (←)">
-              <span class="vhs-btn-icon">⏪</span>
-              <span class="vhs-btn-label">Rew</span>
-            </button>
-            <button class="vhs-btn" id="btn-play" title="Play/Pause (Space)">
-              <span class="vhs-btn-icon">▶</span>
-              <span class="vhs-btn-label">Play</span>
-            </button>
-            <button class="vhs-btn" id="btn-ff" title="Forward 10s (→)">
-              <span class="vhs-btn-icon">⏩</span>
-              <span class="vhs-btn-label">FF</span>
-            </button>
-            <button class="vhs-btn" id="btn-next" title="Next Track (N)">
-              <span class="vhs-btn-icon">⏭</span>
-              <span class="vhs-btn-label">Next</span>
-            </button>
-            <div class="vhs-spacer"></div>
-            <button class="vhs-btn" id="btn-stop" title="Stop">
-              <span class="vhs-btn-icon">⏹</span>
-              <span class="vhs-btn-label">Stop</span>
-            </button>
-            <button class="vhs-btn" id="btn-mute" title="Mute (M)">
-              <span class="vhs-btn-icon">🔊</span>
-              <span class="vhs-btn-label">Vol</span>
-            </button>
-            <button class="vhs-btn" id="btn-fullscreen" title="Fullscreen (F)">
-              <span class="vhs-btn-icon">⛶</span>
-              <span class="vhs-btn-label">Full</span>
-            </button>
+            <span id="drawer-title">Settings</span>
+          </div>
+          <div class="drawer-content" id="drawer-main-menu">
+            <div class="drawer-item" data-menu="queue">
+              <i class="v-icon icon-list drawer-icon"></i>
+              <span class="drawer-label">Playing Queue</span>
+              <span class="drawer-value" id="val-queue">0 items</span>
+            </div>
+            <div class="drawer-item" data-menu="speed">
+              <i class="v-icon icon-speed drawer-icon"></i>
+              <span class="drawer-label">Playback Speed</span>
+              <span class="drawer-value" id="val-speed">1.0x</span>
+            </div>
+            <div class="drawer-item" data-menu="ratio">
+              <i class="v-icon icon-ratio drawer-icon"></i>
+              <span class="drawer-label">Aspect Ratio</span>
+              <span class="drawer-value" id="val-ratio">Fit</span>
+            </div>
+            <div class="drawer-item" id="item-subs">
+              <i class="v-icon icon-subs drawer-icon"></i>
+              <span class="drawer-label">Subtitles</span>
+              <span class="drawer-value" id="val-subs">Off</span>
+            </div>
+          </div>
+          
+          <!-- Sub-Menus (Hidden) -->
+          <div class="drawer-content" id="drawer-queue-menu" hidden>
+            <!-- Dynamically populated -->
+          </div>
+          <div class="drawer-content" id="drawer-speed-menu" hidden>
+            <div class="drawer-option" data-speed="0.5">0.5x</div>
+            <div class="drawer-option" data-speed="1.0">1.0x (Normal)</div>
+            <div class="drawer-option" data-speed="1.5">1.5x</div>
+            <div class="drawer-option" data-speed="2.0">2.0x</div>
+          </div>
+          <div class="drawer-content" id="drawer-ratio-menu" hidden>
+            <div class="drawer-option" data-ratio="contain">Fit (Default)</div>
+            <div class="drawer-option" data-ratio="cover">Zoom (Fill)</div>
+            <div class="drawer-option" data-ratio="fill">Stretch</div>
           </div>
         </div>
 
-        <p id="player-status" class="player-status"></p>
+        <!-- Triple-Zone Gesture Interface -->
+        <div class="player-gesture-zones" id="gesture-overlay">
+          <div class="gesture-zone" data-zone="left" style="flex: 0 0 30%;"></div>
+          <div class="gesture-zone" data-zone="middle" style="flex: 0 0 40%;"></div>
+          <div class="gesture-zone" data-zone="right" style="flex: 0 0 30%;"></div>
+          
+          <!-- Visual Feedback Overlays -->
+          <div id="speed-indicator" class="speed-indicator">2x Speed &raquo;</div>
+          <div id="ripple-left" class="ripple-seek left">
+             <i class="v-icon icon-skip-back"></i>
+             <span>10s</span>
+          </div>
+          <div id="ripple-right" class="ripple-seek right">
+             <i class="v-icon icon-skip-forward"></i>
+             <span>10s</span>
+          </div>
+          <div id="play-pause-feedback" class="play-pause-feedback">
+             <i class="v-icon icon-play"></i>
+          </div>
+        </div>
+
+        <!-- Bottom Scrim & Deck -->
+        <div class="player-scrim-bottom"></div>
+        <div class="player-bottom-deck">
+          <!-- Progress / Scrubber -->
+          <div class="transport-bar">
+            <span id="transport-current" class="transport-time">00:00</span>
+            <div id="transport-track" class="transport-track">
+              <div id="transport-fill" class="transport-fill" style="width: 0%">
+                <div class="transport-thumb"></div>
+              </div>
+            </div>
+            <span id="transport-total" class="transport-time">00:00</span>
+          </div>
+
+          <!-- Streamlined Bottom Bar -->
+          <div class="bottom-control-bar">
+            <div class="control-group-left">
+              <button class="vhs-btn btn-naked" id="btn-shuffle" title="Shuffle">
+                <i class="v-icon icon-shuffle" id="shuffle-icon"></i>
+              </button>
+            </div>
+
+            <div class="control-group-center">
+              <button class="vhs-btn btn-naked" id="btn-prev" title="Previous">
+                <i class="v-icon icon-skip-back"></i>
+              </button>
+              <button class="vhs-btn btn-naked btn-play-main" id="btn-play" title="Play/Pause (Space)">
+                <i class="v-icon icon-play play-icon"></i>
+                <i class="v-icon icon-pause pause-icon"></i>
+              </button>
+              <button class="vhs-btn btn-naked" id="btn-next" title="Next">
+                <i class="v-icon icon-skip-forward"></i>
+              </button>
+            </div>
+
+            <div class="control-group-right">
+              <button class="vhs-btn btn-naked" id="btn-queue-toggle" title="Queue">
+                <i class="v-icon icon-list"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Queue Sheet -->
+        <div id="queue-sheet" class="player-queue-sheet">
+          <div class="sheet-header">
+            <div class="sheet-handle"></div>
+            <span>Up Next</span>
+          </div>
+          <div id="queue-list" class="sheet-content"></div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="player-toast" class="player-toast"></div>
       </div>
     </dialog>
 

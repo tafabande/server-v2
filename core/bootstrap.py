@@ -92,5 +92,9 @@ async def bootstrap_application() -> None:
                 await scan_media_library(scan_session)
         
         asyncio.create_task(run_background_scan())
+        
+        # 5. Start file watcher for automatic updates
+        from core.media import watch_media_library
+        asyncio.create_task(watch_media_library())
     
     logger.info("System bootstrap completed.")

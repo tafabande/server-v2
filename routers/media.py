@@ -41,8 +41,12 @@ async def stream(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> StreamResponse:
+    from config import get_settings
+    settings = get_settings()
     media = await get_media(session, media_id)
-    ensure_pin_for_path(media_source_path(media), pin)
+    if media.requires_pin and pin != settings.admin_pin:
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Valid admin PIN required for this resource.")
     return StreamResponse(**await build_stream_response(session, media))
 
 
@@ -53,11 +57,15 @@ async def stream_file(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
+    from config import get_settings
+    settings = get_settings()
     media = await get_media(session, media_id)
     source = media_source_path(media)
     if media.stream_mode != "direct":
         raise HTTPException(status_code=400, detail="This media must be played through HLS.")
-    ensure_pin_for_path(source, pin)
+    if media.requires_pin and pin != settings.admin_pin:
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Valid admin PIN required for this resource.")
     return FileResponse(source)
 
 

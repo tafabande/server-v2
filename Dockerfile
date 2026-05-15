@@ -16,11 +16,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p shared_media thumbs logs temp/hls
+# Create a non-root user
+RUN useradd -m -u 1000 mediauser
+USER root
+
+# Create necessary directories and set permissions
+RUN mkdir -p shared_media thumbs logs temp/hls \
+    && chown -R mediauser:mediauser /app
+
+# Switch to non-root user
+USER mediauser
 
 # Expose port
-EXPOSE 8000
+EXPOSE 51733
+
+# Healthcheck to ensure API is responsive
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:51733/api/system/health', timeout=5)" || exit 1
 
 # Start application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "51733"]

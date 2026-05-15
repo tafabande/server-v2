@@ -1,6 +1,10 @@
 /**
  * MediaHub — Main Application Entry Point
  */
+export let api = null;
+export let player = null;
+export let router = null;
+
 import { ApiClient } from './api.js';
 import { SocketClient } from './socket-client.js';
 import { PlayerManager } from './player-manager.js';
@@ -140,7 +144,8 @@ class App {
 }
 
 const appInstance = new App();
+api = appInstance.api;
+player = appInstance.player;
+router = appInstance.router;
+
 export default appInstance;
-export const api = appInstance.api;
-export const player = appInstance.player;
-export const router = appInstance.router;

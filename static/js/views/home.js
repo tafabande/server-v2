@@ -19,6 +19,7 @@ export class HomeView {
                     <input id="home-search" class="input" type="text" placeholder="Search media... (Ctrl+K)">
                 </div>
             </div>
+            <div id="hero-banner" class="mb-lg" style="display:none"></div>
             <div id="continue-section" hidden>
                 <div class="section-title">Continue Watching</div>
                 <div id="continue-track" class="gallery-track"></div>
@@ -53,11 +54,61 @@ export class HomeView {
         try {
             const groups = await api.getLibrary();
             this._groups = groups;
+            
+            const allMedia = groups.flatMap(g => g.items);
+            if (allMedia.length > 0) {
+                const randomMedia = allMedia[Math.floor(Math.random() * allMedia.length)];
+                this._renderHero(randomMedia);
+            }
+
             this._renderGroups(groups);
         } catch (err) {
             document.getElementById('library-rows').innerHTML = 
                 `<div class="empty-state"><p>Could not load library: ${err.message}</p></div>`;
         }
+    }
+
+    _renderHero(media) {
+        const heroContainer = document.getElementById('hero-banner');
+        heroContainer.style.display = 'block';
+        
+        heroContainer.innerHTML = `
+            <div class="hero-card" style="position:relative; width:100%; height:45vh; min-height:300px; border-radius:12px; overflow:hidden; background:#000; cursor:pointer; box-shadow:0 8px 30px rgba(0,0,0,0.5)">
+                <img src="${thumbUrl(media)}" style="position:absolute; width:100%; height:100%; object-fit:cover; opacity:0.4; z-index:1" onerror="this.style.opacity=0">
+                <video id="hero-video" style="position:absolute; width:100%; height:100%; object-fit:cover; opacity:0; transition: opacity 1.5s ease; z-index:2" muted loop playsinline></video>
+                <div style="position:absolute; bottom:0; left:0; right:0; padding:60px 24px 24px; background:linear-gradient(transparent, #050505 90%); z-index:3; display:flex; justify-content:space-between; align-items:flex-end">
+                    <div>
+                        <h2 style="font-size:2.5rem; font-weight:800; margin-bottom:8px; text-shadow:0 2px 10px rgba(0,0,0,0.8)">${media.title}</h2>
+                        <p class="text-muted" style="text-shadow:0 1px 4px rgba(0,0,0,0.8)">${formatDuration(media.duration_seconds)} · ${media.video_codec || 'VIDEO'}</p>
+                    </div>
+                    <button class="btn btn-accent" style="border-radius:30px; padding:12px 24px; font-weight:700; box-shadow:0 4px 15px rgba(239, 68, 68, 0.4)">▶ Play Now</button>
+                </div>
+            </div>
+        `;
+
+        heroContainer.querySelector('.hero-card').addEventListener('click', () => {
+            player.play(media);
+        });
+
+        // Autoplay silent video
+        api.stream(media.id).then(res => {
+            if (res && res.url) {
+                const video = document.getElementById('hero-video');
+                if (!video) return;
+                
+                if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    this._heroHls = new Hls({ startLevel: 0 }); // lowest quality for background
+                    this._heroHls.loadSource(res.url);
+                    this._heroHls.attachMedia(video);
+                    this._heroHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        video.play().then(() => video.style.opacity = '0.6').catch(()=>{});
+                    });
+                } else {
+                    video.src = res.url;
+                    video.play().then(() => video.style.opacity = '0.6').catch(()=>{});
+                }
+            }
+        }).catch(()=>{});
     }
 
     _renderGroups(groups) {
@@ -133,5 +184,15 @@ export class HomeView {
         this._renderGroups(filtered);
     }
 
-    destroy() {}
+    destroy() {
+        if (this._heroHls) {
+            this._heroHls.destroy();
+            this._heroHls = null;
+        }
+        const video = document.getElementById('hero-video');
+        if (video) {
+            video.pause();
+            video.src = '';
+        }
+    }
 }

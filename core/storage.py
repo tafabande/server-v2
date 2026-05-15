@@ -13,14 +13,9 @@ from core.logging import get_logger
 settings = get_settings()
 logger = get_logger("storage")
 MEDIA_EXTENSIONS = {
-    ".mp4",
-    ".mkv",
-    ".avi",
-    ".mov",
-    ".wmv",
-    ".m4v",
-    ".webm",
-    ".flv",
+    ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".m4v", ".webm", ".flv",
+    ".mpg", ".mpeg", ".m2ts", ".ts", ".vob", ".ogv", ".divx", ".xvid",
+    ".asf", ".3gp", ".3g2"
 }
 
 
@@ -60,7 +55,7 @@ def ensure_pin_for_path(path: Path, pin: str | None) -> None:
         raise AccessDeniedError("Valid admin PIN required for this resource.")
 
 
-def list_directory(raw_path: str | None = None) -> tuple[str, str | None, list[dict]]:
+async def list_directory(raw_path: str | None = None) -> tuple[str, str | None, list[dict]]:
     directory = resolve_shared_path(raw_path)
     if not directory.exists():
         raise ResourceNotFoundError(f"Directory not found: {raw_path}")
@@ -73,19 +68,33 @@ def list_directory(raw_path: str | None = None) -> tuple[str, str | None, list[d
     )
 
     items = []
-    for entry in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
-        stat = entry.stat()
-        items.append(
-            {
-                "name": entry.name,
-                "path": relative_shared_path(entry),
-                "is_dir": entry.is_dir(),
-                "size": 0 if entry.is_dir() else stat.st_size,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime),
-                "locked": is_path_locked(entry),
-                "media": is_media_file(entry),
-            }
-        )
+    from core.database import AsyncSessionLocal
+    from sqlalchemy import select
+    from core.models import MediaMetadata
+    
+    async with AsyncSessionLocal() as session:
+        for entry in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+            if entry.name.startswith("."): continue
+            stat = entry.stat()
+            rel = relative_shared_path(entry)
+            is_media = is_media_file(entry)
+            media_id = None
+            if is_media:
+                res = await session.execute(select(MediaMetadata.id).where(MediaMetadata.relative_path == rel))
+                media_id = res.scalar()
+            
+            items.append(
+                {
+                    "name": entry.name,
+                    "path": rel,
+                    "is_dir": entry.is_dir(),
+                    "size": 0 if entry.is_dir() else stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime),
+                    "locked": is_path_locked(entry),
+                    "media": is_media,
+                    "media_id": media_id,
+                }
+            )
     return relative_path, parent, items
 
 

@@ -66,19 +66,46 @@ def ffprobe_available() -> bool:
 
 
 def write_placeholder_thumbnail(destination: Path, title: str) -> None:
+    import hashlib
+    # Generate a stable color based on title
+    h = hashlib.md5(title.encode()).hexdigest()
+    hue = int(h[:2], 16) % 360
+    color1 = f"hsl({hue}, 60%, 25%)"
+    color2 = f"hsl({(hue + 40) % 360}, 70%, 15%)"
+    accent = f"hsl({hue}, 80%, 70%)"
+    
     escaped_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1b1412" />
-      <stop offset="100%" stop-color="#5f1f16" />
+    <linearGradient id="bg_{hue}" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="{color1}" />
+      <stop offset="100%" stop-color="{color2}" />
     </linearGradient>
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" />
+      <feColorMatrix type="saturate" values="0" />
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.05" />
+      </feComponentTransfer>
+    </filter>
   </defs>
-  <rect width="640" height="360" rx="28" fill="url(#bg)" />
-  <rect x="28" y="28" width="584" height="304" rx="22" fill="none" stroke="#ff7750" stroke-width="2" opacity="0.7" />
-  <text x="48" y="88" fill="#f3c888" font-size="26" font-family="Trebuchet MS, sans-serif">MEDIAHUB</text>
-  <text x="48" y="198" fill="#fff4dd" font-size="42" font-family="Impact, Haettenschweiler, sans-serif">{escaped_title}</text>
-  <text x="48" y="250" fill="#ffb07a" font-size="18" font-family="Trebuchet MS, sans-serif">Offline stream ready</text>
+  <rect width="640" height="360" fill="url(#bg_{hue})" />
+  <rect width="640" height="360" fill="transparent" filter="url(#noise)" opacity="0.4" />
+  
+  <!-- VHS Tape aesthetic elements -->
+  <rect x="0" y="0" width="640" height="40" fill="rgba(0,0,0,0.3)" />
+  <rect x="0" y="320" width="640" height="40" fill="rgba(0,0,0,0.3)" />
+  
+  <rect x="40" y="60" width="4" height="240" fill="{accent}" opacity="0.3" />
+  
+  <text x="60" y="32" fill="{accent}" font-size="12" font-family="monospace" letter-spacing="2">MEDIAHUB // PREMIUM TAPE</text>
+  
+  <text x="60" y="160" fill="white" font-size="48" font-family="Impact, sans-serif" style="text-transform:uppercase; letter-spacing: -1px;">{escaped_title[:40]}{'...' if len(escaped_title) > 40 else ''}</text>
+  
+  <text x="60" y="210" fill="{accent}" font-size="18" font-family="monospace" opacity="0.8">HI-FI STEREO / AUTO-INDEX</text>
+  
+  <rect x="540" y="280" width="60" height="20" rx="4" fill="transparent" stroke="{accent}" stroke-width="1" />
+  <text x="550" y="294" fill="{accent}" font-size="10" font-family="monospace">SP 120</text>
 </svg>
 """
     destination.write_text(svg, encoding="utf-8")
@@ -162,38 +189,80 @@ def probe_media(path: Path) -> dict:
     }
 
 
+def resolve_shortcut(lnk_path: Path) -> Path | None:
+    try:
+        command = f"""
+        $sh = New-Object -ComObject WScript.Shell;
+        $target = $sh.CreateShortcut('{lnk_path}').TargetPath;
+        Write-Output $target
+        """
+        completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True)
+        target = completed.stdout.strip()
+        if target and Path(target).exists():
+            return Path(target)
+    except Exception:
+        pass
+    return None
+
+
 async def scan_media_library(session: AsyncSession) -> int:
     logger.info("Starting media library discovery and indexing...")
     indexed = 0
     seen_paths: set[str] = set()
 
-    for path in settings.shared_folder.rglob("*"):
-        if not is_media_file(path):
-            continue
+    def get_all_media_files(root: Path, base_relative: str = "") -> list[tuple[Path, str]]:
+        items = []
+        try:
+            for p in root.iterdir():
+                # Ignore hidden files and folders
+                if p.name.startswith("."):
+                    continue
+                    
+                try:
+                    if p.is_dir():
+                        items.extend(get_all_media_files(p, f"{base_relative}{p.name}/"))
+                    elif p.suffix.lower() == ".lnk":
+                        target = resolve_shortcut(p)
+                        if target:
+                            if target.is_dir():
+                                items.extend(get_all_media_files(target, f"{base_relative}{p.stem}/"))
+                            elif target.is_file() and is_media_file(target):
+                                items.append((target, f"{base_relative}{p.stem}{target.suffix}"))
+                    elif is_media_file(p):
+                        items.append((p, f"{base_relative}{p.name}"))
+                except (PermissionError, OSError) as e:
+                    logger.warning(f"Skipping {p}: {e}")
+                    continue
+        except (PermissionError, OSError) as e:
+            logger.error(f"Could not access directory {root}: {e}")
+        return items
 
-        logger.debug(f"Processing file during scan: {path.name}")
-        relative_path = relative_shared_path(path)
-        seen_paths.add(relative_path)
-        result = await session.execute(select(MediaMetadata).where(MediaMetadata.relative_path == relative_path))
+    for target_path, virtual_rel in get_all_media_files(settings.shared_folder):
+        logger.debug(f"Processing file during scan: {target_path.name}")
+        seen_paths.add(virtual_rel)
+        result = await session.execute(select(MediaMetadata).where(MediaMetadata.relative_path == virtual_rel))
         media = result.scalar_one_or_none()
-        stat = path.stat()
-        title = clean_title(path)
-        thumbnail = build_thumbnail(path, relative_path, title)
-        probe = probe_media(path)
+        stat = target_path.stat()
+        title = clean_title(target_path)
+        thumbnail = build_thumbnail(target_path, virtual_rel, title)
+        probe = probe_media(target_path)
 
         if not media:
-            media = MediaMetadata(relative_path=relative_path, path=str(path.resolve()))
+            media = MediaMetadata(relative_path=virtual_rel, path=str(target_path.resolve()))
             session.add(media)
 
         media.title = title
-        media.category = media_category(path)
+        media.category = virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added"
         media.file_size = stat.st_size
-        media.container = path.suffix.lower().lstrip(".")
+        media.container = target_path.suffix.lower().lstrip(".")
         media.thumbnail_path = thumbnail
-        media.stream_mode = detect_stream_mode(path)
+        media.stream_mode = detect_stream_mode(target_path)
         media.hls_status = "ready" if media.stream_mode == "direct" else "pending"
-        media.requires_pin = is_path_locked(path)
-        media.adult_only = is_path_adult(path)
+        # We manually compute adult/pin for virtual relative paths
+        virtual_parts = {piece for piece in virtual_rel.lower().split("/") if piece}
+        media.requires_pin = bool(virtual_parts & settings.pin_keyword_set)
+        media.adult_only = bool(virtual_parts & settings.adult_keyword_set)
+        
         media.last_scanned_at = datetime.now(UTC)
         media.width = probe.get("width")
         media.height = probe.get("height")
@@ -231,7 +300,7 @@ async def get_media(session: AsyncSession, media_id: int) -> MediaMetadata:
 
 
 def media_source_path(media: MediaMetadata) -> Path:
-    return resolve_shared_path(media.relative_path)
+    return Path(media.path)
 
 
 def build_hls_command(source_path: Path, output_dir: Path) -> list[str]:
@@ -248,31 +317,29 @@ def build_hls_command(source_path: Path, output_dir: Path) -> list[str]:
         pass
 
     video_encoder = "h264_nvenc" if has_nvenc else ("h264_qsv" if has_qsv else "libx264")
-    preset = "p4" if has_nvenc else ("balanced" if has_qsv else "veryfast")
+    preset = "p1" if has_nvenc else ("veryfast" if has_qsv else "ultrafast")
     
-    # ABR Variants: 800k, 1200k, 2000k
-    # For simplicity in this implementation, we'll create a single multi-bitrate stream 
-    # or just use a robust single stream with ABR-friendly settings if complex master playlists are too much for now.
-    # Actually, the requirement asks for variants.
-    
+    # To eliminate stuttering and reduce latency on the fly, we encode a single native-resolution 
+    # stream with a high bitrate cap, rather than killing the CPU with 3 simultaneous scaling operations.
     return [
         settings.ffmpeg_path,
         "-y",
         "-i", str(source_path),
-        "-filter_complex", "[0:v]split=3[v1][v2][v3]; [v1]scale=w=640:h=360:force_original_aspect_ratio=decrease[v1out]; [v2]scale=w=1280:h=720:force_original_aspect_ratio=decrease[v2out]; [v3]scale=w=1920:h=1080:force_original_aspect_ratio=decrease[v3out]",
-        "-map", "[v1out]", "-c:v:0", video_encoder, "-b:v:0", "800k", "-maxrate:v:0", "850k", "-bufsize:v:0", "1200k",
-        "-map", "[v2out]", "-c:v:1", video_encoder, "-b:v:1", "1200k", "-maxrate:v:1", "1300k", "-bufsize:v:1", "2000k",
-        "-map", "[v3out]", "-c:v:2", video_encoder, "-b:v:2", "2000k", "-maxrate:v:2", "2200k", "-bufsize:v:2", "3000k",
-        "-map", "0:a", "-c:a", "aac", "-b:a", "128k",
+        "-c:v", video_encoder,
+        "-preset", preset,
+        "-tune", "zerolatency",
+        "-b:v", "5000k",
+        "-maxrate", "5000k",
+        "-bufsize", "10000k",
+        "-c:a", "aac", 
+        "-b:a", "192k",
         "-f", "hls",
-        "-hls_time", "2",
+        "-hls_time", "3",
         "-hls_playlist_type", "vod",
         "-hls_flags", "independent_segments",
         "-hls_segment_type", "fmp4",
-        "-master_pl_name", "master.m3u8",
-        "-var_stream_map", "v:0,a:0 v:1,a:0 v:2,a:0",
-        "-hls_segment_filename", str(output_dir / "stream_%v/data%03d.m4s"),
-        str(output_dir / "stream_%v.m3u8"),
+        "-hls_segment_filename", str(output_dir / "data%03d.m4s"),
+        str(output_dir / "master.m3u8"),
     ]
 
 
@@ -395,3 +462,29 @@ async def start_pre_transcoding(session: AsyncSession, folder_relative_path: str
         except Exception:
             continue
     return count
+
+
+async def watch_media_library():
+    import asyncio
+    try:
+        from watchfiles import awatch
+        from core.database import AsyncSessionLocal
+        from core.events import broadcast_library_updated
+        
+        logger.info(f"Watching {settings.shared_folder} for changes...")
+        async for changes in awatch(settings.shared_folder):
+            # Filter out changes to hidden files
+            valid_changes = [c for c in changes if not Path(c[1]).name.startswith(".")]
+            if not valid_changes:
+                continue
+                
+            logger.info(f"Detected {len(valid_changes)} valid changes. Triggering rescan...")
+            # Wait a bit for file operations to settle
+            await asyncio.sleep(2)
+            async with AsyncSessionLocal() as session:
+                total = await scan_media_library(session)
+                await broadcast_library_updated(total)
+    except ImportError:
+        logger.warning("watchfiles not installed. Auto-rescan disabled.")
+    except Exception as e:
+        logger.error(f"Media watcher failed: {e}")

@@ -80,28 +80,32 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         _load_env_file(BASE_DIR / ".env")
+        
+        # Consolidate stateful data into a single directory for easy volume mapping
+        data_dir = _env_path("DATA_DIR", BASE_DIR / "data")
+        
         return cls(
             app_name=os.getenv("APP_NAME", "MediaHub"),
-            secret_key=os.getenv("SECRET_KEY", "change-me-in-env"),
+            secret_key=os.getenv("SECRET_KEY", "insecure-default-key-change-me"),
             algorithm=os.getenv("ALGORITHM", "HS256"),
             access_token_expire_minutes=_env_int("ACCESS_TOKEN_EXPIRE_MINUTES", 720),
-            database_url=os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{(BASE_DIR / 'mediahub.db').as_posix()}"),
+            database_url=os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{(data_dir / 'mediahub.db').as_posix()}"),
             shared_folder=_env_path("SHARED_FOLDER", BASE_DIR / "shared_media"),
-            thumbs_folder=_env_path("THUMBS_FOLDER", BASE_DIR / "thumbs"),
-            logs_folder=_env_path("LOGS_FOLDER", BASE_DIR / "logs"),
-            temp_folder=_env_path("TEMP_FOLDER", BASE_DIR / "temp"),
-            hls_folder=_env_path("HLS_FOLDER", BASE_DIR / "temp" / "hls"),
+            thumbs_folder=_env_path("THUMBS_FOLDER", data_dir / "thumbs"),
+            logs_folder=_env_path("LOGS_FOLDER", data_dir / "logs"),
+            temp_folder=_env_path("TEMP_FOLDER", data_dir / "temp"),
+            hls_folder=_env_path("HLS_FOLDER", data_dir / "temp" / "hls"),
             allow_signup=_env_bool("ALLOW_SIGNUP", False),
             default_admin_username=os.getenv("DEFAULT_ADMIN_USERNAME", "admin"),
             default_admin_password=os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123"),
-            admin_pin=os.getenv("ADMIN_PIN", "1984"),
+            admin_pin=os.getenv("ADMIN_PIN", "0000"),
             maintenance_mode=_env_bool("MAINTENANCE_MODE", False),
             adult_keywords=os.getenv("ADULT_KEYWORDS", "18+,adult,xxx,nsfw"),
             pin_keywords=os.getenv("PIN_KEYWORDS", "locked,pin,private"),
             stale_hls_days=_env_int("STALE_HLS_DAYS", 7),
             redis_url=os.getenv("REDIS_URL", ""),
             host=os.getenv("HOST", "0.0.0.0"),
-            port=_env_int("PORT", 8000),
+            port=_env_int("PORT", 51733),
             ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
             ffprobe_path=os.getenv("FFPROBE_PATH", "ffprobe"),
             cors_origins=_env_list("CORS_ORIGINS", ["*"]),

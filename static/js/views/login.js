@@ -18,7 +18,7 @@ export class LoginView {
                     <form id="login-form">
                         <div class="form-group">
                             <label for="login-user">Username</label>
-                            <input id="login-user" class="input" type="text" placeholder="Username" autocomplete="username" autofocus required>
+                            <input id="login-user" class="input" type="text" placeholder="Username" autocomplete="username" required>
                         </div>
                         <div class="form-group">
                             <label for="login-pass">Password</label>
@@ -36,6 +36,12 @@ export class LoginView {
 
         document.getElementById('login-form').addEventListener('submit', (e) => this._handleLogin(e));
         document.getElementById('guest-login').addEventListener('click', () => this._guestLogin());
+        
+        // Manual focus to avoid "Autofocus processing was blocked" warnings in SPAs
+        setTimeout(() => {
+            const userInput = document.getElementById('login-user');
+            if (userInput) userInput.focus();
+        }, 50);
     }
 
     async _handleLogin(e) {

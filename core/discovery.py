@@ -5,7 +5,7 @@ from core.logging import get_logger
 logger = get_logger("discovery")
 
 class DiscoveryService:
-    def __init__(self, port: int = 8000):
+    def __init__(self, port: int = 51733):
         self.port = port
         self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
         self.service_info = None
@@ -13,16 +13,31 @@ class DiscoveryService:
     def start(self):
         try:
             hostname = socket.gethostname()
-            local_ip = socket.gethostbyname(hostname)
-            
-            # If gethostbyname returns loopback, try to find a real LAN IP
-            if local_ip.startswith("127."):
+            # Robust IP detection that works without internet
+            def get_local_ip():
+                try:
+                    # Method 1: Try finding a real interface IP
+                    import psutil
+                    for interface, addrs in psutil.net_if_addrs().items():
+                        for addr in addrs:
+                            if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                                return addr.address
+                except ImportError:
+                    pass
+                
+                # Method 2: Fallback to UDP trick but with a local destination (DNS default gateway)
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
-                    s.connect(("8.8.8.8", 80))
-                    local_ip = s.getsockname()[0]
+                    # Doesn't actually send data, just finds the interface used to reach a LAN address
+                    s.connect(("192.168.1.254", 80))
+                    return s.getsockname()[0]
+                except Exception:
+                    # Method 3: Final fallback to hostname
+                    return socket.gethostbyname(socket.gethostname())
                 finally:
                     s.close()
+
+            local_ip = get_local_ip()
 
             desc = {'version': '0.1.0', 'path': '/'}
             

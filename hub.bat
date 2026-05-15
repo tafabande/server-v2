@@ -35,8 +35,8 @@ call :activate_venv
 call :sync_deps
 call :detect_ip
 echo [INFO] Launching MediaHub...
-start /b cmd /c "timeout /t 12 /nobreak >nul && start http://%LOCAL_IP%:8000"
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
+start /b cmd /c "timeout /t 12 /nobreak >nul && start http://%LOCAL_IP%:51733"
+uvicorn main:app --host 0.0.0.0 --port 51733 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
 pause
 goto menu
 

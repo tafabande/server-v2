@@ -51,8 +51,8 @@ echo.
 echo ===================================================
 echo   MediaHub is starting!
 echo.
-echo   LOCAL ACCESS: http://localhost:8000
-echo   LAN ACCESS:   http://%LOCAL_IP%:8000
+echo   LOCAL ACCESS: http://localhost:51733
+echo   LAN ACCESS:   http://%LOCAL_IP%:51733
 echo.
 echo   Application Logs: logs\mediahub.log
 echo   Setup Logs:       logs\setup.log
@@ -62,11 +62,11 @@ echo.
 echo [%date% %time%] --- Launching Uvicorn --- >> "%SETUP_LOG%"
 
 :: Launch browser in background after delay (increased to 10s for stability)
-start /b cmd /c "timeout /t 10 /nobreak >nul && start http://%LOCAL_IP%:8000"
+start /b cmd /c "timeout /t 10 /nobreak >nul && start http://%LOCAL_IP%:51733"
 
 :: Start Uvicorn
 :: We exclude folders that are frequently written to (logs, temp, thumbs) to prevent infinite reload loops.
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
+uvicorn main:app --host 0.0.0.0 --port 51733 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
 
 pause
 
