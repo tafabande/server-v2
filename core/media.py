@@ -158,6 +158,7 @@ def probe_media(path: Path) -> dict:
 
 
 async def scan_media_library(session: AsyncSession) -> int:
+    logger.info("Starting media library discovery and indexing...")
     indexed = 0
     seen_paths: set[str] = set()
 

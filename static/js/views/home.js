@@ -6,25 +6,29 @@ import { GalleryManager } from '../gallery-manager.js';
  */
 export const HomeView = {
     html: `
-        <section class="hero-panel" id="hero-panel">
+        <section class="glass-panel hero-panel" id="hero-panel">
           <div class="hero-copy">
-            <p class="hero-tag">Local vault / cinematic UI / realtime sync</p>
-            <h2 id="hero-title">Loading...</h2>
-            <p id="hero-description">
+            <p class="brand-tag">Premium Streaming / Realtime Sync</p>
+            <h2 id="hero-title" class="hero-title">Loading...</h2>
+            <p id="hero-description" class="hero-description">
               Surfacing your media library...
             </p>
 
             <div id="hero-metadata" class="hero-metadata"></div>
 
             <div class="hero-actions">
-              <button id="hero-play" class="primary-button" disabled>Play Feature</button>
-              <button id="hero-open-folder" class="ghost-button">View Details</button>
+              <button id="hero-play" class="btn btn-primary" disabled>
+                <span class="nav-icon">play_arrow</span> Play Feature
+              </button>
+              <button id="hero-open-folder" class="btn btn-secondary">
+                <span class="nav-icon">info</span> View Details
+              </button>
             </div>
           </div>
 
           <div class="hero-art">
             <div class="hero-frame">
-              <img id="hero-thumb" src="/static/placeholder.svg" alt="Featured artwork" />
+              <img id="hero-thumb" class="media-thumb" src="/static/placeholder.svg" alt="Featured artwork" />
               <div class="hero-overlay">
                 <span id="hero-badge" class="hero-badge">Offline</span>
               </div>
@@ -70,6 +74,13 @@ export const HomeView = {
         }
 
         // Listen for library updates
+        window.addEventListener('streamdrop-socket-message', (e) => {
+            if (e.detail.type === 'library-updated') {
+                api.getLibrary().then(groups => gallery.setLibrary(groups));
+            }
+        });
+
+        // Backward compatibility for legacy events
         window.addEventListener('mediahub-socket-message', (e) => {
             if (e.detail.type === 'library-updated') {
                 api.getLibrary().then(groups => gallery.setLibrary(groups));

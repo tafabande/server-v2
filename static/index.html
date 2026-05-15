@@ -3,31 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MediaHub</title>
+    <title>StreamDrop</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" />
+    
     <link rel="icon" type="image/svg+xml" href="/static/placeholder.svg">
     <link rel="stylesheet" href="/static/css/styles.css" />
   </head>
   <body>
-    <div class="ambient-backdrop" aria-hidden="true">
-      <div class="aurora aurora-one"></div>
-      <div class="aurora aurora-two"></div>
-      <div class="aurora aurora-three"></div>
-    </div>
-    <div class="screen-noise" aria-hidden="true"></div>
-    <div class="scanlines" aria-hidden="true"></div>
-
     <div id="boot-loader" class="boot-loader">
       <div class="loader-content">
         <div class="spinner"></div>
-        <p>Initializing MediaHub...</p>
+        <p>Launching StreamDrop...</p>
       </div>
     </div>
 
     <div class="app-shell">
       <aside class="sidebar" hidden>
         <div class="sidebar-brand">
-          <h1 class="brand-text">MediaHub</h1>
-          <p class="brand-tag">LAN VAULT</p>
+          <h1 class="brand-text">StreamDrop</h1>
+          <p class="brand-tag">Premium Media Hub</p>
         </div>
         
         <nav class="sidebar-nav">
@@ -55,7 +53,7 @@
         </nav>
 
         <div class="sidebar-footer">
-          <button id="logout-button" class="logout-btn">
+          <button id="logout-button" class="btn btn-secondary">
             <span class="nav-icon">logout</span>
             <span class="nav-label">End Session</span>
           </button>
@@ -67,26 +65,26 @@
       </main>
     </div>
 
-    <dialog id="player-modal" class="player-modal">
+    <dialog id="player-modal" class="player-modal glass-panel">
       <div class="player-header">
         <div>
-          <p class="eyebrow">Now Playing</p>
-          <h3 id="player-title">MediaHub</h3>
+          <p class="brand-tag">Now Playing</p>
+          <h3 id="player-title">StreamDrop</h3>
         </div>
-        <button id="player-close" class="ghost-button">Close</button>
+        <button id="player-close" class="btn btn-secondary">Close</button>
       </div>
       <video id="player-video" controls playsinline></video>
-      <p id="player-status" class="section-note player-status"></p>
+      <p id="player-status" class="player-status"></p>
     </dialog>
 
     <dialog id="confirm-dialog" class="action-dialog">
-      <form method="dialog" class="dialog-card">
-        <p class="eyebrow">Confirm Action</p>
+      <form method="dialog" class="glass-panel dialog-card">
+        <p class="brand-tag">Confirm Action</p>
         <h3 id="confirm-title">Confirm</h3>
-        <p id="confirm-message" class="section-note"></p>
+        <p id="confirm-message"></p>
         <div class="dialog-actions">
-          <button type="submit" value="cancel" class="ghost-button">Cancel</button>
-          <button id="confirm-accept" type="submit" value="confirm" class="primary-button danger-button">
+          <button type="submit" value="cancel" class="btn btn-secondary">Cancel</button>
+          <button id="confirm-accept" type="submit" value="confirm" class="btn btn-primary">
             Confirm
           </button>
         </div>
@@ -94,23 +92,21 @@
     </dialog>
 
     <dialog id="prompt-dialog" class="action-dialog">
-      <form id="prompt-form" class="dialog-card">
-        <p class="eyebrow">Rename Item</p>
+      <form id="prompt-form" class="glass-panel dialog-card">
+        <p class="brand-tag">Rename Item</p>
         <h3 id="prompt-title">Rename entry</h3>
-        <p id="prompt-message" class="section-note"></p>
-        <label class="input-stack">
-          <span id="prompt-label">New name</span>
-          <input id="prompt-input" type="text" maxlength="255" required />
-        </label>
+        <p id="prompt-message"></p>
+        <div class="search-field">
+          <input id="prompt-input" type="text" maxlength="255" required placeholder="Enter new name" />
+        </div>
         <div class="dialog-actions">
-          <button type="button" id="prompt-cancel" class="ghost-button">Cancel</button>
-          <button type="submit" class="primary-button">Save</button>
+          <button type="button" id="prompt-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
     </dialog>
 
     <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
-
 
     <!-- Offline dependencies -->
     <script src="/static/js/hls.js"></script>

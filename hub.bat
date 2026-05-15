@@ -2,13 +2,13 @@
 setlocal enabledelayedexpansion
 
 :: ===================================================
-::  MediaHub Master Controller
+::  StreamDrop Master Controller
 :: ===================================================
 
 :menu
 cls
 echo ===================================================
-echo   MediaHub - PRO LAN MEDIA VAULT
+echo   StreamDrop - PREMIUM LAN MEDIA HUB
 echo ===================================================
 echo.
 echo   1. Start Server         (Standard boot)
@@ -34,7 +34,7 @@ call :check_env
 call :activate_venv
 call :sync_deps
 call :detect_ip
-echo [INFO] Launching MediaHub...
+echo [INFO] Launching StreamDrop...
 start /b cmd /c "timeout /t 12 /nobreak >nul && start http://%LOCAL_IP%:8000"
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
 pause
@@ -51,7 +51,8 @@ echo [1/3] Killing existing processes...
 taskkill /F /IM python.exe /T 2>nul
 timeout /t 2 /nobreak >nul
 
-echo [2/3] Deleting mediahub.db...
+echo [2/3] Deleting streamdrop.db...
+if exist streamdrop.db del /f /q streamdrop.db
 if exist mediahub.db del /f /q mediahub.db
 
 echo [3/3] Clearing cache...

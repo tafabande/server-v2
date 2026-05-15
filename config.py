@@ -81,11 +81,11 @@ class Settings:
     def from_env(cls) -> "Settings":
         _load_env_file(BASE_DIR / ".env")
         return cls(
-            app_name=os.getenv("APP_NAME", "MediaHub"),
+            app_name=os.getenv("APP_NAME", "StreamDrop"),
             secret_key=os.getenv("SECRET_KEY", "change-me-in-env"),
             algorithm=os.getenv("ALGORITHM", "HS256"),
             access_token_expire_minutes=_env_int("ACCESS_TOKEN_EXPIRE_MINUTES", 720),
-            database_url=os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{(BASE_DIR / 'mediahub.db').as_posix()}"),
+            database_url=os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{(BASE_DIR / 'streamdrop.db').as_posix()}"),
             shared_folder=_env_path("SHARED_FOLDER", BASE_DIR / "shared_media"),
             thumbs_folder=_env_path("THUMBS_FOLDER", BASE_DIR / "thumbs"),
             logs_folder=_env_path("LOGS_FOLDER", BASE_DIR / "logs"),

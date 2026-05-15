@@ -44,7 +44,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    description="LAN-first retro media server inspired by streaming UIs.",
+    description="Premium LAN-first media server with a glassmorphic UI.",
     version="0.1.0",
     lifespan=lifespan,
 )

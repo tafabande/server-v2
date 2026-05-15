@@ -1,5 +1,5 @@
 /**
- * MediaHub Production Entry Point
+ * StreamDrop Production Entry Point
  */
 import { ApiClient } from './api.js';
 import { SocketClient } from './socket-client.js';
@@ -18,16 +18,22 @@ class App {
         this.api = new ApiClient();
         this.socket = null;
         this.player = null;
-        this.user = JSON.parse(localStorage.getItem('mediahub_user') || 'null');
-        this.token = localStorage.getItem('mediahub_token');
+        this.user = JSON.parse(localStorage.getItem('streamdrop_user') || 'null');
+        this.token = localStorage.getItem('streamdrop_token');
 
         if (this.token) {
             this.api.setToken(this.token);
         }
 
         // Global Auth Guard: Catch 401s from the API and force logout
-        window.addEventListener('mediahub-unauthorized', () => {
+        window.addEventListener('streamdrop-unauthorized', () => {
             console.warn('Session expired or user not found. Redirecting to login...');
+            this.logout();
+        });
+
+        // Backend might still use the old event name if not updated, but we should align frontend first
+        window.addEventListener('mediahub-unauthorized', () => {
+            console.warn('Session expired (legacy event). Redirecting to login...');
             this.logout();
         });
 
@@ -115,7 +121,7 @@ class App {
         this.socket = new SocketClient({
             onMessage: (msg) => {
                 // Broadcast to views
-                window.dispatchEvent(new CustomEvent('mediahub-socket-message', { detail: msg }));
+                window.dispatchEvent(new CustomEvent('streamdrop-socket-message', { detail: msg }));
             },
             onStateChange: (state) => {
                 console.log('Socket state:', state);
@@ -125,6 +131,9 @@ class App {
     }
 
     logout() {
+        localStorage.removeItem('streamdrop_token');
+        localStorage.removeItem('streamdrop_user');
+        // Clear legacy keys too
         localStorage.removeItem('mediahub_token');
         localStorage.removeItem('mediahub_user');
         window.location.href = '/login';

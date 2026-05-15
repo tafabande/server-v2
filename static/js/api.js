@@ -42,7 +42,7 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        window.dispatchEvent(new CustomEvent("mediahub-unauthorized"));
+        window.dispatchEvent(new CustomEvent("streamdrop-unauthorized"));
       }
       let detail = "Request failed.";
       try {
