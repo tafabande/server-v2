@@ -64,11 +64,27 @@ async def bootstrap_application() -> None:
                     password_hash=hash_password(settings.default_admin_password),
                     role="admin",
                     pin=settings.admin_pin,
-                    preferences={"theme": "retro-classic"},
+                    preferences={"theme": "default"},
                 )
             )
             await session.commit()
             logger.info("Admin account provisioned.")
+
+        # 3b. Ensure default guest user
+        result = await session.execute(select(User).where(User.username == "guest"))
+        guest = result.scalar_one_or_none()
+        if not guest:
+            logger.info("Creating default guest account.")
+            session.add(
+                User(
+                    username="guest",
+                    password_hash=hash_password("guest"),
+                    role="guest",
+                    preferences={"theme": "default"},
+                )
+            )
+            await session.commit()
+            logger.info("Guest account provisioned.")
 
         # 4. Trigger the scan in the background with its own session lifecycle
         async def run_background_scan():

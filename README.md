@@ -1,11 +1,12 @@
-# StreamDrop
+# MediaHub
 
-StreamDrop is a premium LAN-first media server scaffold. It features a high-fidelity **Luminescent Glass** UI, FastAPI backend, and FFmpeg-driven HLS streaming.
+MediaHub is a premium, minimalist LAN-first media server. It features a high-fidelity **Minimalist Design System** UI (with a special VHS/Synthwave video player), FastAPI backend, and FFmpeg-driven HLS streaming.
 
 ## What is included
 
-- **Luminescent UI**: Glassmorphic dashboard with dynamic gradients and neon accents.
-- **FastAPI Backend**: Routers for auth, media, files, and system endpoints.
+- **Minimalist UI**: Clean, data-dense interface with a stark dark theme and indigo accents.
+- **VHS Player**: An immersive VHS/Synthwave themed media player with mechanical buttons and scanlines.
+- **FastAPI Backend**: Routers for auth, media, files, playlists, users, and system endpoints.
 - **Async Logic**: SQLAlchemy models and async file operations.
 - **Media Engine**: HLS transcoding and recursive scanning for `shared_media/`.
 - **Security**: JWT auth, path sandboxing, and admin PIN protection.
@@ -15,7 +16,8 @@ StreamDrop is a premium LAN-first media server scaffold. It features a high-fide
 - `main.py`: App entrypoint and static routing.
 - `config.py`: Environment configuration.
 - `core/`: Database, models, and streaming engine.
-- `static/`: The "Luminescent Glass" frontend (HTML/CSS/JS).
+- `routers/`: API endpoints for auth, media, playlists, system, files, users.
+- `static/`: The Minimalist frontend (HTML/CSS/JS) and VHS player.
 - `hub.bat`: Master controller for server management.
 
 ## Run locally

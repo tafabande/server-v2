@@ -1,112 +1,150 @@
-import { api, player } from '../app.js';
-import { ExplorerManager } from '../explorer-manager.js';
-
 /**
- * Explorer View
+ * MediaHub — Explorer View (File Manager)
  */
-export const ExplorerView = {
-    html: `
-        <div class="explorer-view">
-            <header class="view-header">
+import { api } from '../app.js';
+import { formatBytes, formatDate, toast, confirm } from '../utils.js';
+
+export class ExplorerView {
+    constructor(container) { this.container = container; this._currentPath = ''; }
+
+    async render() {
+        this.container.innerHTML = `
+            <div class="flex-between mb-md">
                 <div>
-                    <h2>File Explorer</h2>
-                    <p id="explorer-path" class="path-label">shared_media/</p>
+                    <h1 class="page-title">Explorer</h1>
+                    <p class="page-subtitle">Browse and manage files</p>
                 </div>
-                <div class="header-actions">
-                    <button id="go-up-button" class="ghost-button">Up One Level</button>
-                    <label class="file-upload primary-button">
-                        <span>Upload Media</span>
-                        <input id="upload-input" type="file" />
+                <div class="flex gap-sm">
+                    <label class="btn btn-accent" style="cursor:pointer">
+                        ↑ Upload
+                        <input id="upload-input" type="file" hidden multiple>
                     </label>
                 </div>
-            </header>
-
-            <div class="explorer-toolbar">
-                <div class="search-field">
-                    <input id="explorer-search" type="search" placeholder="Filter current folder..." />
-                </div>
-                <div class="pin-field">
-                    <input id="pin-input" type="password" placeholder="Admin PIN" />
-                </div>
-                <div id="explorer-summary" class="section-note">No folder loaded.</div>
             </div>
-
-            <div id="explorer-root" class="explorer-grid">
-                <div class="section-loader">
-                    <div class="spinner"></div>
-                    <p>Fetching directory listing...</p>
-                </div>
+            <div id="explorer-breadcrumb" class="breadcrumb"></div>
+            <div id="explorer-list" class="surface" style="padding:0">
+                <div class="loading-state"><div class="spinner"></div> Loading...</div>
             </div>
-        </div>
-    `,
-    init: async () => {
-        let currentPath = '';
+        `;
 
-        const explorer = new ExplorerManager({
-            root: document.getElementById('explorer-root'),
-            pathLabel: document.getElementById('explorer-path'),
-            summaryLabel: document.getElementById('explorer-summary'),
-            onOpenDirectory: async (path) => {
-                currentPath = path;
-                await loadDir(path);
-            },
-            onPlayMedia: async (path) => {
-                // Implementation for playing from path (would need mapping path to media ID)
-                console.log('Play media from path:', path);
-            },
-            onRename: async (path) => {
-                const newName = prompt('Enter new name:');
-                if (newName) {
-                    await api.rename(path, newName, document.getElementById('pin-input').value);
-                    await loadDir(currentPath);
-                }
-            },
-            onDelete: async (path) => {
-                if (confirm(`Delete ${path}?`)) {
-                    await api.delete(path, document.getElementById('pin-input').value);
-                    await loadDir(currentPath);
-                }
-            }
-        });
+        document.getElementById('upload-input').addEventListener('change', (e) => this._handleUpload(e));
+        await this._browse('');
+    }
 
-        const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
-        explorer.setPermissions({
-            canRename: ['admin', 'family'].includes(user.role),
-            canDelete: user.role === 'admin'
-        });
+    async _browse(path) {
+        this._currentPath = path;
+        try {
+            const data = await api.browse(path);
+            this._renderBreadcrumb(data.path, data.parent);
+            this._renderFiles(data.items);
+        } catch (err) {
+            document.getElementById('explorer-list').innerHTML =
+                `<div class="empty-state"><p>${err.message}</p></div>`;
+        }
+    }
 
-        const loadDir = async (path = '') => {
-            try {
-                const listing = await api.browse(path, document.getElementById('pin-input').value);
-                explorer.setListing(listing);
-            } catch (e) {
-                console.error('Failed to browse', e);
-                document.getElementById('explorer-root').innerHTML = `<p class="error-text">Failed to browse: ${e.message}</p>`;
-            }
-        };
+    _renderBreadcrumb(path, parent) {
+        const crumbs = document.getElementById('explorer-breadcrumb');
+        const parts = path ? path.split('/') : [];
 
-        // Initial load
-        await loadDir();
+        let html = `<a href="#" class="crumb-link" data-path="">Root</a>`;
+        let accumulated = '';
+        for (const part of parts) {
+            accumulated += (accumulated ? '/' : '') + part;
+            html += ` <span>/</span> <a href="#" class="crumb-link" data-path="${accumulated}">${part}</a>`;
+        }
 
-        // Event listeners
-        document.getElementById('explorer-search').addEventListener('input', (e) => {
-            explorer.setQuery(e.target.value);
-        });
-
-        document.getElementById('go-up-button').addEventListener('click', () => {
-            const parts = currentPath.split('/').filter(Boolean);
-            parts.pop();
-            const parent = parts.join('/');
-            currentPath = parent;
-            loadDir(parent);
-        });
-
-        document.getElementById('upload-input').addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                await api.upload(currentPath, file, document.getElementById('pin-input').value);
-                await loadDir(currentPath);
-            }
+        crumbs.innerHTML = html;
+        crumbs.querySelectorAll('.crumb-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                this._browse(link.dataset.path);
+            });
         });
     }
-};
+
+    _renderFiles(items) {
+        const list = document.getElementById('explorer-list');
+
+        if (!items || items.length === 0) {
+            list.innerHTML = '<div class="empty-state"><p>Empty folder</p></div>';
+            return;
+        }
+
+        list.innerHTML = `<div class="file-list">${items.map(item => `
+            <div class="file-row" data-path="${item.path}" data-is-dir="${item.is_dir}" data-name="${item.name}">
+                <span class="file-icon">${item.is_dir ? '📁' : (item.media ? '🎬' : '📄')}${item.locked ? ' 🔒' : ''}</span>
+                <span class="file-name">${item.name}</span>
+                <span class="file-meta">${item.is_dir ? '—' : formatBytes(item.size)}</span>
+                <span class="file-meta">${formatDate(item.modified_at)}</span>
+                <div class="file-actions">
+                    <button class="btn btn-ghost btn-sm rename-btn" title="Rename">✏️</button>
+                    <button class="btn btn-ghost btn-sm btn-danger delete-btn" title="Delete">🗑</button>
+                </div>
+            </div>
+        `).join('')}</div>`;
+
+        list.querySelectorAll('.file-row').forEach(row => {
+            // Click to browse into dirs
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.file-actions')) return;
+                if (row.dataset.isDir === 'true') {
+                    this._browse(row.dataset.path);
+                }
+            });
+
+            row.querySelector('.rename-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._rename(row.dataset.path, row.dataset.name);
+            });
+
+            row.querySelector('.delete-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._delete(row.dataset.path, row.dataset.name);
+            });
+        });
+    }
+
+    async _handleUpload(e) {
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
+
+        for (const file of files) {
+            try {
+                await api.upload(this._currentPath, file);
+                toast(`Uploaded: ${file.name}`, 'success');
+            } catch (err) {
+                toast(`Upload failed: ${err.message}`, 'error');
+            }
+        }
+
+        e.target.value = '';
+        await this._browse(this._currentPath);
+    }
+
+    async _rename(path, oldName) {
+        const newName = prompt('New name:', oldName);
+        if (!newName || newName === oldName) return;
+        try {
+            await api.rename(path, newName);
+            toast('Renamed successfully', 'success');
+            await this._browse(this._currentPath);
+        } catch (err) {
+            toast(`Rename failed: ${err.message}`, 'error');
+        }
+    }
+
+    async _delete(path, name) {
+        const yes = await confirm('Delete', `Delete "${name}"? This cannot be undone.`);
+        if (!yes) return;
+        try {
+            await api.deleteFile(path);
+            toast('Deleted', 'success');
+            await this._browse(this._currentPath);
+        } catch (err) {
+            toast(`Delete failed: ${err.message}`, 'error');
+        }
+    }
+
+    destroy() {}
+}

@@ -17,10 +17,12 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     preferences: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="user")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
+    playlists: Mapped[list["Playlist"]] = relationship(back_populates="owner")
 
 
 class MediaMetadata(Base):
@@ -93,3 +95,55 @@ class SystemSetting(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+# --- New models per rebuild plan §1.1 ---
+
+class Playlist(Base):
+    __tablename__ = "playlists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    owner: Mapped[User] = relationship(back_populates="playlists")
+    items: Mapped[list["PlaylistItem"]] = relationship(back_populates="playlist", cascade="all, delete-orphan")
+
+
+class PlaylistItem(Base):
+    __tablename__ = "playlist_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id"), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    playlist: Mapped[Playlist] = relationship(back_populates="items")
+    media: Mapped[MediaMetadata] = relationship()
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id"), nullable=False, index=True)
+    can_view: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    can_edit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    user: Mapped[User] = relationship()
+    media: Mapped[MediaMetadata] = relationship()
+
+
+class ServerStatus(Base):
+    __tablename__ = "server_status"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    ip_address: Mapped[str] = mapped_column(String(45), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, default=8000, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="offline", nullable=False)
+    media_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -37,6 +37,10 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Update last_login
+    user.last_login = datetime.now(timezone.utc)
+    await db.commit()
+
     access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
     access_token = create_access_token(
         data={"sub": user.username, "role": user.role},
@@ -47,6 +51,7 @@ async def login_for_access_token(
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
+            "id": user.id,
             "username": user.username,
             "role": user.role,
             "avatar_url": user.avatar_url,
@@ -64,6 +69,7 @@ async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]
         "bio": current_user.bio,
         "avatar_url": current_user.avatar_url,
         "preferences": current_user.preferences,
+        "last_login": current_user.last_login,
         "created_at": current_user.created_at,
     }
 

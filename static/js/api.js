@@ -7,13 +7,9 @@ export class ApiError extends Error {
 }
 
 export class ApiClient {
-  constructor() {
-    this.token = "";
-  }
+  constructor() { this.token = ""; }
 
-  setToken(token) {
-    this.token = token || "";
-  }
+  setToken(token) { this.token = token || ""; }
 
   buildPath(path, query = {}) {
     const url = new URL(path, window.location.origin);
@@ -27,12 +23,8 @@ export class ApiClient {
   async request(path, options = {}) {
     const { headers: rawHeaders, json, query, ...requestOptions } = options;
     const headers = new Headers(rawHeaders || {});
-    if (this.token) {
-      headers.set("Authorization", `Bearer ${this.token}`);
-    }
-    if (json !== undefined) {
-      headers.set("Content-Type", "application/json");
-    }
+    if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    if (json !== undefined) headers.set("Content-Type", "application/json");
 
     const response = await fetch(this.buildPath(path, query), {
       ...requestOptions,
@@ -42,89 +34,83 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        window.dispatchEvent(new CustomEvent("streamdrop-unauthorized"));
+        window.dispatchEvent(new CustomEvent("mediahub-unauthorized"));
       }
       let detail = "Request failed.";
       try {
-        const payload = await response.json();
-        detail = payload.detail || detail;
-      } catch {
-        detail = response.statusText || detail;
-      }
+        const body = await response.json();
+        if (Array.isArray(body.detail)) {
+          detail = body.detail.map(e => `${e.loc[e.loc.length - 1]}: ${e.msg}`).join(', ');
+        } else {
+          detail = body.detail || detail;
+        }
+      } catch {}
       throw new ApiError(detail, response.status);
     }
 
-    if (response.status === 204) {
-      return null;
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    return contentType.includes("application/json") ? response.json() : response.text();
+    if (response.status === 204) return null;
+    const ct = response.headers.get("content-type") || "";
+    return ct.includes("application/json") ? response.json() : response.text();
   }
 
-  async login(username, password) {
+  // === Auth ===
+  login(username, password) {
     return this.request("/api/auth/token", {
       method: "POST",
       body: new URLSearchParams({ username, password }),
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
   }
+  me() { return this.request("/api/auth/me"); }
 
-  async me() {
-    return this.request("/api/auth/me");
-  }
-
-  async getLibrary() {
-    return this.request("/api/media/library");
-  }
-
-  async browse(path = "", pin = "") {
-    return this.request("/api/files", { query: { path, pin } });
-  }
-
+  // === Media ===
+  getLibrary() { return this.request("/api/media/library"); }
   async stream(mediaId, pin = "") {
-    return this.request(`/api/media/${mediaId}/stream`, { query: { pin } });
+    const res = await this.request(`/api/media/${mediaId}/stream`, { query: { pin } });
+    if (res && res.url && this.token) {
+      res.url += (res.url.includes("?") ? "&" : "?") + `token=${encodeURIComponent(this.token)}`;
+    }
+    return res;
   }
+  recordPlayback(mediaId, payload) { return this.request(`/api/media/${mediaId}/events`, { method: "POST", json: payload }); }
+  rescan() { return this.request("/api/media/rescan", { method: "POST" }); }
 
-  async upload(path, file, pin = "") {
-    const formData = new FormData();
-    formData.append("upload_file", file);
+  // === History & Continue ===
+  getHistory() { return this.request("/api/media/history"); }
+  clearHistory() { return this.request("/api/media/history", { method: "DELETE" }); }
+  getContinueWatching() { return this.request("/api/media/continue"); }
 
-    return this.request("/api/files/upload", {
-      method: "POST",
-      query: { path, pin },
-      body: formData,
-    });
+  // === Files ===
+  browse(path = "", pin = "") { return this.request("/api/files", { query: { path, pin } }); }
+  upload(path, file, pin = "") {
+    const fd = new FormData(); fd.append("upload_file", file);
+    return this.request("/api/files/upload", { method: "POST", query: { path, pin }, body: fd });
   }
+  rename(path, newName, pin = "") { return this.request("/api/files/rename", { method: "POST", query: { pin }, json: { path, new_name: newName } }); }
+  deleteFile(path, pin = "") { return this.request("/api/files/delete", { method: "POST", query: { pin }, json: { path } }); }
 
-  async rename(path, newName, pin = "") {
-    return this.request("/api/files/rename", {
-      method: "POST",
-      query: { pin },
-      json: { path, new_name: newName },
-    });
-  }
+  // === Playlists ===
+  getPlaylists() { return this.request("/api/playlists"); }
+  createPlaylist(title, description = "") { return this.request("/api/playlists", { method: "POST", json: { title, description } }); }
+  getPlaylist(id) { return this.request(`/api/playlists/${id}`); }
+  deletePlaylist(id) { return this.request(`/api/playlists/${id}`, { method: "DELETE" }); }
+  addToPlaylist(id, mediaId) { return this.request(`/api/playlists/${id}/items`, { method: "POST", json: { media_id: mediaId } }); }
+  removeFromPlaylist(id, itemId) { return this.request(`/api/playlists/${id}/items/${itemId}`, { method: "DELETE" }); }
 
-  async delete(path, pin = "") {
-    return this.request("/api/files/delete", {
-      method: "POST",
-      query: { pin },
-      json: { path },
-    });
-  }
+  // === Users (admin) ===
+  getUsers() { return this.request("/api/users"); }
+  createUser(data) { return this.request("/api/users", { method: "POST", json: data }); }
+  updateUser(id, data) { return this.request(`/api/users/${id}`, { method: "PUT", json: data }); }
+  deleteUser(id) { return this.request(`/api/users/${id}`, { method: "DELETE" }); }
+  resetUserPassword(id, newPassword) { return this.request(`/api/users/${id}/reset-password`, { method: "POST", json: { new_password: newPassword } }); }
 
-  async recordPlayback(mediaId, payload) {
-    return this.request(`/api/media/${mediaId}/events`, {
-      method: "POST",
-      json: payload,
-    });
-  }
+  // === Profile ===
+  updateProfile(data) { return this.request("/api/users/me/profile", { method: "PUT", json: data }); }
+  changePassword(current, newPw) { return this.request("/api/users/me/password", { method: "PUT", json: { current_password: current, new_password: newPw } }); }
 
-  async rescan() {
-    return this.request("/api/media/rescan", { method: "POST" });
-  }
-
-  async getSettings() {
-    return this.request("/api/system/settings");
-  }
+  // === System ===
+  getMetrics() { return this.request("/api/system/metrics"); }
+  getSessions() { return this.request("/api/system/sessions"); }
+  getSettings() { return this.request("/api/system/settings"); }
+  getAudit() { return this.request("/api/system/audit"); }
 }

@@ -35,6 +35,7 @@ class UserRead(BaseModel):
     avatar_url: str = ""
     bio: str = ""
     language: str = "en"
+    last_login: datetime | None = None
     concurrent_device_limit: int = 2
 
     model_config = ConfigDict(from_attributes=True)
@@ -49,6 +50,9 @@ class MediaRead(BaseModel):
     duration_seconds: float | None = None
     width: int | None = None
     height: int | None = None
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    container: str | None = None
     thumbnail_path: str | None = None
     stream_mode: str
     hls_status: str
@@ -130,7 +134,7 @@ class ProfileUpdateRequest(BaseModel):
     avatar_url: str = Field(default="", max_length=512)
     bio: str = Field(default="", max_length=280)
     language: str = Field(default="en", max_length=20)
-    theme: str = Field(default="retro-classic", max_length=40)
+    theme: str = Field(default="default", max_length=40)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -161,6 +165,63 @@ class UserUpdateRequest(BaseModel):
 
 class AdminPasswordResetRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
+
+
+# --- New schemas per rebuild plan §1.2 ---
+
+class UserManageRead(BaseModel):
+    """Admin-facing user record with full details."""
+    id: int
+    username: str
+    role: str
+    avatar_url: str | None = None
+    bio: str | None = None
+    last_login: datetime | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlaylistCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=1000)
+
+
+class PlaylistRead(BaseModel):
+    id: int
+    title: str
+    description: str | None = None
+    item_count: int = 0
+    owner_username: str = ""
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlaylistDetailRead(BaseModel):
+    id: int
+    title: str
+    description: str | None = None
+    items: list[MediaRead] = []
+    owner_username: str = ""
+    created_at: datetime
+
+
+class PlaylistItemAdd(BaseModel):
+    media_id: int
+
+
+class WatchHistoryItem(BaseModel):
+    media: MediaRead
+    last_position_seconds: float
+    completed: bool
+    updated_at: datetime
+
+
+class ContinueWatchingItem(BaseModel):
+    media: MediaRead
+    last_position_seconds: float
+    updated_at: datetime
 
 
 class ActiveSessionRead(BaseModel):
@@ -212,9 +273,3 @@ class DashboardRead(BaseModel):
     active_sessions: list[ActiveSessionRead]
     recent_audits: list[AuditLogRead]
     transcode_logs: list[TranscodeLogEntry]
-
-
-class ContinueWatchingItem(BaseModel):
-    media: MediaRead
-    last_position_seconds: float
-    updated_at: datetime

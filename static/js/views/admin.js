@@ -1,120 +1,195 @@
-import { api } from '../app.js';
-
 /**
- * Admin View
+ * MediaHub — Admin View
+ * System metrics, user management, transcoding, audit logs.
  */
-export const AdminView = {
-    html: `
-        <div class="admin-dashboard">
-            <header class="view-header">
-                <h2>Administrative Oversight</h2>
-                <p class="section-note">Real-time system health and governance.</p>
-            </header>
+import { api } from '../app.js';
+import { toast, confirm, formatDateTime } from '../utils.js';
 
-            <div class="metrics-grid">
-                <article class="metric-card">
-                    <span class="metric-label">CPU Usage</span>
-                    <strong id="cpu-value" class="metric-value">--%</strong>
-                    <div class="progress-bar"><div id="cpu-bar" class="progress-fill" style="width: 0%"></div></div>
-                </article>
-                <article class="metric-card">
-                    <span class="metric-label">RAM Usage</span>
-                    <strong id="ram-value" class="metric-value">--%</strong>
-                    <div class="progress-bar"><div id="ram-bar" class="progress-fill" style="width: 0%"></div></div>
-                </article>
-                <article class="metric-card">
-                    <span class="metric-label">Storage</span>
-                    <strong id="disk-value" class="metric-value">--%</strong>
-                    <div class="progress-bar"><div id="disk-bar" class="progress-fill" style="width: 0%"></div></div>
-                </article>
+export class AdminView {
+    constructor(container) { this.container = container; }
+
+    async render() {
+        this.container.innerHTML = `
+            <div class="flex-between mb-md">
+                <div>
+                    <h1 class="page-title">Admin</h1>
+                    <p class="page-subtitle">System management</p>
+                </div>
+                <button id="rescan-btn" class="btn btn-accent btn-sm">↻ Rescan Library</button>
             </div>
 
-            <section class="admin-sections">
-                <div class="admin-card">
-                    <h3>Active Sessions ("Now Playing")</h3>
-                    <div id="active-sessions-list" class="session-list">
-                        <p class="empty-note">No active streams detected on the LAN.</p>
-                    </div>
-                </div>
+            <div class="tabs" id="admin-tabs">
+                <button class="tab active" data-tab="metrics">System</button>
+                <button class="tab" data-tab="users">Users</button>
+                <button class="tab" data-tab="audit">Audit Log</button>
+            </div>
 
-                <div class="admin-card">
-                    <h3>Transcoding Pipeline Logs</h3>
-                    <div id="transcode-logs" class="log-viewer">
-                        <code id="log-content">Waiting for transcoding events...</code>
-                    </div>
-                </div>
+            <div id="admin-content"></div>
+        `;
 
-                <div class="admin-card">
-                    <h3>User Management</h3>
-                    <div id="user-management-table" class="user-table">
-                         <p class="section-note">Loading users...</p>
-                    </div>
-                    <button class="primary-button small-button">Add New User</button>
-                </div>
-            </section>
-        </div>
-    `,
-    init: async () => {
-        const updateMetrics = async () => {
-            try {
-                const data = await api.request('/api/system/metrics');
-                
-                document.getElementById('cpu-value').textContent = `${data.cpu}%`;
-                document.getElementById('cpu-bar').style.width = `${data.cpu}%`;
-                
-                const ramPercent = data.memory.percent;
-                document.getElementById('ram-value').textContent = `${ramPercent}%`;
-                document.getElementById('ram-bar').style.width = `${ramPercent}%`;
-                
-                const diskPercent = data.disk.percent;
-                document.getElementById('disk-value').textContent = `${diskPercent}%`;
-                document.getElementById('disk-bar').style.width = `${diskPercent}%`;
-            } catch (e) {
-                console.error('Failed to fetch metrics', e);
-            }
-        };
+        document.getElementById('rescan-btn').addEventListener('click', () => this._rescan());
+        document.getElementById('admin-tabs').addEventListener('click', (e) => {
+            const tab = e.target.closest('.tab');
+            if (!tab) return;
+            document.querySelectorAll('#admin-tabs .tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            this._loadTab(tab.dataset.tab);
+        });
 
-        const updateSessions = async () => {
-            try {
-                const sessions = await api.request('/api/system/sessions');
-                const list = document.getElementById('active-sessions-list');
-                if (sessions.length === 0) {
-                    list.innerHTML = '<p class="empty-note">No active streams detected.</p>';
-                    return;
-                }
-                list.innerHTML = sessions.map(s => `
-                    <div class="session-item">
-                        <strong>${s.username}</strong> is watching <em>${s.title}</em>
-                        <span class="session-meta">${s.stream_mode} / ${Math.floor(s.position_seconds)}s</span>
-                    </div>
-                `).join('');
-            } catch (e) {
-                console.error('Failed to fetch sessions', e);
-            }
-        };
-
-        updateMetrics();
-        updateSessions();
-        const metricsInterval = setInterval(updateMetrics, 5000);
-        const sessionsInterval = setInterval(updateSessions, 5000);
-        
-        const socketHandler = (e) => {
-            const msg = e.detail;
-            if (msg.type === 'transcoding-log') {
-                const logEl = document.getElementById('log-content');
-                if (logEl) {
-                    const line = document.createElement('div');
-                    line.className = 'log-line';
-                    line.textContent = `[Media ${msg.media_id}] ${msg.line}`;
-                    logEl.appendChild(line);
-                    logEl.scrollTop = logEl.scrollHeight;
-                }
-            }
-        };
-
-        window.addEventListener('mediahub-socket-message', socketHandler);
-
-        // Store interval IDs on the view for cleanup if needed (though router doesn't explicitly cleanup yet)
-        window._adminIntervals = [metricsInterval, sessionsInterval];
+        await this._loadTab('metrics');
     }
-};
+
+    async _loadTab(tab) {
+        const content = document.getElementById('admin-content');
+        content.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
+
+        switch (tab) {
+            case 'metrics': return this._loadMetrics(content);
+            case 'users': return this._loadUsers(content);
+            case 'audit': return this._loadAudit(content);
+        }
+    }
+
+    async _loadMetrics(target) {
+        try {
+            const metrics = await api.getMetrics();
+            target.innerHTML = `
+                <div class="metrics-grid">
+                    ${this._metricCard('CPU', `${metrics.cpu_percent.toFixed(1)}%`, metrics.cpu_percent)}
+                    ${this._metricCard('Memory', `${metrics.memory_used_gb.toFixed(1)} / ${metrics.memory_total_gb.toFixed(1)} GB`, metrics.memory_percent)}
+                    ${this._metricCard('Disk', `${metrics.disk_used_gb.toFixed(1)} / ${metrics.disk_total_gb.toFixed(1)} GB`, metrics.disk_percent)}
+                    ${this._metricCard('FFmpeg', metrics.ffmpeg_available ? 'Available' : 'Missing', metrics.ffmpeg_available ? 0 : 100)}
+                </div>
+            `;
+        } catch (err) {
+            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+        }
+    }
+
+    _metricCard(label, value, pct) {
+        const color = pct > 80 ? 'error' : pct > 60 ? 'warning' : '';
+        return `
+            <div class="surface metric-card">
+                <span class="label">${label}</span>
+                <div class="metric-value">${value}</div>
+                <div class="progress mt-sm"><div class="progress-fill ${color}" style="width:${Math.min(pct, 100)}%"></div></div>
+            </div>
+        `;
+    }
+
+    async _loadUsers(target) {
+        try {
+            const users = await api.getUsers();
+            target.innerHTML = `
+                <div class="surface mb-md">
+                    <div class="section-title">Add User</div>
+                    <form id="add-user-form" class="form-row" style="align-items:end">
+                        <div class="form-group" style="margin:0"><label>Username</label><input id="au-name" class="input" required minlength="3"></div>
+                        <div class="form-group" style="margin:0"><label>Password</label><input id="au-pass" class="input" type="password" required minlength="8"></div>
+                        <div class="form-group" style="margin:0">
+                            <label>Role</label>
+                            <select id="au-role" class="select"><option>family</option><option>admin</option><option>guest</option></select>
+                        </div>
+                        <button type="submit" class="btn btn-accent">Add</button>
+                    </form>
+                </div>
+
+                <div class="surface" style="padding:0; overflow:hidden">
+                    <table class="table">
+                        <thead><tr><th>Username</th><th>Role</th><th>Last Login</th><th>Created</th><th>Actions</th></tr></thead>
+                        <tbody>${users.map(u => `
+                            <tr>
+                                <td><strong>${u.username}</strong></td>
+                                <td><span class="badge ${u.role === 'admin' ? 'badge-accent' : u.role === 'guest' ? 'badge-muted' : 'badge-success'}">${u.role}</span></td>
+                                <td class="text-muted">${formatDateTime(u.last_login)}</td>
+                                <td class="text-muted">${formatDateTime(u.created_at)}</td>
+                                <td>
+                                    <div class="flex gap-sm">
+                                        <button class="btn btn-ghost btn-sm reset-pw-btn" data-id="${u.id}" data-name="${u.username}">Reset PW</button>
+                                        <button class="btn btn-ghost btn-sm btn-danger del-user-btn" data-id="${u.id}" data-name="${u.username}">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}</tbody>
+                    </table>
+                </div>
+            `;
+
+            document.getElementById('add-user-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                try {
+                    await api.createUser({
+                        username: document.getElementById('au-name').value,
+                        password: document.getElementById('au-pass').value,
+                        role: document.getElementById('au-role').value,
+                    });
+                    toast('User created', 'success');
+                    this._loadUsers(target);
+                } catch (err) { toast(err.message, 'error'); }
+            });
+
+            target.querySelectorAll('.reset-pw-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const pw = prompt(`New password for ${btn.dataset.name}:`);
+                    if (!pw || pw.length < 8) { toast('Password must be 8+ characters', 'error'); return; }
+                    try {
+                        await api.resetUserPassword(parseInt(btn.dataset.id), pw);
+                        toast('Password reset', 'success');
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+
+            target.querySelectorAll('.del-user-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const yes = await confirm('Delete User', `Delete "${btn.dataset.name}"?`);
+                    if (!yes) return;
+                    try {
+                        await api.deleteUser(parseInt(btn.dataset.id));
+                        toast('User deleted', 'success');
+                        this._loadUsers(target);
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+        } catch (err) {
+            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+        }
+    }
+
+    async _loadAudit(target) {
+        try {
+            const logs = await api.getAudit();
+            if (!logs || logs.length === 0) {
+                target.innerHTML = '<div class="empty-state"><p>No audit events</p></div>';
+                return;
+            }
+
+            target.innerHTML = `
+                <div class="surface" style="padding:0; overflow:hidden">
+                    <table class="table">
+                        <thead><tr><th>Action</th><th>Target</th><th>Time</th></tr></thead>
+                        <tbody>${logs.map(log => `
+                            <tr>
+                                <td><span class="badge badge-muted">${log.action}</span></td>
+                                <td class="text-muted">${log.target_path || '—'}</td>
+                                <td class="text-muted">${formatDateTime(log.created_at)}</td>
+                            </tr>
+                        `).join('')}</tbody>
+                    </table>
+                </div>
+            `;
+        } catch (err) {
+            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+        }
+    }
+
+    async _rescan() {
+        try {
+            const result = await api.rescan();
+            toast(result.message, 'success');
+        } catch (err) {
+            toast(err.message, 'error');
+        }
+    }
+
+    destroy() {}
+}

@@ -12,7 +12,7 @@ from core.bootstrap import bootstrap_application
 from core.database import init_db
 from core.exceptions import MediaHubError
 from core.logging import setup_logging, get_logger
-from routers import auth, files, media, system
+from routers import auth, files, media, playlists, system, users
 
 
 # Initialize logging before settings are even fetched to ensure startup is logged
@@ -44,8 +44,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    description="Premium LAN-first media server with a glassmorphic UI.",
-    version="0.1.0",
+    description="Minimalist LAN media server.",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
@@ -87,6 +87,8 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(media.router, prefix="/api/media", tags=["media"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/thumbs", StaticFiles(directory="thumbs"), name="thumbs")

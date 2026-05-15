@@ -99,6 +99,8 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str) -> str:
         if local_art.exists():
             shutil.copy2(local_art, jpg_destination)
             return f"/thumbs/{jpg_destination.name}"
+            
+    if ffmpeg_available():
         command = [
             settings.ffmpeg_path,
             "-y",
@@ -110,11 +112,14 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str) -> str:
             "1",
             str(jpg_destination),
         ]
-        completed = subprocess.run(command, capture_output=True, text=True)
-        if completed.returncode == 0 and jpg_destination.exists():
-            logger.info(f"Generated thumbnail for {relative_path}")
-            return f"/thumbs/{jpg_destination.name}"
-        logger.error(f"Failed to generate thumbnail for {relative_path}: {completed.stderr}")
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True)
+            if completed.returncode == 0 and jpg_destination.exists():
+                logger.info(f"Generated thumbnail for {relative_path}")
+                return f"/thumbs/{jpg_destination.name}"
+            logger.error(f"Failed to generate thumbnail for {relative_path}: {completed.stderr}")
+        except FileNotFoundError:
+            logger.error("FFmpeg executable not found during thumbnail generation.")
 
     write_placeholder_thumbnail(destination, title)
     return f"/thumbs/{destination.name}"

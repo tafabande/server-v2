@@ -3,112 +3,207 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>StreamDrop</title>
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" />
-    
+    <title>MediaHub</title>
+    <meta name="description" content="Minimalist LAN media server" />
     <link rel="icon" type="image/svg+xml" href="/static/placeholder.svg">
     <link rel="stylesheet" href="/static/css/styles.css" />
+    <link rel="stylesheet" href="/static/css/player.css" />
   </head>
   <body>
     <div id="boot-loader" class="boot-loader">
-      <div class="loader-content">
-        <div class="spinner"></div>
-        <p>Launching StreamDrop...</p>
-      </div>
+      <div class="spinner"></div>
+      <span>Loading MediaHub...</span>
     </div>
 
-    <div class="app-shell">
-      <aside class="sidebar" hidden>
+    <div class="app" id="app-root">
+      <!-- Mobile Top Bar -->
+      <header class="topbar-mobile">
+        <h1>MediaHub</h1>
+        <span id="topbar-user" class="text-muted text-sm"></span>
+      </header>
+
+      <!-- Sidebar -->
+      <nav class="sidebar" id="sidebar" hidden>
         <div class="sidebar-brand">
-          <h1 class="brand-text">StreamDrop</h1>
-          <p class="brand-tag">Premium Media Hub</p>
+          <h1>MediaHub</h1>
+          <small>LAN Media Server</small>
         </div>
-        
-        <nav class="sidebar-nav">
+
+        <div class="sidebar-nav">
           <a href="/" class="nav-link" data-link>
-            <span class="nav-icon">home</span>
+            <span class="nav-icon">⌂</span>
             <span class="nav-label">Home</span>
           </a>
           <a href="/library" class="nav-link" data-link>
-            <span class="nav-icon">grid_view</span>
+            <span class="nav-icon">▦</span>
             <span class="nav-label">Library</span>
           </a>
           <a href="/explorer" class="nav-link" data-link>
-            <span class="nav-icon">folder_open</span>
+            <span class="nav-icon">📁</span>
             <span class="nav-label">Explorer</span>
           </a>
+          <a href="/playlists" class="nav-link" data-link>
+            <span class="nav-icon">☰</span>
+            <span class="nav-label">Playlists</span>
+          </a>
+          <a href="/history" class="nav-link" data-link>
+            <span class="nav-icon">⏱</span>
+            <span class="nav-label">History</span>
+          </a>
+
           <hr class="nav-divider">
+
           <a href="/admin" class="nav-link admin-only" data-link hidden>
-            <span class="nav-icon">dashboard</span>
+            <span class="nav-icon">⚙</span>
             <span class="nav-label">Admin</span>
           </a>
           <a href="/profile" class="nav-link" data-link>
-            <span class="nav-icon">person</span>
+            <span class="nav-icon">◉</span>
             <span class="nav-label">Profile</span>
           </a>
-        </nav>
+        </div>
 
         <div class="sidebar-footer">
-          <button id="logout-button" class="btn btn-secondary">
-            <span class="nav-icon">logout</span>
-            <span class="nav-label">End Session</span>
+          <button id="logout-btn" class="nav-link" style="color: var(--error);">
+            <span class="nav-icon">⏻</span>
+            <span class="nav-label">Logout</span>
           </button>
         </div>
-      </aside>
+      </nav>
 
-      <main class="main-content" id="app-shell-content">
-        <!-- Views injected here -->
+      <!-- Main Content -->
+      <main class="main" id="main-area">
+        <div class="content" id="view-target">
+          <!-- Views injected here -->
+        </div>
       </main>
     </div>
 
-    <dialog id="player-modal" class="player-modal glass-panel">
-      <div class="player-header">
-        <div>
-          <p class="brand-tag">Now Playing</p>
-          <h3 id="player-title">StreamDrop</h3>
-        </div>
-        <button id="player-close" class="btn btn-secondary">Close</button>
+    <!-- VHS Video Player Modal -->
+    <dialog id="player-modal" class="player-modal">
+      <div class="player-screen">
+        <video id="player-video" playsinline></video>
+        <div class="player-scanlines"></div>
+
+        <!-- Tape Info Sidebar -->
+        <aside class="player-info">
+          <div>
+            <span class="tape-label">Now Playing</span>
+            <p id="tape-title" class="tape-title">—</p>
+          </div>
+          <div>
+            <span class="tape-label">Format</span>
+            <p id="tape-format" class="tape-value">—</p>
+          </div>
+          <div>
+            <span class="tape-label">Resolution</span>
+            <p id="tape-resolution" class="tape-value">—</p>
+          </div>
+          <div>
+            <span class="tape-label">Duration</span>
+            <p id="tape-duration" class="tape-value">00:00:00</p>
+          </div>
+          <div>
+            <span class="tape-label">Position</span>
+            <p id="tape-position" class="tape-value">00:00:00</p>
+          </div>
+          <div>
+            <span class="tape-label">Quality</span>
+            <span id="tape-quality" class="quality-badge">—</span>
+          </div>
+          <div style="margin-top: auto;">
+            <span class="tape-label">Volume</span>
+            <div id="volume-bar" class="volume-bar">
+              <div class="volume-seg" data-seg="8"></div>
+              <div class="volume-seg" data-seg="7"></div>
+              <div class="volume-seg" data-seg="6"></div>
+              <div class="volume-seg" data-seg="5"></div>
+              <div class="volume-seg" data-seg="4"></div>
+              <div class="volume-seg" data-seg="3"></div>
+              <div class="volume-seg" data-seg="2"></div>
+              <div class="volume-seg" data-seg="1"></div>
+            </div>
+          </div>
+        </aside>
       </div>
-      <video id="player-video" controls playsinline></video>
-      <p id="player-status" class="player-status"></p>
+
+      <!-- Transport & Controls -->
+      <div class="player-controls">
+        <div class="transport-bar">
+          <span id="transport-current" class="transport-time">00:00</span>
+          <div id="transport-track" class="transport-track">
+            <div id="transport-fill" class="transport-fill" style="width: 0%"></div>
+          </div>
+          <span id="transport-total" class="transport-time">00:00</span>
+        </div>
+
+        <div class="flex-between">
+          <div class="vhs-buttons">
+            <button class="vhs-btn" id="btn-eject" title="Close (Esc)">
+              <span class="vhs-btn-icon">⏏</span>
+              <span class="vhs-btn-label">Eject</span>
+            </button>
+            <div class="vhs-spacer"></div>
+            <button class="vhs-btn" id="btn-shuffle" title="Shuffle Queue (S)">
+              <span class="vhs-btn-icon">🔀</span>
+              <span class="vhs-btn-label">Shuf</span>
+            </button>
+            <button class="vhs-btn" id="btn-prev" title="Previous Track (P)">
+              <span class="vhs-btn-icon">⏮</span>
+              <span class="vhs-btn-label">Prev</span>
+            </button>
+            <button class="vhs-btn" id="btn-rew" title="Rewind 10s (←)">
+              <span class="vhs-btn-icon">⏪</span>
+              <span class="vhs-btn-label">Rew</span>
+            </button>
+            <button class="vhs-btn" id="btn-play" title="Play/Pause (Space)">
+              <span class="vhs-btn-icon">▶</span>
+              <span class="vhs-btn-label">Play</span>
+            </button>
+            <button class="vhs-btn" id="btn-ff" title="Forward 10s (→)">
+              <span class="vhs-btn-icon">⏩</span>
+              <span class="vhs-btn-label">FF</span>
+            </button>
+            <button class="vhs-btn" id="btn-next" title="Next Track (N)">
+              <span class="vhs-btn-icon">⏭</span>
+              <span class="vhs-btn-label">Next</span>
+            </button>
+            <div class="vhs-spacer"></div>
+            <button class="vhs-btn" id="btn-stop" title="Stop">
+              <span class="vhs-btn-icon">⏹</span>
+              <span class="vhs-btn-label">Stop</span>
+            </button>
+            <button class="vhs-btn" id="btn-mute" title="Mute (M)">
+              <span class="vhs-btn-icon">🔊</span>
+              <span class="vhs-btn-label">Vol</span>
+            </button>
+            <button class="vhs-btn" id="btn-fullscreen" title="Fullscreen (F)">
+              <span class="vhs-btn-icon">⛶</span>
+              <span class="vhs-btn-label">Full</span>
+            </button>
+          </div>
+        </div>
+
+        <p id="player-status" class="player-status"></p>
+      </div>
     </dialog>
 
-    <dialog id="confirm-dialog" class="action-dialog">
-      <form method="dialog" class="glass-panel dialog-card">
-        <p class="brand-tag">Confirm Action</p>
+    <!-- Confirm Dialog -->
+    <dialog id="confirm-dialog">
+      <div class="dialog-card">
         <h3 id="confirm-title">Confirm</h3>
-        <p id="confirm-message"></p>
+        <p id="confirm-message" class="text-muted" style="margin: 12px 0;"></p>
         <div class="dialog-actions">
-          <button type="submit" value="cancel" class="btn btn-secondary">Cancel</button>
-          <button id="confirm-accept" type="submit" value="confirm" class="btn btn-primary">
-            Confirm
-          </button>
+          <button id="confirm-cancel" class="btn">Cancel</button>
+          <button id="confirm-accept" class="btn btn-accent">Confirm</button>
         </div>
-      </form>
+      </div>
     </dialog>
 
-    <dialog id="prompt-dialog" class="action-dialog">
-      <form id="prompt-form" class="glass-panel dialog-card">
-        <p class="brand-tag">Rename Item</p>
-        <h3 id="prompt-title">Rename entry</h3>
-        <p id="prompt-message"></p>
-        <div class="search-field">
-          <input id="prompt-input" type="text" maxlength="255" required placeholder="Enter new name" />
-        </div>
-        <div class="dialog-actions">
-          <button type="button" id="prompt-cancel" class="btn btn-secondary">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </dialog>
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
 
-    <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
-
-    <!-- Offline dependencies -->
+    <!-- Offline JS dependencies -->
     <script src="/static/js/hls.js"></script>
     <script type="module" src="/static/js/app.js"></script>
   </body>

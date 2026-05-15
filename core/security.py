@@ -1,7 +1,7 @@
 import jwt
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Any, Callable, Annotated
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +23,7 @@ from core.models import User
 settings = get_settings()
 
 pwd_context = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -61,10 +61,21 @@ def decode_token(token: str) -> Optional[dict[str, Any]]:
 
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
+    token: str | None = Depends(oauth2_scheme),
 ) -> User:
     """Dependency to get the current authenticated user."""
+    if not token:
+        token = request.query_params.get("token")
+        
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     payload = decode_token(token)
     if not payload:
         raise HTTPException(

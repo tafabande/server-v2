@@ -1,75 +1,84 @@
-import app from '../app.js';
-
 /**
- * Login View
+ * MediaHub — Login View
  */
-export const LoginView = {
-    html: `
-        <div class="auth-full-page">
-            <div class="auth-container">
-                <div class="auth-brand">
-                    <h1 class="brand-text">StreamDrop</h1>
-                    <p class="brand-tag">Premium Media Hub</p>
-                </div>
-                
-                <form id="login-form" class="glass-panel auth-card">
-                    <h2>Session Access</h2>
-                    <p class="hero-description">Enter your credentials to access your library.</p>
-                    
-                    <div id="auth-error" class="error-text"></div>
+import { api } from '../app.js';
 
-                    <div class="search-field" style="margin-bottom: 16px; max-width: 100%;">
-                        <input id="username-input" type="text" placeholder="Username" required autofocus />
+export class LoginView {
+    constructor(container) { this.container = container; }
+
+    async render() {
+        document.getElementById('sidebar').hidden = true;
+        document.getElementById('main-area').style.marginLeft = '0';
+
+        this.container.innerHTML = `
+            <div class="auth-page">
+                <div class="auth-card surface">
+                    <h1>MediaHub</h1>
+                    <p class="page-subtitle">Sign in to your media server</p>
+                    <form id="login-form">
+                        <div class="form-group">
+                            <label for="login-user">Username</label>
+                            <input id="login-user" class="input" type="text" placeholder="Username" autocomplete="username" autofocus required>
+                        </div>
+                        <div class="form-group">
+                            <label for="login-pass">Password</label>
+                            <input id="login-pass" class="input" type="password" placeholder="Password" autocomplete="current-password" required>
+                        </div>
+                        <p id="login-error" class="text-error" hidden></p>
+                        <button type="submit" class="btn btn-accent" style="width: 100%; margin-top: 8px;">Sign In</button>
+                    </form>
+                    <div class="auth-footer">
+                        <button id="guest-login" class="btn btn-ghost btn-sm">Continue as Guest</button>
                     </div>
-                    <div class="search-field" style="margin-bottom: 24px; max-width: 100%;">
-                        <input id="password-input" type="password" placeholder="Password" required />
-                    </div>
-                    
-                    <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center;">
-                      <span class="nav-icon">login</span> Start Session
-                    </button>
-                </form>
+                </div>
             </div>
-        </div>
-    `,
-    init: async () => {
-        const form = document.getElementById('login-form');
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const username = document.getElementById('username-input').value;
-            const password = document.getElementById('password-input').value;
-            const errorEl = document.getElementById('auth-error');
-            const submitBtn = form.querySelector('button');
-            
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Connecting...';
-            errorEl.textContent = '';
-            
-            try {
-                // Use the API client from the app instance
-                const data = await app.api.request('/api/auth/token', {
-                    method: 'POST',
-                    body: new URLSearchParams({ username, password }),
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-                });
-                
-                // Align with app.js storage keys
-                localStorage.setItem('streamdrop_token', data.access_token);
-                localStorage.setItem('streamdrop_user', JSON.stringify(data.user));
-                
-                // Update app state
-                app.token = data.access_token;
-                app.user = data.user;
-                app.api.setToken(data.access_token);
-                app.initSocket();
-                
-                // Redirect to home
-                app.router.navigate('/');
-            } catch (err) {
-                errorEl.textContent = err.message || 'Login failed';
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Start Session';
-            }
-        });
+        `;
+
+        document.getElementById('login-form').addEventListener('submit', (e) => this._handleLogin(e));
+        document.getElementById('guest-login').addEventListener('click', () => this._guestLogin());
     }
-};
+
+    async _handleLogin(e) {
+        e.preventDefault();
+        const errEl = document.getElementById('login-error');
+        errEl.hidden = true;
+
+        const username = document.getElementById('login-user').value.trim();
+        const password = document.getElementById('login-pass').value;
+
+        if (!username || !password) {
+            errEl.textContent = 'Please enter both fields.';
+            errEl.hidden = false;
+            return;
+        }
+
+        try {
+            const data = await api.login(username, password);
+            this._saveSession(data);
+        } catch (err) {
+            errEl.textContent = err.message || 'Login failed.';
+            errEl.hidden = false;
+        }
+    }
+
+    async _guestLogin() {
+        try {
+            const data = await api.login('guest', 'guest');
+            this._saveSession(data);
+        } catch (err) {
+            const errEl = document.getElementById('login-error');
+            errEl.textContent = 'Guest login unavailable.';
+            errEl.hidden = false;
+        }
+    }
+
+    _saveSession(data) {
+        localStorage.setItem('mediahub_token', data.access_token);
+        localStorage.setItem('mediahub_user', JSON.stringify(data.user));
+        window.location.href = '/';
+    }
+
+    destroy() {
+        document.getElementById('main-area').style.marginLeft = '';
+    }
+}
