@@ -41,6 +41,7 @@ export class PlayerManager {
         
         // Throttling for seek preview
         this._lastSeekUpdateTime = 0;
+        this._validDuration = 0;
     }
 
     _bindElements() {
@@ -119,7 +120,10 @@ export class PlayerManager {
             e.stopPropagation();
             const rect = this.transportTrack.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
-            this.video.currentTime = pct * this.video.duration;
+            const dur = this._getDuration();
+            if (dur > 1) {
+                this.video.currentTime = pct * dur;
+            }
             this._showControls();
         });
 
@@ -593,9 +597,21 @@ export class PlayerManager {
         this._loadCurrent();
     }
 
+    _getDuration() {
+        if (this.video.duration && !isNaN(this.video.duration) && this.video.duration !== Infinity) {
+            this._validDuration = this.video.duration;
+            return this.video.duration;
+        }
+        if (this.currentMedia && this.currentMedia.duration_seconds) {
+            return this.currentMedia.duration_seconds;
+        }
+        return this._validDuration > 0 ? this._validDuration : 1;
+    }
+
     seek(seconds) {
-        if (!this.video.duration) return;
-        this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + seconds));
+        const dur = this._getDuration();
+        if (dur <= 1) return;
+        this.video.currentTime = Math.max(0, Math.min(dur, this.video.currentTime + seconds));
         this._showControls();
     }
 
@@ -723,9 +739,10 @@ export class PlayerManager {
 
     eject() {
         if (this.currentMedia && this.video.currentTime > 5) {
+            const dur = this._getDuration();
             api.recordPlayback(this.currentMedia.id, {
                 position_seconds: this.video.currentTime,
-                completed: this.video.ended || (this.video.duration && this.video.currentTime / this.video.duration > 0.95),
+                completed: this.video.ended || (dur && this.video.currentTime / dur > 0.95),
                 event_type: 'stop',
             }).catch(() => {});
         }
@@ -816,9 +833,10 @@ export class PlayerManager {
     }
 
     _onEnded() {
+        const dur = this._getDuration();
         if (this.currentMedia) {
             api.recordPlayback(this.currentMedia.id, {
-                position_seconds: this.video.duration,
+                position_seconds: dur,
                 completed: true,
                 event_type: 'complete',
             }).catch(() => {});
@@ -832,15 +850,16 @@ export class PlayerManager {
             return;
         }
 
+        const dur = this._getDuration();
         // Update seek bar etc (assumed existing logic or I'll add it)
-        const pct = (this.video.currentTime / this.video.duration) * 100;
+        const pct = dur > 1 ? (this.video.currentTime / dur) * 100 : 0;
         if (this.transportFill) this.transportFill.style.width = `${pct}%`;
         
         if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(this.video.currentTime);
-        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(this.video.duration);
+        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(dur);
 
         // Intelligent Auto-Next Trigger
-        if (this.video.duration > 30 && this.video.duration - this.video.currentTime < 10) {
+        if (dur > 30 && dur - this.video.currentTime < 10) {
             if (!this._upNextShown && this.queueIndex < this.queue.length - 1) {
                 this._upNextShown = true;
                 this._showUpNextOverlay();
@@ -848,16 +867,17 @@ export class PlayerManager {
         }
 
         // Adaptive Buffer: Prefetch next item when 70% done
-        if (this.video.duration > 0 && (this.video.currentTime / this.video.duration) > 0.7) {
+        if (dur > 0 && (this.video.currentTime / dur) > 0.7) {
             this._prefetchNext();
         }
     }
 
     _onLoaded() {
-        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(this.video.duration);
+        const dur = this._getDuration();
+        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(dur);
         
         const tapeDur = document.getElementById('tape-duration');
-        if (tapeDur) tapeDur.textContent = this._formatTime(this.video.duration);
+        if (tapeDur) tapeDur.textContent = this._formatTime(dur);
         
         const tapeRes = document.getElementById('tape-resolution');
         if (tapeRes) tapeRes.textContent = `${this.video.videoWidth}x${this.video.videoHeight}`;
@@ -870,8 +890,9 @@ export class PlayerManager {
     }
 
     _updateTransport() {
-        if (!this.video.duration) return;
-        const pct = (this.video.currentTime / this.video.duration) * 100;
+        const dur = this._getDuration();
+        if (dur <= 1) return;
+        const pct = (this.video.currentTime / dur) * 100;
         if (this.transportFill) this.transportFill.style.width = `${pct}%`;
         if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(this.video.currentTime);
 
@@ -1046,11 +1067,12 @@ export class PlayerManager {
     }
 
     _handleSeekMove(e) {
-        if (!this.video.duration || isNaN(this.video.duration)) return;
+        const dur = this._getDuration();
+        if (dur <= 1) return;
 
         const rect = this.transportTrack.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        const seekTime = pct * this.video.duration;
+        const seekTime = pct * dur;
 
         // Position preview
         this.seekPreview.style.left = `${pct * 100}%`;
