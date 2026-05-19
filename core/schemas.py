@@ -158,6 +158,7 @@ class UserCreateRequest(BaseModel):
 
 class UserUpdateRequest(BaseModel):
     role: str | None = Field(default=None, max_length=20)
+    is_adult: bool | None = None
     display_name: str | None = Field(default=None, max_length=80)
     avatar_url: str | None = Field(default=None, max_length=512)
     bio: str | None = Field(default=None, max_length=280)

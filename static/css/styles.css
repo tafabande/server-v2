@@ -6,27 +6,27 @@
 [hidden] { display: none !important; }
 
 :root {
-  --bg:           #0a0a0d;
-  --bg-surface:   #121217;
-  --bg-hover:     #1a1a23;
-  --bg-input:     #0e0e12;
-  --border:       #383845;
-  --border-focus: #00ff66;
+  --bg:           #09090b;
+  --bg-surface:   #18181b;
+  --bg-hover:     #27272a;
+  --bg-input:     #09090b;
+  --border:       #27272a;
+  --border-focus: #6366f1;
 
-  --text:         #e0eee0;
-  --text-muted:   #789078;
-  --text-dim:     #506850;
+  --text:         #fafafa;
+  --text-muted:   #a1a1aa;
+  --text-dim:     #52525b;
 
-  --accent:       #00ff66;
-  --accent-hover: #33ff88;
-  --accent-dim:   rgba(0, 255, 102, 0.1);
+  --accent:       #6366f1;
+  --accent-hover: #818cf8;
+  --accent-dim:   rgba(99, 102, 241, 0.1);
 
-  --success:      #00ff66;
-  --warning:      #ffb000;
-  --error:        #ff3366;
+  --success:      #10b981;
+  --warning:      #f59e0b;
+  --error:        #ef4444;
 
-  --radius:       0px;
-  --font:         ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --radius:       8px;
+  --font:         system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono:    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   --sidebar-w:    240px;

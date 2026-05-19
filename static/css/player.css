@@ -1,10 +1,10 @@
 :root {
-  --player-accent: #00ff66; /* Retro Phosphor Green */
-  --player-accent-glow: rgba(0, 255, 102, 0.15);
+  --player-accent: #6366f1; /* Retro Phosphor Green */
+  --player-accent-glow: rgba(99, 102, 241, 0.15);
   --player-text: #ffffff;
   --player-bg: #000000;
   --player-bg-rgb: 0, 0, 0;
-  --glass-bg: rgba(0, 0, 0, 0.8);
+  --glass-bg: rgba(0, 0, 0, 0.6);
   --glass-border: #383845;
   
   /* Smooth color transitions for dynamic theming */
@@ -58,15 +58,15 @@
   pointer-events: none;
   z-index: 2;
   opacity: 0.8;
-}
+ display: none; }
 
 /* === Loader === */
 .player-loader {
   position: absolute;
   inset: 0;
   background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -87,7 +87,7 @@
   border-top-color: var(--player-accent);
   border-radius: 50%;
   animation: player-spin 1s linear infinite;
-  box-shadow: 0 0 20px var(--player-accent-glow);
+  box-shadow: none;
 }
 
 @keyframes player-spin {
@@ -192,8 +192,8 @@
   height: auto;
   max-height: 80vh;
   background: rgba(0, 0, 0, 0.95); /* Pure Night Black semi-transparent overlay */
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-top: 2px solid var(--glass-border);
   border-radius: 0;
   z-index: 100;
@@ -343,7 +343,7 @@
   cursor: pointer;
   position: relative;
   transition: height 0.2s ease;
-}
+ border: none; height: 6px; background: rgba(255,255,255,0.2); }
 
 .transport-track:hover { height: 5px; }
 
@@ -352,7 +352,7 @@
   background: var(--player-accent);
   border-radius: 2px;
   position: relative;
-}
+ box-shadow: none; border-right: none; }
 
 .transport-thumb {
   position: absolute;
@@ -363,7 +363,7 @@
   height: 16px;
   background: var(--player-accent);
   border-radius: 50%;
-  box-shadow: 0 0 10px var(--player-accent-glow);
+  box-shadow: none;
   transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -382,7 +382,7 @@
   border: 2px solid var(--player-accent);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.8), 0 0 15px var(--player-accent-glow);
+  box-shadow: none;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
@@ -502,8 +502,8 @@
   right: 0;
   height: 60vh;
   background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(25px);
-  -webkit-backdrop-filter: blur(25px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-top: 2px solid var(--glass-border);
   border-radius: 0;
   z-index: 50;
@@ -583,7 +583,7 @@
   left: 50%;
   transform: translate(-50%, -50%) scale(0.9);
   background: rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(16px);
   color: #fff;
   padding: 12px 24px;
   border-radius: 50px;
@@ -608,8 +608,8 @@
   right: 40px;
   width: 320px;
   background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 2px solid var(--glass-border);
   border-radius: 0;
   padding: 24px;
@@ -705,7 +705,7 @@
   left: 50%;
   transform: translateX(-50%);
   background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(16px);
   padding: 8px 16px;
   border-radius: 20px;
   color: var(--player-accent);
@@ -831,7 +831,7 @@
 
 .volume-seg.active {
   background: var(--player-accent);
-  box-shadow: 0 0 8px var(--player-accent-glow);
+  box-shadow: none;
 }
 
 /* Color grading for high volume */
@@ -873,7 +873,7 @@ dialog::backdrop {
   background: rgba(10, 10, 10, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 20px;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9), 0 0 40px rgba(255, 255, 255, 0.03);
+  box-shadow: none;
   color: #fff;
   max-width: 420px;
   width: 90vw;
@@ -940,13 +940,13 @@ dialog::backdrop {
   border: none;
   background: var(--player-accent, #00aaff);
   color: #000;
-  box-shadow: 0 0 15px var(--player-accent-glow);
+  box-shadow: none;
 }
 
 #confirm-accept:hover,
 #rename-save:hover {
   background: #33bbee;
-  box-shadow: 0 0 25px rgba(0, 170, 255, 0.75);
+  box-shadow: none;
   transform: translateY(-2px);
 }
 

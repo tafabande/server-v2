@@ -56,7 +56,7 @@ export class AdminView {
 
     async _loadMetrics(target) {
         try {
-            const metrics = await api.getMetrics();
+            const metrics = (await api.getMetrics()) || {};
             target.innerHTML = `
                 <div class="metrics-grid">
                     ${this._metricCard('CPU', `${metrics.cpu_percent.toFixed(1)}%`, metrics.cpu_percent)}
@@ -239,7 +239,7 @@ export class AdminView {
 
     async _loadRequests(target) {
         try {
-            const requests = await api.getRequests();
+            const requests = (await api.getRequests()) || [];
             if (!requests || requests.length === 0) {
                 target.innerHTML = '<div class="empty-state"><p>No pending requests</p></div>';
                 return;

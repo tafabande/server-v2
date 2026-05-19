@@ -69,6 +69,9 @@ async def update_user(
 
     if payload.role is not None:
         user.role = payload.role
+    if payload.is_adult is not None:
+        user.is_adult = payload.is_adult
+
     if payload.bio is not None:
         user.bio = payload.bio
     if payload.avatar_url is not None:
