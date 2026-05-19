@@ -21,6 +21,7 @@ export class AdminView {
             <div class="tabs" id="admin-tabs">
                 <button class="tab active" data-tab="metrics">System</button>
                 <button class="tab" data-tab="users">Users</button>
+                <button class="tab" data-tab="webhooks">Webhooks</button>
                 <button class="tab" data-tab="requests">Requests</button>
                 <button class="tab" data-tab="audit">Audit Log</button>
             </div>
@@ -47,6 +48,7 @@ export class AdminView {
         switch (tab) {
             case 'metrics': return this._loadMetrics(content);
             case 'users': return this._loadUsers(content);
+            case 'webhooks': return this._loadWebhooks(content);
             case 'requests': return this._loadRequests(content);
             case 'audit': return this._loadAudit(content);
         }
@@ -96,7 +98,7 @@ export class AdminView {
                     </form>
                 </div>
 
-                <div class="surface" style="padding:0; overflow:hidden">
+                <div class="surface" style="padding:0; overflow-x:auto">
                     <table class="table">
                         <thead><tr><th>Username</th><th>Role</th><th>Last Login</th><th>Created</th><th>Actions</th></tr></thead>
                         <tbody>${users.map(u => `
@@ -157,6 +159,84 @@ export class AdminView {
         }
     }
 
+    async _loadWebhooks(target) {
+        try {
+            const hooks = await api.getWebhooks();
+            target.innerHTML = `
+                <div class="surface mb-md">
+                    <div class="section-title">Register Webhook</div>
+                    <form id="add-webhook-form" class="flex flex-column gap-sm">
+                        <div class="form-group"><label>Target URL</label><input id="wh-url" class="input" placeholder="https://your-service.com/webhook" required></div>
+                        <div class="flex gap-sm">
+                            <div class="form-group flex-1"><label>Events (comma-separated, * for all)</label><input id="wh-events" class="input" value="*"></div>
+                            <div class="form-group flex-1"><label>Secret Key (optional)</label><input id="wh-secret" class="input" type="password"></div>
+                        </div>
+                        <button type="submit" class="btn btn-accent" style="align-self: flex-start">Register Endpoint</button>
+                    </form>
+                </div>
+
+                <div class="surface" style="padding:0; overflow-x:auto">
+                    <table class="table">
+                        <thead><tr><th>URL</th><th>Events</th><th>Status</th><th>Failures</th><th>Last Triggered</th><th>Actions</th></tr></thead>
+                        <tbody>${hooks.map(h => `
+                            <tr>
+                                <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis"><strong>${h.url}</strong></td>
+                                <td><code>${h.events}</code></td>
+                                <td><span class="badge ${h.is_active ? 'badge-success' : 'badge-danger'}">${h.is_active ? 'Active' : 'Disabled'}</span></td>
+                                <td class="text-center">${h.failure_count}</td>
+                                <td class="text-muted">${formatDateTime(h.last_triggered_at)}</td>
+                                <td>
+                                    <div class="flex gap-sm">
+                                        <button class="btn btn-ghost btn-sm toggle-wh-btn" data-id="${h.id}" data-active="${h.is_active}">${h.is_active ? 'Disable' : 'Enable'}</button>
+                                        <button class="btn btn-ghost btn-sm btn-danger del-wh-btn" data-id="${h.id}">Delete</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}</tbody>
+                    </table>
+                </div>
+            `;
+
+            document.getElementById('add-webhook-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                try {
+                    await api.createWebhook({
+                        url: document.getElementById('wh-url').value,
+                        events: document.getElementById('wh-events').value,
+                        secret: document.getElementById('wh-secret').value || null
+                    });
+                    toast('Webhook registered', 'success');
+                    this._loadWebhooks(target);
+                } catch (err) { toast(err.message, 'error'); }
+            });
+
+            target.querySelectorAll('.toggle-wh-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    try {
+                        const newStatus = btn.dataset.active === 'false';
+                        await api.updateWebhook(parseInt(btn.dataset.id), { is_active: newStatus });
+                        toast(`Webhook ${newStatus ? 'enabled' : 'disabled'}`, 'success');
+                        this._loadWebhooks(target);
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+
+            target.querySelectorAll('.del-wh-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const yes = await confirm('Delete Webhook', 'Are you sure you want to delete this endpoint?');
+                    if (!yes) return;
+                    try {
+                        await api.deleteWebhook(parseInt(btn.dataset.id));
+                        toast('Webhook deleted', 'success');
+                        this._loadWebhooks(target);
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+        } catch (err) {
+            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+        }
+    }
+
     async _loadRequests(target) {
         try {
             const requests = await api.getRequests();
@@ -166,7 +246,7 @@ export class AdminView {
             }
 
             target.innerHTML = `
-                <div class="surface" style="padding:0; overflow:hidden">
+                <div class="surface" style="padding:0; overflow-x:auto">
                     <table class="table">
                         <thead><tr><th>User</th><th>Type</th><th>Target</th><th>Date</th><th>Actions</th></tr></thead>
                         <tbody>${requests.map(req => `
@@ -225,7 +305,7 @@ export class AdminView {
             }
 
             target.innerHTML = `
-                <div class="surface" style="padding:0; overflow:hidden">
+                <div class="surface" style="padding:0; overflow-x:auto">
                     <table class="table">
                         <thead><tr><th>Action</th><th>Target</th><th>Time</th></tr></thead>
                         <tbody>${logs.map(log => `

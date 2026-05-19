@@ -64,9 +64,10 @@ echo [%date% %time%] --- Launching Uvicorn --- >> "%SETUP_LOG%"
 :: Launch browser in background after delay (increased to 10s for stability)
 start /b cmd /c "timeout /t 10 /nobreak >nul && start http://%LOCAL_IP%:51733"
 
-:: Start Uvicorn
-:: We exclude folders that are frequently written to (logs, temp, thumbs) to prevent infinite reload loops.
-uvicorn main:app --host 0.0.0.0 --port 51733 --reload --reload-exclude "venv" --reload-exclude "shared_media" --reload-exclude "logs" --reload-exclude "temp" --reload-exclude "thumbs"
+:: Start Uvicorn with multiple workers for high-concurrency LAN access
+:: We remove --reload to enable --workers on Windows. 
+:: Adjust --workers based on your CPU (e.g., 4 or 8)
+uvicorn main:app --host 0.0.0.0 --port 51733 --workers 4 --log-level info
 
 pause
 

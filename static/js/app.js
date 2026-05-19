@@ -18,6 +18,7 @@ import { PlaylistsView } from './views/playlists.js';
 import { HistoryView } from './views/history.js';
 import { ProfileView } from './views/profile.js';
 import { LoginView } from './views/login.js';
+import { FavoritesView } from './views/favorites.js';
 
 class App {
     constructor() {
@@ -38,6 +39,7 @@ class App {
         const routes = [
             { path: '/', view: async () => HomeView, requiresAuth: true },
             { path: '/library', view: async () => LibraryView, requiresAuth: true },
+            { path: '/favorites', view: async () => FavoritesView, requiresAuth: true },
             { path: '/explorer', view: async () => ExplorerView, requiresAuth: true },
             { path: '/playlists', view: async () => PlaylistsView, requiresAuth: true },
             { path: '/history', view: async () => HistoryView, requiresAuth: true },
@@ -72,28 +74,154 @@ class App {
         window.addEventListener('popstate', () => this.handleNavigation());
         document.getElementById('logout-btn')?.addEventListener('click', () => this.logout());
 
-        // Global Ctrl+K → search
+        // Global Shortcuts
         document.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            const isInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
+            
+            // Ctrl+K or '/' → search focus
+            if (((e.ctrlKey || e.metaKey) && e.key === 'k') || (e.key === '/' && !isInput)) {
                 e.preventDefault();
-                const search = document.querySelector('.search-bar .input');
-                if (search) search.focus();
+                const search = document.querySelector('.search-bar .input, #lib-search, #explorer-search');
+                if (search) {
+                    search.focus();
+                    search.select();
+                }
+            }
+
+            // Space → Play/Pause
+            if (e.code === 'Space' && !isInput) {
+                e.preventDefault();
+                this.player?.toggle();
+            }
+
+            // F → Fullscreen
+            if (e.key.toLowerCase() === 'f' && !isInput) {
+                e.preventDefault();
+                this.player?.toggleFullscreen();
             }
         });
 
+        // Scroll to Top Logic
+        const scrollBtn = document.getElementById('scroll-top-btn');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 500) scrollBtn?.classList.add('visible');
+            else scrollBtn?.classList.remove('visible');
+        }, { passive: true });
+
+        scrollBtn?.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        // Share QR
+        document.getElementById('btn-share-qr')?.addEventListener('click', () => this._showShareQR());
+
         // Highlight active nav link
         this.updateNavActive();
+
+        // Update admin badge on load
+        this.updateAdminBadge();
+
+        // Real-time Request Notifications
+        window.addEventListener('mediahub-socket-message', (e) => {
+            const msg = e.detail;
+            if (msg.type === 'request-updated') {
+                const currentUser = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+                
+                // Alert standard user of status change
+                if (currentUser && currentUser.id === msg.user_id) {
+                    if (msg.request_type === 'adult_elevation' && msg.status === 'approved') {
+                        currentUser.is_adult = true;
+                        localStorage.setItem('mediahub_user', JSON.stringify(currentUser));
+                        this.updateUI();
+                    }
+                    
+                    import('./utils.js').then(({ toast }) => {
+                        let text = '';
+                        if (msg.request_type === 'adult_elevation') {
+                            text = `Your 18+ elevation request was ${msg.status}!`;
+                        } else {
+                            const folderName = msg.target_path ? msg.target_path.split('/').pop() : 'folder';
+                            text = `Your access request for "${folderName}" was ${msg.status}!`;
+                        }
+                        if (msg.admin_comment) {
+                            text += ` Reason: "${msg.admin_comment}"`;
+                        }
+                        toast(text, msg.status === 'approved' ? 'success' : msg.status === 'denied' ? 'error' : 'info');
+                    });
+                }
+                
+                // Alert admins of incoming pending requests
+                if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'super-admin')) {
+                    if (msg.status === 'pending') {
+                        import('./utils.js').then(({ toast }) => {
+                            toast(`New pending request received from user.`, 'info');
+                        });
+                    }
+                    this.updateAdminBadge();
+                }
+            }
+        });
+    }
+
+    async _showShareQR() {
+        const { QRGenerator } = await import('./qr-generator.js');
+        const dialog = document.getElementById('share-dialog');
+        const container = document.getElementById('qr-container');
+        const urlEl = document.getElementById('share-url');
+        const copyBtn = document.getElementById('btn-copy-url');
+
+        const currentUrl = window.location.origin;
+        urlEl.textContent = currentUrl;
+        
+        QRGenerator.generate(currentUrl, container);
+        
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(currentUrl);
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+        };
+
+        dialog.showModal();
+    }
+
+    async updateAdminBadge() {
+        const badge = document.getElementById('admin-notif-badge');
+        if (!badge) return;
+        if (!this.token || !this.user || !(this.user.role === 'admin' || this.user.role === 'super-admin')) {
+            badge.style.display = 'none';
+            return;
+        }
+        try {
+            const requests = await this.api.getRequests();
+            const pendingCount = requests.filter(r => r.status === 'pending').length;
+            if (pendingCount > 0) {
+                badge.textContent = pendingCount;
+                badge.style.display = 'inline-flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        } catch (e) {
+            console.error("Failed to update admin badge", e);
+        }
     }
 
     updateUI() {
-        if (this.token && this.user) {
-            this.sidebar.hidden = false;
+        const isLoginPage = window.location.pathname === '/login';
+        const isAuth = !!(this.token && this.user);
+        const showNav = isAuth && !isLoginPage;
+
+        if (this.sidebar) this.sidebar.hidden = !showNav;
+        
+        // Handle mobile top bar too
+        const topbar = document.querySelector('.topbar-mobile');
+        if (topbar) topbar.style.display = showNav ? 'flex' : 'none';
+
+        if (showNav) {
             const isAdmin = this.user.role === 'admin' || this.user.role === 'super-admin';
             document.querySelectorAll('.admin-only').forEach(el => el.hidden = !isAdmin);
             const topUser = document.getElementById('topbar-user');
             if (topUser) topUser.textContent = this.user.username;
-        } else {
-            this.sidebar.hidden = true;
+            this.updateAdminBadge();
         }
     }
 
@@ -120,6 +248,7 @@ class App {
         }
 
         await this.router.loadRoute(path);
+        window.scrollTo(0, 0);
         this.updateUI();
         this.updateNavActive();
     }

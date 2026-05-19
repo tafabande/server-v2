@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,7 +20,7 @@ from core.bootstrap import bootstrap_application
 from core.database import init_db
 from core.exceptions import MediaHubError
 from core.logging import setup_logging, get_logger
-from routers import auth, files, media, playlists, requests, system, users
+from routers import auth, files, media, playlists, requests, system, users, webhooks
 
 
 # Initialize logging before settings are even fetched to ensure startup is logged
@@ -58,6 +59,10 @@ async def lifespan(_: FastAPI):
     
     await init_db()
     await bootstrap_application()
+    
+    # Start Background Media Watcher
+    from core.media import watch_media_library
+    asyncio.create_task(watch_media_library())
     
     yield
     
@@ -106,6 +111,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+@app.middleware("http")
+async def add_cache_control_header(request: Request, call_next):
+    response = await call_next(request)
+    # Cache static assets and HLS segments for better multi-device performance
+    if request.url.path.startswith(("/static", "/thumbs", "/temp/hls")):
+        # Cache for 1 hour by default, fMP4 segments are immutable usually
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(media.router, prefix="/api/media", tags=["media"])
@@ -113,6 +129,7 @@ app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/thumbs", StaticFiles(directory=str(settings.thumbs_folder)), name="thumbs")

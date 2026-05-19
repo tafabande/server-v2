@@ -21,10 +21,12 @@ class User(Base):
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="user")
-    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
-    playlists: Mapped[list["Playlist"]] = relationship(back_populates="owner")
-    access_requests: Mapped[list["AccessRequest"]] = relationship(back_populates="user")
+    play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    playlists: Mapped[list["Playlist"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    access_requests: Mapped[list["AccessRequest"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    permissions: Mapped[list["Permission"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    favorites: Mapped[list["Favorite"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class MediaMetadata(Base):
@@ -56,7 +58,10 @@ class MediaMetadata(Base):
         onupdate=func.now(),
     )
 
-    play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="media")
+    play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="media", cascade="all, delete-orphan")
+    playlist_items: Mapped[list["PlaylistItem"]] = relationship(back_populates="media", cascade="all, delete-orphan")
+    permissions: Mapped[list["Permission"]] = relationship(back_populates="media", cascade="all, delete-orphan")
+    favorites: Mapped[list["Favorite"]] = relationship(back_populates="media", cascade="all, delete-orphan")
 
 
 class PlayEvent(Base):
@@ -119,24 +124,24 @@ class PlaylistItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     playlist_id: Mapped[int] = mapped_column(ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False, index=True)
-    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     playlist: Mapped[Playlist] = relationship(back_populates="items")
-    media: Mapped[MediaMetadata] = relationship()
+    media: Mapped[MediaMetadata] = relationship(back_populates="playlist_items")
 
 
 class Permission(Base):
     __tablename__ = "permissions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
     can_view: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     can_edit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    user: Mapped[User] = relationship()
-    media: Mapped[MediaMetadata] = relationship()
+    user: Mapped[User] = relationship(back_populates="permissions")
+    media: Mapped[MediaMetadata] = relationship(back_populates="permissions")
 
 
 class ServerStatus(Base):
@@ -183,3 +188,31 @@ class AccessRequest(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="access_requests")
+
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Comma-separated list of events or '*' for all
+    events: Mapped[str] = mapped_column(String(255), default="*")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Optional secret for signing payloads (X-MediaHub-Signature)
+    secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[User] = relationship(back_populates="favorites")
+    media: Mapped[MediaMetadata] = relationship(back_populates="favorites")
+

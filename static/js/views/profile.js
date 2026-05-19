@@ -16,12 +16,60 @@ export class ProfileView {
             return;
         }
 
+        let requests = [];
+        try {
+            requests = await api.getRequests();
+        } catch (e) {
+            console.error("Could not fetch requests", e);
+        }
+
+        const latestAdultReq = requests
+            .filter(r => r.request_type === 'adult_elevation')
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+        let adultReqSection = '';
+        if (!user.is_adult) {
+            if (latestAdultReq) {
+                if (latestAdultReq.status === 'pending') {
+                    adultReqSection = `
+                        <div class="mt-md p-sm surface rounded flex-between border border-warning" style="background: rgba(245, 158, 11, 0.05); font-size: 0.85rem; width: 100%;">
+                            <div class="flex gap-sm items-center">
+                                <span style="font-size: 1.25rem;">⏳</span>
+                                <div>
+                                    <strong style="color: var(--color-warning);">18+ Request Pending</strong>
+                                    <div class="text-muted text-xs">Submitted on ${formatDate(latestAdultReq.created_at)}</div>
+                                </div>
+                            </div>
+                            <button type="button" id="req-adult-btn" class="btn btn-sm btn-ghost" disabled style="opacity: 0.6;">Pending</button>
+                        </div>
+                    `;
+                } else if (latestAdultReq.status === 'denied') {
+                    adultReqSection = `
+                        <div class="mt-md p-sm surface rounded border border-danger" style="background: rgba(239, 68, 68, 0.05); font-size: 0.85rem; width: 100%;">
+                            <div class="flex flex-column gap-xs">
+                                <div class="flex-between">
+                                    <strong style="color: var(--color-error); display: flex; items-center gap-xs"><span>❌</span> 18+ Request Denied</strong>
+                                    <span class="text-muted text-xs">${formatDate(latestAdultReq.created_at)}</span>
+                                </div>
+                                <div class="text-muted text-xs mb-sm">Reason: "${latestAdultReq.admin_comment || 'No reason provided.'}"</div>
+                                <button type="button" id="req-adult-btn" class="btn btn-sm btn-accent" style="align-self: flex-start;">🔞 Re-request 18+</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    adultReqSection = `<button type="button" id="req-adult-btn" class="btn btn-ghost btn-sm mt-md">🔞 Request 18+</button>`;
+                }
+            } else {
+                adultReqSection = `<button type="button" id="req-adult-btn" class="btn btn-ghost btn-sm mt-md">🔞 Request 18+</button>`;
+            }
+        }
+
         const initial = (user.username || '?')[0].toUpperCase();
 
         this.container.innerHTML = `
             <h1 class="page-title">Profile</h1>
             <p class="page-subtitle">Manage your account</p>
-
+ 
             <div class="profile-grid">
                 <div>
                     <!-- Profile Info -->
@@ -38,7 +86,7 @@ export class ProfileView {
                             <span>Joined ${formatDate(user.created_at)}</span>
                             <span>Last login ${formatDate(user.last_login)}</span>
                         </div>
-
+ 
                         <form id="profile-form">
                             <div class="form-group">
                                 <label>Bio</label>
@@ -46,11 +94,11 @@ export class ProfileView {
                             </div>
                             <div class="flex gap-sm">
                                 <button type="submit" class="btn btn-accent btn-sm">Update Profile</button>
-                                ${!user.is_adult ? '<button type="button" id="req-adult-btn" class="btn btn-ghost btn-sm">🔞 Request 18+</button>' : ''}
                             </div>
+                            ${adultReqSection}
                         </form>
                     </div>
-
+ 
                     <!-- Change Password -->
                     <div class="surface">
                         <div class="section-title">Change Password</div>
@@ -74,7 +122,7 @@ export class ProfileView {
                         </form>
                     </div>
                 </div>
-
+ 
                 <!-- Sidebar -->
                 <div>
                     <div class="surface mb-md">
@@ -88,6 +136,45 @@ export class ProfileView {
                         </div>
                     </div>
 
+                    <div class="surface mb-md">
+                        <div class="section-title">Access Requests</div>
+                        ${requests.length === 0 ? `
+                            <p class="text-muted text-sm" style="margin: 8px 0;">No requests submitted yet.</p>
+                        ` : `
+                            <div class="flex flex-column gap-sm" style="max-height: 250px; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px;">
+                                ${requests.map(r => {
+                                    let statusBadge = '';
+                                    if (r.status === 'approved') statusBadge = '<span class="badge badge-success">Approved</span>';
+                                    else if (r.status === 'denied') statusBadge = '<span class="badge badge-error">Denied</span>';
+                                    else statusBadge = '<span class="badge badge-warning">Pending</span>';
+
+                                    let title = '';
+                                    if (r.request_type === 'adult_elevation') {
+                                        title = '🔞 18+ Access';
+                                    } else {
+                                        const folderName = r.target_path ? r.target_path.split('/').pop() : 'Folder';
+                                        title = `📁 Access: ${folderName}`;
+                                    }
+
+                                    return `
+                                        <div class="surface rounded text-xs" style="border: 1px solid var(--border); padding: 8px; background: rgba(255,255,255,0.01);">
+                                            <div class="flex-between mb-xs" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                                <strong>${title}</strong>
+                                                ${statusBadge}
+                                            </div>
+                                            <div class="text-muted" style="font-size: 0.75rem; color: var(--text-dim);">${formatDate(r.created_at)}</div>
+                                            ${r.admin_comment ? `
+                                                <div class="text-muted" style="border-left: 2px solid var(--border); padding-left: 6px; margin-top: 4px; font-style: italic; font-size: 0.75rem;">
+                                                    "${r.admin_comment}"
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        `}
+                    </div>
+ 
                     <div class="surface">
                         <div class="section-title">Account</div>
                         <p class="text-muted text-sm" style="margin-bottom:12px">
@@ -115,6 +202,7 @@ export class ProfileView {
             try {
                 await api.submitRequest('adult_elevation');
                 toast('Request submitted', 'success');
+                this.render();
             } catch (err) {
                 toast(err.message, 'error');
             }

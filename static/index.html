@@ -2,10 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>MediaHub</title>
     <meta name="description" content="Minimalist LAN media server" />
     <link rel="icon" type="image/svg+xml" href="/static/placeholder.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    
     <link rel="stylesheet" href="/static/css/styles.css" />
     <link rel="stylesheet" href="/static/css/player.css" />
   </head>
@@ -38,6 +42,10 @@
             <span class="nav-icon">▦</span>
             <span class="nav-label">Library</span>
           </a>
+          <a href="/favorites" class="nav-link" data-link>
+            <span class="nav-icon">❤️</span>
+            <span class="nav-label">Favorites</span>
+          </a>
           <a href="/explorer" class="nav-link" data-link>
             <span class="nav-icon">📁</span>
             <span class="nav-label">Explorer</span>
@@ -55,7 +63,9 @@
 
           <a href="/admin" class="nav-link admin-only" data-link hidden>
             <span class="nav-icon">⚙</span>
-            <span class="nav-label">Admin</span>
+            <span class="nav-label" style="display: flex; align-items: center; gap: 8px;">
+              Admin <span id="admin-notif-badge" class="badge badge-error" style="display: none; padding: 2px 6px; font-size: 0.7rem; font-family: inherit;">0</span>
+            </span>
           </a>
           <a href="/profile" class="nav-link" data-link>
             <span class="nav-icon">◉</span>
@@ -64,6 +74,10 @@
         </div>
 
         <div class="sidebar-footer">
+          <button id="btn-share-qr" class="nav-link">
+            <span class="nav-icon">⚀</span>
+            <span class="nav-label">Share Access</span>
+          </button>
           <button id="logout-btn" class="nav-link" style="color: var(--error);">
             <span class="nav-icon">⏻</span>
             <span class="nav-label">Logout</span>
@@ -79,11 +93,44 @@
       </main>
     </div>
 
+    <!-- Share Dialog -->
+    <dialog id="share-dialog" class="glass-modal share-dialog">
+        <div class="modal-header">
+            <h3>Share MediaHub</h3>
+            <button class="btn-close" onclick="this.closest('dialog').close()">&times;</button>
+        </div>
+        <div class="modal-content">
+            <p class="text-muted text-sm">Scan this code to access MediaHub from another device on your network.</p>
+            <div id="qr-container" class="qr-container">
+                <!-- QR Code injected here -->
+            </div>
+            <div class="url-display">
+                <code id="share-url"></code>
+                <button id="btn-copy-url" class="btn-secondary btn-sm">Copy</button>
+            </div>
+        </div>
+    </dialog>
+
     <!-- VHS Video Player Modal -->
     <dialog id="player-modal" class="player-modal">
       <div class="player-screen">
         <video id="player-video" playsinline></video>
         <div class="player-scanlines"></div>
+        <div class="player-loader">
+            <div class="spinner-large"></div>
+        </div>
+
+        <!-- Up Next Overlay -->
+        <div id="up-next-overlay" class="up-next-overlay">
+            <div class="up-next-content">
+                <span class="up-next-label">UP NEXT IN <span class="up-next-timer">8</span></span>
+                <h3 class="up-next-title">Next Media Title</h3>
+                <div class="up-next-actions">
+                    <button class="btn-play-now btn-accent">Play Now</button>
+                    <button class="btn-cancel-next btn-ghost">Cancel</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Tape Info Sidebar -->
         <aside class="player-info">
@@ -172,6 +219,15 @@
               <span class="drawer-label">Subtitles</span>
               <span class="drawer-value" id="val-subs">Off</span>
             </div>
+            <div class="drawer-section-header">Tools</div>
+            <div class="drawer-item" id="item-rename">
+              <i class="v-icon icon-edit drawer-icon"></i>
+              <span class="drawer-label">Rename</span>
+            </div>
+            <div class="drawer-item" id="item-delete" style="color: #ff3366;">
+              <i class="v-icon icon-delete drawer-icon" style="background-color: #ff3366;"></i>
+              <span class="drawer-label">Delete</span>
+            </div>
           </div>
           
           <!-- Sub-Menus (Hidden) -->
@@ -179,10 +235,16 @@
             <!-- Dynamically populated -->
           </div>
           <div class="drawer-content" id="drawer-speed-menu" hidden>
+            <div class="drawer-option" data-speed="0.25">0.25x</div>
             <div class="drawer-option" data-speed="0.5">0.5x</div>
+            <div class="drawer-option" data-speed="0.75">0.75x</div>
             <div class="drawer-option" data-speed="1.0">1.0x (Normal)</div>
+            <div class="drawer-option" data-speed="1.25">1.25x</div>
             <div class="drawer-option" data-speed="1.5">1.5x</div>
+            <div class="drawer-option" data-speed="1.75">1.75x</div>
             <div class="drawer-option" data-speed="2.0">2.0x</div>
+            <div class="drawer-option" data-speed="3.0">3.0x</div>
+            <div class="drawer-option" data-speed="4.0">4.0x</div>
           </div>
           <div class="drawer-content" id="drawer-ratio-menu" hidden>
             <div class="drawer-option" data-ratio="contain">Fit (Default)</div>
@@ -221,6 +283,12 @@
             <div id="transport-track" class="transport-track">
               <div id="transport-fill" class="transport-fill" style="width: 0%">
                 <div class="transport-thumb"></div>
+              </div>
+              <!-- Seek Preview Container -->
+              <div id="seek-preview" class="seek-preview">
+                <video id="preview-video" muted playsinline></video>
+                <canvas id="preview-canvas" hidden></canvas>
+                <div id="seek-preview-time" class="seek-preview-time">00:00</div>
               </div>
             </div>
             <span id="transport-total" class="transport-time">00:00</span>
@@ -282,10 +350,40 @@
     </dialog>
 
     <!-- Toast Container -->
+    <!-- Folder Settings Dialog -->
+    <dialog id="folder-settings-dialog">
+        <form method="dialog" class="dialog-card">
+            <h3 id="settings-folder-name">Folder Settings</h3>
+            <p class="page-subtitle">Configure access and content ratings for this directory.</p>
+            
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="settings-locked">
+                    <span>Require Admin PIN for access</span>
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="settings-adult">
+                    <span>Mark as R18 / Adult Content</span>
+                </label>
+            </div>
+
+            <div class="dialog-actions">
+                <button type="button" class="btn" id="settings-cancel">Cancel</button>
+                <button type="submit" class="btn btn-accent" id="settings-save">Save Changes</button>
+            </div>
+        </form>
+    </dialog>
+
     <div id="toast-container" class="toast-container"></div>
+    <button id="scroll-top-btn" class="scroll-top-btn" title="Scroll to Top">↑</button>
 
     <!-- Offline JS dependencies -->
-    <script src="/static/js/hls.js"></script>
+    <!-- High-Performance HLS.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    
     <script type="module" src="/static/js/app.js"></script>
   </body>
 </html>

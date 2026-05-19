@@ -59,6 +59,7 @@ class MediaRead(BaseModel):
     hls_status: str
     requires_pin: bool
     adult_only: bool
+    is_favorite: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -219,11 +220,15 @@ class WatchHistoryItem(BaseModel):
     completed: bool
     updated_at: datetime
 
+    model_config = ConfigDict(from_attributes=True)
+
 
 class ContinueWatchingItem(BaseModel):
     media: MediaRead
     last_position_seconds: float
     updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ActiveSessionRead(BaseModel):
@@ -282,6 +287,14 @@ class FolderSettingUpdate(BaseModel):
     is_adult: bool | None = None
 
 
+class FolderSettingRead(BaseModel):
+    path: str
+    is_locked: bool
+    is_adult: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AccessRequestCreate(BaseModel):
     request_type: str  # 'folder_access', 'adult_elevation'
     target_path: str | None = None
@@ -290,7 +303,7 @@ class AccessRequestCreate(BaseModel):
 class AccessRequestRead(BaseModel):
     id: int
     user_id: int
-    username: str
+    username: str = ""
     request_type: str
     target_path: str | None = None
     status: str
@@ -304,3 +317,33 @@ class AccessRequestRead(BaseModel):
 class AccessRequestAction(BaseModel):
     status: str  # 'approved', 'denied'
     admin_comment: str | None = None
+
+
+class WebhookRead(BaseModel):
+    id: int
+    url: str
+    events: str
+    is_active: bool
+    created_at: datetime
+    last_triggered_at: datetime | None = None
+    failure_count: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookCreate(BaseModel):
+    url: str = Field(min_length=5, max_length=512)
+    events: str = Field(default="*", max_length=255)
+    secret: str | None = Field(default=None, max_length=128)
+
+
+class WebhookUpdate(BaseModel):
+    url: str | None = Field(default=None, min_length=5, max_length=512)
+    events: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+    secret: str | None = Field(default=None, max_length=128)
+class SmartHomeResponse(BaseModel):
+    continue_watching: list[ContinueWatchingItem]
+    recently_added: list[MediaRead]
+    trending: list[MediaRead]
+    recommendations: list[MediaRead]

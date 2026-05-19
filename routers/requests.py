@@ -6,22 +6,31 @@ from core.database import get_db
 from core.models import AccessRequest, User
 from core.schemas import AccessRequestAction, AccessRequestCreate, AccessRequestRead, MessageResponse
 from core.security import get_current_user, require_roles
+from core.events import socket_manager
 
 
 router = APIRouter()
 
 
-@router.get("", response_model=list[AccessRequestRead], dependencies=[Depends(require_roles("admin"))])
+@router.get("", response_model=list[AccessRequestRead])
 async def list_requests(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[AccessRequestRead]:
-    """Admin endpoint to list all access requests."""
-    result = await session.execute(
-        select(AccessRequest, User.username)
-        .join(User, AccessRequest.user_id == User.id)
-        .order_by(AccessRequest.created_at.desc())
-    )
+    """List access requests. Admins see all; regular users see their own."""
+    if current_user.role in ("admin", "super-admin"):
+        result = await session.execute(
+            select(AccessRequest, User.username)
+            .join(User, AccessRequest.user_id == User.id)
+            .order_by(AccessRequest.created_at.desc())
+        )
+    else:
+        result = await session.execute(
+            select(AccessRequest, User.username)
+            .join(User, AccessRequest.user_id == User.id)
+            .where(AccessRequest.user_id == current_user.id)
+            .order_by(AccessRequest.created_at.desc())
+        )
     
     requests = []
     for row in result:
@@ -61,6 +70,17 @@ async def create_request(
     session.add(new_request)
     await session.commit()
     
+    # Broadcast pending request to notify admins
+    await socket_manager.broadcast({
+        "type": "request-updated",
+        "request_id": new_request.id,
+        "user_id": current_user.id,
+        "request_type": new_request.request_type,
+        "target_path": new_request.target_path,
+        "status": "pending",
+        "admin_comment": None
+    })
+
     return MessageResponse(message="Request submitted successfully.")
 
 
@@ -93,4 +113,16 @@ async def take_action(
             pass
             
     await session.commit()
+
+    # Broadcast status change to notify the requesting user (and admins) in real-time
+    await socket_manager.broadcast({
+        "type": "request-updated",
+        "request_id": request.id,
+        "user_id": request.user_id,
+        "request_type": request.request_type,
+        "target_path": request.target_path,
+        "status": request.status,
+        "admin_comment": request.admin_comment
+    })
+
     return MessageResponse(message=f"Request {payload.status}.")

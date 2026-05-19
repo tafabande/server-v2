@@ -7,7 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from core.events import broadcast_library_updated
-from core.media import build_stream_response, get_media, library_groups, log_play_event, media_source_path, scan_media_library
+from core.media import (
+    build_stream_response, 
+    get_media, 
+    get_smart_home_data,
+    library_groups, 
+    log_play_event, 
+    media_source_path, 
+    scan_media_library
+)
 from core.models import MediaMetadata, PlayEvent, User
 from core.schemas import (
     ContinueWatchingItem,
@@ -15,6 +23,7 @@ from core.schemas import (
     MediaRead,
     MessageResponse,
     PlayEventCreate,
+    SmartHomeResponse,
     StreamResponse,
     WatchHistoryItem,
 )
@@ -34,10 +43,21 @@ async def library(
     return [MediaGroup(label=group["label"], items=group["items"]) for group in groups]
 
 
+@router.get("/smart/home", response_model=SmartHomeResponse)
+async def smart_home(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> SmartHomeResponse:
+    """Get personalized home feed data."""
+    data = await get_smart_home_data(session, current_user.id, is_adult=current_user.is_adult)
+    return SmartHomeResponse(**data)
+
+
 @router.get("/{media_id}/stream", response_model=StreamResponse)
 async def stream(
     media_id: int,
     pin: str | None = Query(default=None),
+    priority: bool = Query(default=True),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> StreamResponse:
@@ -52,7 +72,7 @@ async def stream(
         from core.exceptions import AccessDeniedError
         raise AccessDeniedError("Access to 18+ content denied for this account.")
 
-    return StreamResponse(**await build_stream_response(session, media))
+    return StreamResponse(**await build_stream_response(session, media, priority=priority))
 
 
 @router.get("/{media_id}/file")
@@ -218,3 +238,135 @@ async def get_continue_watching(
                 updated_at=event.created_at,
             ))
     return items
+
+
+@router.get("/search", response_model=list[MediaRead])
+async def search_media(
+    q: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[MediaRead]:
+    """Search for media items, respecting security filters."""
+    from sqlalchemy import or_
+    
+    stmt = select(MediaMetadata).where(
+        or_(
+            MediaMetadata.title.ilike(f"%{q}%"),
+            MediaMetadata.relative_path.ilike(f"%{q}%")
+        )
+    )
+    
+    # Tighten security: Filter by adult status if user is restricted
+    if not current_user.is_adult:
+        stmt = stmt.where(MediaMetadata.adult_only == False)
+        
+    # Optional: We could also filter by 'requires_pin' but usually search is okay,
+    # as long as 'stream' and 'details' enforce the PIN.
+    
+    result = await session.execute(stmt.limit(50))
+    return [MediaRead.model_validate(m) for m in result.scalars()]
+
+
+@router.post("/{media_id}/favorite", response_model=MessageResponse)
+async def toggle_favorite(
+    media_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Toggle favorite status for a media item."""
+    from core.models import Favorite
+    
+    stmt = select(Favorite).where(
+        Favorite.user_id == current_user.id,
+        Favorite.media_id == media_id
+    )
+    result = await session.execute(stmt)
+    fav = result.scalar_one_or_none()
+    
+    if fav:
+        await session.delete(fav)
+        message = "Removed from favorites."
+    else:
+        session.add(Favorite(user_id=current_user.id, media_id=media_id))
+        message = "Added to favorites."
+        
+    await session.commit()
+    return MessageResponse(message=message)
+
+
+@router.get("/favorites", response_model=list[MediaRead])
+async def get_favorites(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[MediaRead]:
+    """Get all favorite media for the current user."""
+    from core.models import Favorite
+    
+    stmt = (
+        select(MediaMetadata)
+        .join(Favorite, MediaMetadata.id == Favorite.media_id)
+        .where(Favorite.user_id == current_user.id)
+        .order_by(Favorite.created_at.desc())
+    )
+    
+    if not current_user.is_adult:
+        stmt = stmt.where(MediaMetadata.adult_only == False)
+        
+    result = await session.execute(stmt)
+    items = []
+    for m in result.scalars():
+        mr = MediaRead.model_validate(m)
+        mr.is_favorite = True
+        items.append(mr)
+    return items
+
+
+from pydantic import BaseModel
+
+class MediaRenameRequest(BaseModel):
+    title: str
+
+
+@router.post("/{media_id}/rename", response_model=MessageResponse)
+async def rename_media(
+    media_id: int,
+    payload: MediaRenameRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Rename a media metadata title."""
+    media = await get_media(session, media_id)
+    media.title = payload.title
+    await session.commit()
+    
+    # Broadcast that the library was updated
+    await broadcast_library_updated(0)
+    
+    return MessageResponse(message="Media renamed successfully.")
+
+
+@router.delete("/{media_id}", response_model=MessageResponse)
+async def delete_media(
+    media_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Permanently delete a media item from the database."""
+    media = await get_media(session, media_id)
+    
+    source = media_source_path(media)
+    if source.exists():
+        try:
+            source.unlink()
+        except Exception as e:
+            # We don't have logger globally defined in this file, let's avoid traceback if logger is not defined or print.
+            print(f"Failed to delete file {source}: {e}")
+            
+    await session.delete(media)
+    await session.commit()
+    
+    # Trigger a broadcast so clients refresh their library
+    await broadcast_library_updated(0) 
+    
+    return MessageResponse(message="Media deleted successfully.")
+

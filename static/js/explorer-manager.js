@@ -2,7 +2,7 @@ import { createElement, replaceChildren } from "./dom.js";
 import { formatDateLabel, formatFileSize } from "./formatters.js";
 
 export class ExplorerManager {
-  constructor({ root, pathLabel, summaryLabel, onOpenDirectory, onPlayMedia, onRename, onDelete }) {
+  constructor({ root, pathLabel, summaryLabel, onOpenDirectory, onPlayMedia, onRename, onDelete, onSettings }) {
     this.root = root;
     this.pathLabel = pathLabel;
     this.summaryLabel = summaryLabel;
@@ -10,6 +10,7 @@ export class ExplorerManager {
     this.onPlayMedia = onPlayMedia;
     this.onRename = onRename;
     this.onDelete = onDelete;
+    this.onSettings = onSettings;
     this.listing = null;
     this.query = "";
     this.permissions = {
@@ -34,6 +35,9 @@ export class ExplorerManager {
           break;
         case "delete":
           this.onDelete(path);
+          break;
+        case "settings":
+          this.onSettings(path);
           break;
         default:
           break;
@@ -133,6 +137,7 @@ export class ExplorerManager {
       className: "explorer-item-meta",
       children: [
         item.locked ? createElement("span", { className: "meta-tag warning-tag", text: "PIN" }) : null,
+        item.adult_only ? createElement("span", { className: "meta-tag error-tag", text: "R18" }) : null,
         createElement("span", {
           className: "meta-tag",
           text: item.is_dir ? "DIR" : formatFileSize(item.size),
@@ -178,6 +183,15 @@ export class ExplorerManager {
           className: "ghost-button small-button",
           text: "Delete",
           attrs: { type: "button", "data-action": "delete", "data-path": item.path },
+        }),
+      );
+    }
+    if (this.permissions.isAdmin && item.is_dir) {
+      actionChildren.push(
+        createElement("button", {
+          className: "ghost-button small-button",
+          text: "Settings",
+          attrs: { type: "button", "data-action": "settings", "data-path": item.path },
         }),
       );
     }

@@ -167,3 +167,9 @@ shared_media/*
 .DS_Store
 *.log
 scratch/
+
+# Large Assets
+material-design-icons-master/
+*.zip
+*.rar
+*.7z

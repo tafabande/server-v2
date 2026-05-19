@@ -24,24 +24,53 @@ export class Router {
     }
 
     async loadRoute(path) {
+        if (this._transitioning) return;
+        this._transitioning = true;
+
         const route = this.routes.find(r => r.path === path) ||
                       this.routes.find(r => r.path === '*');
 
         if (!route) {
             this.container.innerHTML = '<div class="empty-state"><p>Page not found</p></div>';
+            this._transitioning = false;
             return;
         }
 
-        // Clean up current view
-        if (this.currentView && typeof this.currentView.destroy === 'function') {
-            this.currentView.destroy();
-        }
+        const updateUI = async () => {
+            // Clean up current view
+            if (this.currentView && typeof this.currentView.destroy === 'function') {
+                this.currentView.destroy();
+            }
 
-        const ViewClass = await route.view();
-        this.currentView = new ViewClass(this.container);
+            const ViewClass = await route.view();
+            this.currentView = new ViewClass(this.container);
 
-        if (typeof this.currentView.render === 'function') {
-            await this.currentView.render();
+            if (typeof this.currentView.render === 'function') {
+                await this.currentView.render();
+            }
+        };
+
+        try {
+            if (document.startViewTransition) {
+                const transition = document.startViewTransition(updateUI);
+                try {
+                    await transition.finished;
+                } catch (tErr) {
+                    const skipErrors = ["TimeoutError", "AbortError", "InvalidStateError"];
+                    if (skipErrors.includes(tErr.name) || tErr.message?.includes("aborted")) {
+                        console.warn('View transition skipped or aborted:', tErr.message);
+                    } else {
+                        throw tErr;
+                    }
+                }
+            } else {
+                await updateUI();
+            }
+        } catch (err) {
+            console.error('Routing error:', err);
+            this.container.innerHTML = `<div class="empty-state"><p>Failed to load page: ${err.message}</p></div>`;
+        } finally {
+            this._transitioning = false;
         }
     }
 }

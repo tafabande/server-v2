@@ -56,9 +56,17 @@ class DiscoveryService:
             logger.error(f"Failed to start mDNS discovery: {e}")
 
     def stop(self):
-        if self.service_info:
-            self.zeroconf.unregister_service(self.service_info)
-        self.zeroconf.close()
+        try:
+            if self.service_info:
+                # Use a small timeout or just ignore if it fails during shutdown
+                self.zeroconf.unregister_service(self.service_info)
+        except Exception as e:
+            logger.debug(f"Error unregistering service during shutdown: {e}")
+        finally:
+            try:
+                self.zeroconf.close()
+            except Exception:
+                pass
 
 # Global instance
 discovery = DiscoveryService()

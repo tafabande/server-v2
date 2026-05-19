@@ -6,7 +6,7 @@ from core.database import get_db
 from core.events import broadcast_library_updated
 from core.media import log_audit, scan_media_library
 from core.models import FolderSetting, User
-from core.schemas import DeleteRequest, DirectoryListing, FolderSettingUpdate, MessageResponse, RenameRequest
+from core.schemas import DeleteRequest, DirectoryListing, FolderSettingRead, FolderSettingUpdate, MessageResponse, RenameRequest
 from core.security import get_current_user, require_roles
 from core.storage import delete_path, ensure_pin_for_path, is_path_adult, list_directory, relative_shared_path, rename_path, resolve_shared_path, save_upload, settings
 
@@ -90,6 +90,24 @@ async def remove(
     return MessageResponse(message="Delete completed.")
 
 
+@router.get("/settings", response_model=FolderSettingRead, dependencies=[Depends(get_current_user)])
+async def get_folder_settings(
+    path: str,
+    session: AsyncSession = Depends(get_db),
+) -> FolderSettingRead:
+    # Normalize path
+    target = resolve_shared_path(path)
+    rel_path = relative_shared_path(target) if target != settings.shared_folder.resolve() else ""
+
+    result = await session.execute(select(FolderSetting).where(FolderSetting.path == rel_path))
+    setting = result.scalar_one_or_none()
+    
+    if not setting:
+        return FolderSettingRead(path=rel_path, is_locked=False, is_adult=False)
+        
+    return FolderSettingRead.model_validate(setting)
+
+
 @router.post("/settings", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
 async def update_folder_settings(
     path: str,
@@ -120,5 +138,11 @@ async def update_folder_settings(
     
     # Trigger rescan to update media flags
     await refresh_library_view(session)
+    
+    from core.webhooks import trigger_webhook
+    await trigger_webhook("security.settings_updated", {
+        "path": rel_path,
+        "settings": payload.model_dump()
+    })
     
     return MessageResponse(message="Folder settings updated.")

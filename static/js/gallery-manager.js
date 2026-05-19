@@ -1,5 +1,6 @@
 import { createElement, replaceChildren } from "./dom.js";
 import { flattenLibrary, formatDuration, formatResolution } from "./formatters.js";
+import { thumbUrl } from "./utils.js";
 
 export class GalleryManager {
   constructor({ root, hero, onPlay }) {
@@ -96,7 +97,7 @@ export class GalleryManager {
     this.hero.description.textContent = item
       ? this.describeItem(item)
       : "MediaHub keeps every asset on your network while surfacing it like a polished home screen.";
-    this.hero.thumb.src = (item && item.thumbnail_path) || "/static/placeholder.svg";
+    this.hero.thumb.src = thumbUrl(item);
     this.hero.thumb.alt = item ? `${item.title} artwork` : "Featured artwork";
     this.hero.badge.textContent = this.badgeLabel(item);
     this.hero.play.disabled = !item;
@@ -237,7 +238,7 @@ export class GalleryManager {
         }),
         createElement("img", {
           attrs: {
-            src: item.thumbnail_path || "/static/placeholder.svg",
+            src: thumbUrl(item),
             alt: `${item.title} cover art`,
             loading: "lazy",
           },

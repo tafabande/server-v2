@@ -46,13 +46,10 @@ def _relative_text_for_path(path: Path) -> str:
 
 async def is_path_locked(session: AsyncSession, path: Path) -> bool:
     rel_path = _relative_text_for_path(path)
-    parts = {piece for piece in rel_path.split("/") if piece}
-    if bool(parts & settings.pin_keyword_set):
+    if any(piece in settings.pin_keyword_set for piece in rel_path.split("/") if piece):
         return True
     
-
-    
-    # Check if this path or any parent is locked in DB
+    # Efficiently check DB for any parent or self being locked
     search_paths = [""]
     current = ""
     for part in rel_path.split("/"):
@@ -60,24 +57,15 @@ async def is_path_locked(session: AsyncSession, path: Path) -> bool:
         current = f"{current}/{part}" if current else part
         search_paths.append(current)
     
-    result = await session.execute(
-        select(FolderSetting.is_locked).where(
-            FolderSetting.path.in_(search_paths),
-            FolderSetting.is_locked == True
-        )
-    )
-    return result.scalar() is not None
+    stmt = select(FolderSetting.is_locked).where(FolderSetting.path.in_(search_paths), FolderSetting.is_locked == True)
+    return (await session.execute(stmt)).scalar() is not None
 
 
 async def is_path_adult(session: AsyncSession, path: Path) -> bool:
     rel_path = _relative_text_for_path(path)
-    parts = {piece for piece in rel_path.split("/") if piece}
-    if bool(parts & settings.adult_keyword_set):
+    if any(piece in settings.adult_keyword_set for piece in rel_path.split("/") if piece):
         return True
-        
 
-
-    # Check if this path or any parent is adult-only in DB
     search_paths = [""]
     current = ""
     for part in rel_path.split("/"):
@@ -85,13 +73,8 @@ async def is_path_adult(session: AsyncSession, path: Path) -> bool:
         current = f"{current}/{part}" if current else part
         search_paths.append(current)
 
-    result = await session.execute(
-        select(FolderSetting.is_adult).where(
-            FolderSetting.path.in_(search_paths),
-            FolderSetting.is_adult == True
-        )
-    )
-    return result.scalar() is not None
+    stmt = select(FolderSetting.is_adult).where(FolderSetting.path.in_(search_paths), FolderSetting.is_adult == True)
+    return (await session.execute(stmt)).scalar() is not None
 
 
 async def ensure_pin_for_path(session: AsyncSession, path: Path, pin: str | None) -> None:
@@ -114,30 +97,60 @@ async def list_directory(raw_path: str | None = None, session: AsyncSession | No
     items = []
 
     
-    async def process_entries(sess):
-        for entry in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+    async def process_entries(sess: AsyncSession):
+        entries = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+        if not entries: return
+
+        # Pre-fetch ALL relevant settings and media IDs in two queries total
+        entry_paths = [relative_shared_path(e) for e in entries]
+        
+        # 1. Fetch settings for self, parents, and all direct children
+        # Collect all unique path segments for parents
+        ancestor_paths = [""]
+        curr = ""
+        for p in relative_path.split("/"):
+            if not p: continue
+            curr = f"{curr}/{p}" if curr else p
+            ancestor_paths.append(curr)
+        
+        settings_result = await sess.execute(
+            select(FolderSetting).where(FolderSetting.path.in_(ancestor_paths + entry_paths))
+        )
+        settings_map = {s.path: s for s in settings_result.scalars()}
+        
+        # 2. Fetch media IDs for all media files in the list
+        media_result = await sess.execute(
+            select(MediaMetadata.id, MediaMetadata.relative_path).where(MediaMetadata.relative_path.in_(entry_paths))
+        )
+        media_map = {m.relative_path: m.id for m in media_result.all()}
+
+        # 3. Process with cached data
+        parent_locked = any(settings_map[p].is_locked for p in ancestor_paths if p in settings_map and settings_map[p].is_locked)
+        parent_adult = any(settings_map[p].is_adult for p in ancestor_paths if p in settings_map and settings_map[p].is_adult)
+
+        for entry in entries:
             if entry.name.startswith("."): continue
-            stat = entry.stat()
             rel = relative_shared_path(entry)
-            is_media = is_media_file(entry)
-            media_id = None
-            if is_media:
-                res = await sess.execute(select(MediaMetadata.id).where(MediaMetadata.relative_path == rel))
-                media_id = res.scalar()
+            s = settings_map.get(rel)
             
-            items.append(
-                {
-                    "name": entry.name,
-                    "path": rel,
-                    "is_dir": entry.is_dir(),
-                    "size": 0 if entry.is_dir() else stat.st_size,
-                    "modified_at": datetime.fromtimestamp(stat.st_mtime),
-                    "locked": await is_path_locked(sess, entry),
-                    "adult_only": await is_path_adult(sess, entry),
-                    "media": is_media,
-                    "media_id": media_id,
-                }
-            )
+            # Keyword checks
+            k_locked = any(piece in settings.pin_keyword_set for piece in rel.split("/") if piece)
+            k_adult = any(piece in settings.adult_keyword_set for piece in rel.split("/") if piece)
+            
+            is_locked = parent_locked or k_locked or (s.is_locked if s else False)
+            is_adult = parent_adult or k_adult or (s.is_adult if s else False)
+
+            items.append({
+                "name": entry.name,
+                "path": rel,
+                "is_dir": entry.is_dir(),
+                "size": 0 if entry.is_dir() else entry.stat().st_size,
+                "modified_at": datetime.fromtimestamp(entry.stat().st_mtime),
+                "locked": is_locked,
+                "adult_only": is_adult,
+                "media": rel in media_map,
+                "media_id": media_map.get(rel),
+            })
 
     if session:
         await process_entries(session)
