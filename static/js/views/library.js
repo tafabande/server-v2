@@ -11,6 +11,8 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         this._filteredItems = [];
         this._viewMode = localStorage.getItem('lib_view_mode') || 'grid'; 
         this._collapsedSubfolders = new Set();
+        this.hoverTimeout = null;
+        this.previewVideo = null;
     }
 
     async render() {
@@ -42,9 +44,14 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             </div>
 
             <div id="lib-content" class="fade-in">
-                <div class="loading-state">
-                    <div class="spinner"></div>
-                    <span>Indexing library...</span>
+                <div class="skeleton-grid">
+                    ${Array(12).fill().map(() => `
+                        <div class="skeleton-card">
+                            <div class="skeleton-poster shimmer-bg"></div>
+                            <div class="skeleton-title shimmer-bg"></div>
+                            <div class="skeleton-meta shimmer-bg"></div>
+                        </div>
+                    `).join('')}
                 </div>
             </div>
         `;
@@ -71,9 +78,15 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
 
     async _loadMedia() {
         try {
-            const groups = await api.getLibrary();
-            this._allMedia = groups.flatMap(g => g.items.map(m => ({ ...m, _category: g.label })));
-            this._categories = [...new Set(this._allMedia.map(m => m._category))];
+            // getLibrary() returns PaginatedMediaResponse: { items, total, page, per_page, pages }
+            // Load up to 500 items so the full library is visible without pagination UI.
+            const response = await api.getLibrary({ per_page: 500 });
+            const rawItems = Array.isArray(response)
+                ? response                   // legacy: array of MediaRead
+                : (response?.items ?? []);   // current: PaginatedMediaResponse
+
+            this._allMedia = rawItems.map(m => ({ ...m, _category: m.category || 'Uncategorised' }));
+            this._categories = [...new Set(this._allMedia.map(m => m._category))].sort();
             this._activeCategory = null;
 
             this._renderTabs();
@@ -230,6 +243,7 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         });
 
         this._bindItemActions(target);
+        this._setupHoverPreviews();
     }
 
     _renderCardHtml(m) {
@@ -393,5 +407,83 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         toast(`Playing ${this._filteredItems.length} items`, 'success');
     }
 
-    destroy() {}
+    _setupHoverPreviews() {
+        const contentArea = document.getElementById('lib-content');
+        if (!contentArea) return;
+
+        this._cleanupActivePreview();
+
+        contentArea.addEventListener('mouseenter', (e) => {
+            const card = e.target.closest('.media-card');
+            if (!card) return;
+
+            this.hoverTimeout = setTimeout(() => {
+                const mediaId = card.dataset.mediaId;
+                const posterImg = card.querySelector('.media-card-thumb');
+                const previewUrl = `/api/media/${mediaId}/preview`;
+
+                this.previewVideo = document.createElement('video');
+                this.previewVideo.src = previewUrl;
+                this.previewVideo.muted = true;
+                this.previewVideo.autoplay = true;
+                this.previewVideo.loop = true;
+                this.previewVideo.className = 'card-preview-video';
+                
+                Object.assign(this.previewVideo.style, {
+                    position: 'absolute',
+                    top: '0',
+                    left: '0',
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    borderRadius: 'var(--radius)',
+                    zIndex: '2',
+                });
+
+                const posterContainer = card.querySelector('.media-card-poster');
+                if (posterContainer) {
+                    posterContainer.style.position = 'relative';
+                    posterContainer.appendChild(this.previewVideo);
+                    if (posterImg) posterImg.style.opacity = '0.1';
+                }
+
+                this.previewVideo.play().catch(() => console.log('Autoplay blocked'));
+
+                card.addEventListener('mouseleave', () => {
+                    this._cleanupPreview(card, posterImg);
+                }, { once: true });
+            }, 500);
+
+            card.addEventListener('mouseleave', () => {
+                clearTimeout(this.hoverTimeout);
+            }, { once: true });
+        }, true);
+    }
+
+    _cleanupPreview(card, posterImg) {
+        if (this.previewVideo) {
+            this.previewVideo.pause();
+            this.previewVideo.remove();
+            this.previewVideo = null;
+        }
+        if (posterImg) {
+            posterImg.style.opacity = '1';
+        }
+    }
+
+    _cleanupActivePreview() {
+        if (this.hoverTimeout) {
+            clearTimeout(this.hoverTimeout);
+            this.hoverTimeout = null;
+        }
+        if (this.previewVideo) {
+            this.previewVideo.pause();
+            this.previewVideo.remove();
+            this.previewVideo = null;
+        }
+    }
+
+    destroy() {
+        this._cleanupActivePreview();
+    }
 }

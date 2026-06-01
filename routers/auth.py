@@ -23,6 +23,7 @@ router = APIRouter()
 
 @router.post("/token")
 async def login_for_access_token(
+    response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -47,6 +48,15 @@ async def login_for_access_token(
         expires_delta=access_token_expires,
     )
     
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=access_token,
+        httponly=True,
+        max_age=settings.access_token_expire_minutes * 60,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+    )
+    
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -57,6 +67,17 @@ async def login_for_access_token(
             "avatar_url": user.avatar_url,
         }
     }
+
+
+# Alias: POST /api/auth/login → same as /token
+@router.post("/login")
+async def login(
+    response: Response,
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Login endpoint (alias for /token). Returns JWT + user."""
+    return await login_for_access_token(response, form_data, db)
 
 
 @router.get("/me")
@@ -71,10 +92,77 @@ async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]
         "preferences": current_user.preferences,
         "last_login": current_user.last_login,
         "created_at": current_user.created_at,
+        "is_adult": current_user.is_adult,
+        "has_pin": current_user.pin is not None,
     }
 
 
+@router.put("/me")
+async def update_profile(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    bio: str | None = None,
+    avatar_url: str | None = None,
+    theme: str | None = None,
+    language: str | None = None,
+):
+    """Update current user's profile (bio, prefs)."""
+    if bio is not None:
+        current_user.bio = bio
+    if avatar_url is not None:
+        current_user.avatar_url = avatar_url
+    
+    prefs = dict(current_user.preferences or {})
+    if theme is not None:
+        prefs["theme"] = theme
+    if language is not None:
+        prefs["language"] = language
+    current_user.preferences = prefs
+    
+    await db.commit()
+    return {"message": "Profile updated."}
+
+
+@router.post("/change-password")
+async def change_password(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_password: str = "",
+    new_password: str = "",
+):
+    """Change password for the authenticated user."""
+    if not verify_password(current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+    
+    from core.security import get_password_hash
+    current_user.password_hash = get_password_hash(new_password)
+    await db.commit()
+    return {"message": "Password changed successfully."}
+
+
 @router.post("/logout")
-async def logout():
-    """Client-side handles token removal, server can blacklist if using Redis."""
+async def logout(
+    response: Response,
+    token: str | None = Depends(oauth2_scheme),
+):
+    """Logout and blacklist the current JWT token."""
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+    )
+    if token:
+        payload = decode_token(token)
+        if payload:
+            try:
+                from core.runtime_state import revoke_token
+                exp = payload.get("exp")
+                jti = payload.get("jti") or token[-16:]  # Use last 16 chars as pseudo-JTI if no JTI
+                await revoke_token(jti, exp)
+            except Exception:
+                pass  # Graceful degradation if cache is unavailable
+    
     return {"detail": "Successfully logged out"}

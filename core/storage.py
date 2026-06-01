@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import UploadFile, status
+from fastapi import UploadFile, status, HTTPException
 
 from config import get_settings
 from core.exceptions import AccessDeniedError, MediaHubError, ResourceNotFoundError
 from core.logging import get_logger
 from core.database import AsyncSessionLocal
-from core.models import FolderSetting, MediaMetadata
-from sqlalchemy import select
+from core.models import FolderSetting, MediaMetadata, User
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -27,16 +27,121 @@ def is_media_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS
 
 
+import subprocess
+import time
+from functools import lru_cache
+
+@lru_cache(maxsize=1024)
+def resolve_shortcut(lnk_path: Path) -> Path | None:
+    try:
+        command = f"""
+        $sh = New-Object -ComObject WScript.Shell;
+        $target = $sh.CreateShortcut('{lnk_path}').TargetPath;
+        Write-Output $target
+        """
+        completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True)
+        target = completed.stdout.strip()
+        if target and Path(target).exists():
+            return Path(target).resolve()
+    except Exception:
+        pass
+    return None
+
+
+import threading
+
+_shortcut_lock = threading.Lock()
+_shortcut_cache = None
+_shortcut_cache_time = 0.0
+
+def get_shortcut_mappings() -> list[tuple[Path, Path]]:
+    global _shortcut_cache, _shortcut_cache_time
+    now = time.time()
+    if _shortcut_cache is not None and now - _shortcut_cache_time <= 10:
+        return _shortcut_cache
+
+    with _shortcut_lock:
+        now = time.time()
+        if _shortcut_cache is not None and now - _shortcut_cache_time <= 10:
+            return _shortcut_cache
+
+        mappings = []
+        base = settings.shared_folder.resolve()
+        try:
+            for lnk in base.rglob("*.lnk"):
+                try:
+                    if lnk.is_file():
+                        target = resolve_shortcut(lnk)
+                        if target:
+                            mappings.append((lnk, target))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        _shortcut_cache = mappings
+        _shortcut_cache_time = now
+        return _shortcut_cache
+
+
 def relative_shared_path(path: Path) -> str:
-    return path.resolve().relative_to(settings.shared_folder.resolve()).as_posix()
+    path_resolved = path.resolve()
+    base_resolved = settings.shared_folder.resolve()
+    try:
+        return path_resolved.relative_to(base_resolved).as_posix()
+    except ValueError:
+        for lnk, target in get_shortcut_mappings():
+            try:
+                rel = path_resolved.relative_to(target.resolve())
+                lnk_rel = lnk.resolve().relative_to(base_resolved)
+                return (lnk_rel / rel).as_posix()
+            except ValueError:
+                continue
+        # Safe fallback
+        return path_resolved.name
 
 
 def resolve_shared_path(raw_path: str | None = None) -> Path:
     base = settings.shared_folder.resolve()
-    candidate = (base / (raw_path or "")).resolve()
-    if candidate != base and base not in candidate.parents:
-        raise AccessDeniedError("Path traversal attempt blocked.")
-    return candidate
+    if not raw_path:
+        return base
+        
+    parts = Path(raw_path).parts
+    current = base
+    allowed_roots = [base]
+    
+    for part in parts:
+        if part == "..":
+            parent_candidate = current.parent.resolve()
+            is_safe = False
+            for root in allowed_roots:
+                if parent_candidate == root or root in parent_candidate.parents:
+                    is_safe = True
+                    break
+            if not is_safe:
+                raise AccessDeniedError("Path traversal attempt blocked.")
+            current = parent_candidate
+            continue
+            
+        candidate = (current / part).resolve()
+        
+        if candidate.suffix.lower() == ".lnk" and candidate.is_file():
+            target = resolve_shortcut(candidate)
+            if target:
+                current = target
+                allowed_roots.append(current)
+                continue
+                
+        is_safe = False
+        for root in allowed_roots:
+            if candidate == root or root in candidate.parents:
+                is_safe = True
+                break
+        if not is_safe:
+            raise AccessDeniedError("Path traversal attempt blocked.")
+            
+        current = candidate
+        
+    return current
 
 
 def _relative_text_for_path(path: Path) -> str:
@@ -57,7 +162,8 @@ async def is_path_locked(session: AsyncSession, path: Path) -> bool:
         current = f"{current}/{part}" if current else part
         search_paths.append(current)
     
-    stmt = select(FolderSetting.is_locked).where(FolderSetting.path.in_(search_paths), FolderSetting.is_locked == True)
+    from sqlalchemy import func
+    stmt = select(FolderSetting.is_locked).where(func.lower(FolderSetting.path).in_(search_paths), FolderSetting.is_locked == True)
     return (await session.execute(stmt)).scalar() is not None
 
 
@@ -73,13 +179,51 @@ async def is_path_adult(session: AsyncSession, path: Path) -> bool:
         current = f"{current}/{part}" if current else part
         search_paths.append(current)
 
-    stmt = select(FolderSetting.is_adult).where(FolderSetting.path.in_(search_paths), FolderSetting.is_adult == True)
+    from sqlalchemy import func
+    stmt = select(FolderSetting.is_adult).where(func.lower(FolderSetting.path).in_(search_paths), FolderSetting.is_adult == True)
     return (await session.execute(stmt)).scalar() is not None
 
 
-async def ensure_pin_for_path(session: AsyncSession, path: Path, pin: str | None) -> None:
-    if await is_path_locked(session, path) and pin != settings.admin_pin:
-        raise AccessDeniedError("Valid admin PIN required for this resource.")
+async def ensure_pin_for_path(
+    session: AsyncSession,
+    path: Path,
+    pin: str | None,
+    current_user: User | None = None,
+) -> None:
+    if await is_path_locked(session, path):
+        # 1. Check folder-level permission overrides
+        if current_user:
+            from core.models import FolderPermission
+            rel_path = (relative_shared_path(path) if path != settings.shared_folder.resolve() else "").lower()
+            
+            search_paths = [""]
+            current = ""
+            for part in rel_path.split("/"):
+                if not part:
+                    continue
+                current = f"{current}/{part}" if current else part
+                search_paths.append(current)
+                
+            stmt = select(FolderPermission).where(
+                FolderPermission.user_id == current_user.id,
+                FolderPermission.folder_path.in_(search_paths),
+                FolderPermission.can_view == True
+            )
+            has_perm = (await session.execute(stmt)).scalar() is not None
+            if has_perm:
+                return
+
+        # 2. Check global admin PIN
+        if pin == settings.admin_pin:
+            return
+
+        # 3. Check user-specific PIN (hashed)
+        if current_user and current_user.pin:
+            from core.security import verify_password
+            if verify_password(pin or "", current_user.pin):
+                return
+
+        raise AccessDeniedError("Valid PIN required for this resource.")
 
 
 async def list_directory(raw_path: str | None = None, session: AsyncSession | None = None) -> tuple[str, str | None, list[dict]]:
@@ -114,9 +258,9 @@ async def list_directory(raw_path: str | None = None, session: AsyncSession | No
             ancestor_paths.append(curr)
         
         settings_result = await sess.execute(
-            select(FolderSetting).where(FolderSetting.path.in_(ancestor_paths + entry_paths))
+            select(FolderSetting).where(func.lower(FolderSetting.path).in_([p.lower() for p in ancestor_paths + entry_paths]))
         )
-        settings_map = {s.path: s for s in settings_result.scalars()}
+        settings_map = {s.path.lower(): s for s in settings_result.scalars() if s.path}
         
         # 2. Fetch media IDs for all media files in the list
         media_result = await sess.execute(
@@ -125,31 +269,52 @@ async def list_directory(raw_path: str | None = None, session: AsyncSession | No
         media_map = {m.relative_path: m.id for m in media_result.all()}
 
         # 3. Process with cached data
-        parent_locked = any(settings_map[p].is_locked for p in ancestor_paths if p in settings_map and settings_map[p].is_locked)
-        parent_adult = any(settings_map[p].is_adult for p in ancestor_paths if p in settings_map and settings_map[p].is_adult)
+        parent_locked = any(settings_map[p.lower()].is_locked for p in ancestor_paths if p.lower() in settings_map and settings_map[p.lower()].is_locked)
+        parent_adult = any(settings_map[p.lower()].is_adult for p in ancestor_paths if p.lower() in settings_map and settings_map[p.lower()].is_adult)
 
         for entry in entries:
             if entry.name.startswith("."): continue
-            rel = relative_shared_path(entry)
-            s = settings_map.get(rel)
             
-            # Keyword checks
+            is_lnk = entry.suffix.lower() == ".lnk"
+            resolved_target = None
+            if is_lnk:
+                resolved_target = resolve_shortcut(entry)
+                
+            target_path = resolved_target if resolved_target else entry
+            is_dir = target_path.is_dir()
+            size = 0 if is_dir else target_path.stat().st_size
+            
+            rel = relative_shared_path(entry)
+            
+            # Keyword checks on virtual path
+            s = settings_map.get(rel.lower())
             k_locked = any(piece in settings.pin_keyword_set for piece in rel.split("/") if piece)
             k_adult = any(piece in settings.adult_keyword_set for piece in rel.split("/") if piece)
             
             is_locked = parent_locked or k_locked or (s.is_locked if s else False)
             is_adult = parent_adult or k_adult or (s.is_adult if s else False)
+            
+            if is_lnk and resolved_target:
+                # Retrieve and propagate target's locks and R18 statuses
+                if await is_path_locked(sess, resolved_target):
+                    is_locked = True
+                if await is_path_adult(sess, resolved_target):
+                    is_adult = True
+
+            media_rel = rel
+            if is_lnk and resolved_target and not is_dir:
+                media_rel = (Path(rel).parent / (Path(rel).stem + resolved_target.suffix)).as_posix()
 
             items.append({
                 "name": entry.name,
                 "path": rel,
-                "is_dir": entry.is_dir(),
-                "size": 0 if entry.is_dir() else entry.stat().st_size,
-                "modified_at": datetime.fromtimestamp(entry.stat().st_mtime),
+                "is_dir": is_dir,
+                "size": size,
+                "modified_at": datetime.fromtimestamp(target_path.stat().st_mtime),
                 "locked": is_locked,
                 "adult_only": is_adult,
-                "media": rel in media_map,
-                "media_id": media_map.get(rel),
+                "media": media_rel in media_map or (is_media_file(target_path) if is_lnk else False),
+                "media_id": media_map.get(media_rel),
             })
 
     if session:

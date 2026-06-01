@@ -12,9 +12,12 @@ from core.schemas import (
     PlaylistCreate,
     PlaylistDetailRead,
     PlaylistItemAdd,
+    PlaylistPlayResponse,
     PlaylistRead,
+    PlaylistReorderRequest,
 )
 from core.security import get_current_user
+from core.media import is_media_accessible
 
 router = APIRouter()
 
@@ -30,10 +33,16 @@ async def list_playlists(
     )
     playlists = result.scalars().all()
     out = []
+    from core.media import apply_media_security_filters
     for pl in playlists:
-        count_result = await session.execute(
-            select(func.count()).select_from(PlaylistItem).where(PlaylistItem.playlist_id == pl.id)
+        count_stmt = (
+            select(func.count())
+            .select_from(PlaylistItem)
+            .join(MediaMetadata, PlaylistItem.media_id == MediaMetadata.id)
+            .where(PlaylistItem.playlist_id == pl.id)
         )
+        count_stmt = await apply_media_security_filters(session, count_stmt, current_user)
+        count_result = await session.execute(count_stmt)
         count = count_result.scalar() or 0
         out.append(PlaylistRead(
             id=pl.id,
@@ -94,7 +103,7 @@ async def get_playlist(
     media_items = []
     for item in items:
         media = await session.get(MediaMetadata, item.media_id)
-        if media:
+        if media and await is_media_accessible(session, media, current_user):
             media_items.append(MediaRead.model_validate(media))
 
     owner = await session.get(User, playlist.owner_user_id)
@@ -177,3 +186,60 @@ async def remove_item_from_playlist(
     await session.delete(item)
     await session.commit()
     return MessageResponse(message="Item removed from playlist.")
+
+
+@router.put("/{playlist_id}/reorder", response_model=MessageResponse)
+async def reorder_playlist(
+    playlist_id: int,
+    payload: PlaylistReorderRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Reorder items in a playlist by providing the item IDs in desired order."""
+    playlist = await session.get(Playlist, playlist_id)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if playlist.owner_user_id != current_user.id and current_user.role not in ("admin", "super-admin"):
+        raise HTTPException(status_code=403, detail="Not your playlist.")
+
+    for position, item_id in enumerate(payload.item_ids):
+        item = await session.get(PlaylistItem, item_id)
+        if item and item.playlist_id == playlist_id:
+            item.position = position
+
+    await session.commit()
+    return MessageResponse(message="Playlist reordered.")
+
+
+@router.post("/{playlist_id}/play", response_model=PlaylistPlayResponse)
+async def play_playlist(
+    playlist_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: AsyncSession = Depends(get_db),
+    start_index: int = 0,
+) -> PlaylistPlayResponse:
+    """Get all media items in order for sequential playback."""
+    playlist = await session.get(Playlist, playlist_id)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if playlist.owner_user_id != current_user.id and current_user.role not in ("admin", "super-admin"):
+        raise HTTPException(status_code=403, detail="Not your playlist.")
+
+    result = await session.execute(
+        select(PlaylistItem)
+        .where(PlaylistItem.playlist_id == playlist_id)
+        .order_by(PlaylistItem.position)
+    )
+    items = result.scalars().all()
+
+    media_items = []
+    for item in items:
+        media = await session.get(MediaMetadata, item.media_id)
+        if media and await is_media_accessible(session, media, current_user):
+            media_items.append(MediaRead.model_validate(media))
+
+    return PlaylistPlayResponse(
+        playlist_id=playlist_id,
+        items=media_items,
+        current_index=min(start_index, max(0, len(media_items) - 1)),
+    )

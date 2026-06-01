@@ -84,7 +84,7 @@ async def create_request(
     return MessageResponse(message="Request submitted successfully.")
 
 
-@router.post("/{request_id}/action", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
+@router.post("/{request_id}/action", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "super-admin"))])
 async def take_action(
     request_id: int,
     payload: AccessRequestAction,
@@ -108,9 +108,19 @@ async def take_action(
             if user:
                 user.is_adult = True
         elif request.request_type == "folder_access":
-            # For folder access, we could add a Permission entry here if needed.
-            # Currently, the Permission model is media-specific.
-            pass
+            from core.models import FolderPermission
+            target_path_lower = (request.target_path or "").lower()
+            stmt = select(FolderPermission).where(
+                FolderPermission.user_id == request.user_id,
+                FolderPermission.folder_path == target_path_lower
+            )
+            existing_perm = (await session.execute(stmt)).scalar_one_or_none()
+            if not existing_perm:
+                session.add(FolderPermission(
+                    user_id=request.user_id,
+                    folder_path=target_path_lower,
+                    can_view=True
+                ))
             
     await session.commit()
 

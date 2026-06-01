@@ -70,6 +70,9 @@ async def get_current_user(
         token = request.query_params.get("token")
         
     if not token:
+        token = request.cookies.get(settings.session_cookie_name)
+        
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -83,6 +86,23 @@ async def get_current_user(
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Check token blacklist (enforces logout)
+    try:
+        from core.runtime_state import is_token_revoked
+        jti = payload.get("jti") or token[-16:]
+        if await is_token_revoked(jti):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except ImportError:
+        pass  # Graceful degradation if runtime_state is unavailable
+    except HTTPException:
+        raise  # Re-raise the 401
+    except Exception:
+        pass  # Cache unavailable — allow through
     
     username: str = payload.get("sub")
     if username is None:
@@ -100,6 +120,9 @@ async def get_current_user(
             detail="User not found",
         )
     
+    if request.headers.get("x-disable-r18") == "true" or request.query_params.get("disable_r18") == "true":
+        user.is_adult = False
+        
     return user
 
 

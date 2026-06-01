@@ -42,8 +42,13 @@ def setup_logging():
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
     
+    # Add file handler to uvicorn loggers to ensure they rotate automatically too!
+    for uvicorn_logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv_logger = logging.getLogger(uvicorn_logger_name)
+        uv_logger.handlers = [file_handler, console_handler]
+        uv_logger.propagate = False
+
     # Suppress noisy library logs if needed
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 

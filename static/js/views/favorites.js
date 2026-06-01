@@ -29,8 +29,14 @@ export class FavoritesView {
             </div>
             
             <div id="favorites-grid-container">
-                <div id="favorites-grid" class="gallery-grid">
-                    <div class="loading-state"><div class="spinner"></div> Loading favorites...</div>
+                <div class="skeleton-grid">
+                    ${Array(8).fill().map(() => `
+                        <div class="skeleton-card">
+                            <div class="skeleton-poster shimmer-bg"></div>
+                            <div class="skeleton-title shimmer-bg"></div>
+                            <div class="skeleton-meta shimmer-bg"></div>
+                        </div>
+                    `).join('')}
                 </div>
             </div>
         `;

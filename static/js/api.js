@@ -7,7 +7,10 @@ export class ApiError extends Error {
 }
 
 export class ApiClient {
-  constructor() { this.token = ""; }
+  constructor() {
+    this.token = "";
+    this.inFlight = new Map();
+  }
 
   setToken(token) { this.token = token || ""; }
 
@@ -22,35 +25,67 @@ export class ApiClient {
 
   async request(path, options = {}) {
     const { headers: rawHeaders, json, query, ...requestOptions } = options;
-    const headers = new Headers(rawHeaders || {});
-    if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
-    if (json !== undefined) headers.set("Content-Type", "application/json");
+    const method = (options.method || "GET").toUpperCase();
+    const isMutation = method !== "GET" && method !== "HEAD";
+    const cacheKey = isMutation ? `${method}:${path}:${JSON.stringify(json || "")}:${JSON.stringify(query || "")}` : null;
 
-    const response = await fetch(this.buildPath(path, query), {
-      ...requestOptions,
-      headers,
-      body: json !== undefined ? JSON.stringify(json) : requestOptions.body,
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        window.dispatchEvent(new CustomEvent("mediahub-unauthorized"));
-      }
-      let detail = "Request failed.";
-      try {
-        const body = await response.json();
-        if (Array.isArray(body.detail)) {
-          detail = body.detail.map(e => `${e.loc[e.loc.length - 1]}: ${e.msg}`).join(', ');
-        } else {
-          detail = body.detail || detail;
-        }
-      } catch { }
-      throw new ApiError(detail, response.status);
+    if (isMutation && this.inFlight.has(cacheKey)) {
+      return this.inFlight.get(cacheKey);
     }
 
-    if (response.status === 204) return null;
-    const ct = response.headers.get("content-type") || "";
-    return ct.includes("application/json") ? response.json() : response.text();
+    const promise = (async () => {
+      const headers = new Headers(rawHeaders || {});
+      if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+      if (json !== undefined) headers.set("Content-Type", "application/json");
+      if (sessionStorage.getItem('r18_enabled') === 'false') {
+        headers.set("X-Disable-R18", "true");
+      }
+
+      if (isMutation) {
+        if (!headers.has("Idempotency-Key") && !headers.has("X-Idempotency-Key")) {
+          const idKey = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
+          headers.set("Idempotency-Key", idKey);
+        }
+      }
+
+      try {
+        const response = await fetch(this.buildPath(path, query), {
+          ...requestOptions,
+          headers,
+          body: json !== undefined ? JSON.stringify(json) : requestOptions.body,
+        });
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            window.dispatchEvent(new CustomEvent("mediahub-unauthorized"));
+          }
+          let detail = "Request failed.";
+          try {
+            const body = await response.json();
+            if (Array.isArray(body.detail)) {
+              detail = body.detail.map(e => `${e.loc[e.loc.length - 1]}: ${e.msg}`).join(', ');
+            } else {
+              detail = body.detail || detail;
+            }
+          } catch { }
+          throw new ApiError(detail, response.status);
+        }
+
+        if (response.status === 204) return null;
+        const ct = response.headers.get("content-type") || "";
+        return ct.includes("application/json") ? response.json() : response.text();
+      } finally {
+        if (isMutation) {
+          this.inFlight.delete(cacheKey);
+        }
+      }
+    })();
+
+    if (isMutation) {
+      this.inFlight.set(cacheKey, promise);
+    }
+
+    return promise;
   }
 
   // === Auth ===
@@ -64,8 +99,10 @@ export class ApiClient {
   me() { return this.request("/api/auth/me"); }
 
   // === Media ===
-  getLibrary() { return this.request("/api/media/library"); }
+  getLibrary(params = {}) { return this.request("/api/media/library", { query: params }); }
   getSmartHome() { return this.request("/api/media/smart/home"); }
+  getHeroContent() { return this.request("/api/media/home/hero"); }
+  getHomeRows(offset = 0) { return this.request("/api/media/home/rows", { query: { offset } }); }
   getSearch(q) { return this.request("/api/media/search", { query: { q } }); }
   async stream(mediaId, pin = "") {
     const res = await this.request(`/api/media/${mediaId}/stream`, { query: { pin } });
@@ -80,6 +117,11 @@ export class ApiClient {
   getFavorites() { return this.request("/api/media/favorites"); }
   deleteMedia(mediaId) { return this.request(`/api/media/${mediaId}`, { method: "DELETE" }); }
   renameMedia(mediaId, title) { return this.request(`/api/media/${mediaId}/rename`, { method: "POST", json: { title } }); }
+  getScanStatus() { return this.request("/api/media/scan-status"); }
+  optimizeDatabase() { return this.request("/api/system/optimize", { method: "POST" }); }
+  clearHLSCache() { return this.request("/api/system/clear-hls", { method: "POST" }); }
+  clearThumbsCache() { return this.request("/api/system/clear-thumbs", { method: "POST" }); }
+  getRecentErrors() { return this.request("/api/system/recent-errors"); }
 
 
   // === History & Continue ===

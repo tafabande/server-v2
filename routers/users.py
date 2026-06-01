@@ -140,7 +140,7 @@ async def update_own_profile(
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Update your own profile (bio, avatar, theme)."""
+    """Update your own profile (bio, avatar, theme, PIN)."""
     if payload.bio:
         current_user.bio = payload.bio
     if payload.avatar_url:
@@ -152,6 +152,14 @@ async def update_own_profile(
     if payload.language:
         prefs["language"] = payload.language
     current_user.preferences = prefs
+
+    if payload.pin is not None:
+        if payload.pin == "":
+            current_user.pin = None
+        else:
+            if len(payload.pin) < 4 or len(payload.pin) > 12:
+                raise HTTPException(status_code=400, detail="PIN must be between 4 and 12 characters.")
+            current_user.pin = get_password_hash(payload.pin)
 
     await session.commit()
     return MessageResponse(message="Profile updated.")

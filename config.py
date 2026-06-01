@@ -58,6 +58,7 @@ class Settings:
     logs_folder: Path
     temp_folder: Path
     hls_folder: Path
+    sprites_folder: Path
     allow_signup: bool
     default_admin_username: str
     default_admin_password: str
@@ -95,6 +96,7 @@ class Settings:
             logs_folder=_env_path("LOGS_FOLDER", data_dir / "logs"),
             temp_folder=_env_path("TEMP_FOLDER", data_dir / "temp"),
             hls_folder=_env_path("HLS_FOLDER", data_dir / "temp" / "hls"),
+            sprites_folder=_env_path("SPRITES_FOLDER", data_dir / "sprites"),
             allow_signup=_env_bool("ALLOW_SIGNUP", False),
             default_admin_username=os.getenv("DEFAULT_ADMIN_USERNAME", "admin"),
             default_admin_password=os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123"),
@@ -122,6 +124,7 @@ class Settings:
             self.logs_folder,
             self.temp_folder,
             self.hls_folder,
+            self.sprites_folder,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class MessageResponse(BaseModel):
@@ -59,9 +59,18 @@ class MediaRead(BaseModel):
     hls_status: str
     requires_pin: bool
     adult_only: bool
+    intro_start: float | None = None
+    intro_end: float | None = None
     is_favorite: bool = False
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def secure_thumbnail(self) -> "MediaRead":
+        if self.thumbnail_path and not self.thumbnail_path.startswith("/api/"):
+            self.thumbnail_path = f"/api/media/{self.id}/thumbnail"
+        return self
 
 
 class MediaGroup(BaseModel):
@@ -72,6 +81,7 @@ class MediaGroup(BaseModel):
 class StreamResponse(BaseModel):
     mode: str
     url: str
+    qualities: list[str] | None = None
 
 
 class PlayEventCreate(BaseModel):
@@ -138,6 +148,7 @@ class ProfileUpdateRequest(BaseModel):
     bio: str = Field(default="", max_length=280)
     language: str = Field(default="en", max_length=20)
     theme: str = Field(default="default", max_length=40)
+    pin: str | None = Field(default=None, max_length=12)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -347,3 +358,166 @@ class SmartHomeResponse(BaseModel):
     recently_added: list[MediaRead]
     trending: list[MediaRead]
     recommendations: list[MediaRead]
+
+
+# --- Pagination ---
+
+class PaginatedResponse(BaseModel):
+    """Generic paginated response wrapper."""
+    items: list = []
+    total: int = 0
+    page: int = 1
+    per_page: int = 50
+    pages: int = 1
+
+
+class PaginatedMediaResponse(BaseModel):
+    items: list[MediaRead] = []
+    total: int = 0
+    page: int = 1
+    per_page: int = 50
+    pages: int = 1
+
+
+class PaginatedAuditResponse(BaseModel):
+    items: list[AuditLogRead] = []
+    total: int = 0
+    page: int = 1
+    per_page: int = 50
+    pages: int = 1
+
+
+# --- File Operations ---
+
+class MkdirRequest(BaseModel):
+    path: str
+    name: str = Field(min_length=1, max_length=255)
+
+
+# --- Playlist Operations ---
+
+class PlaylistReorderRequest(BaseModel):
+    """List of item IDs in the desired order."""
+    item_ids: list[int]
+
+
+class PlaylistPlayResponse(BaseModel):
+    """Response when starting playlist playback."""
+    playlist_id: int
+    items: list[MediaRead] = []
+    current_index: int = 0
+
+
+# --- Scan Status ---
+
+class ScanStatusResponse(BaseModel):
+    scanning: bool = False
+    files_scanned: int = 0
+    files_total: int = 0
+    progress_percent: float = 0.0
+    last_scan_at: str | None = None
+
+
+# --- Subtitle ---
+
+class SubtitleRead(BaseModel):
+    id: int
+    media_id: int
+    file_path: str
+    language: str
+    label: str | None = None
+    auto_matched: bool = False
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubtitleUploadResponse(BaseModel):
+    subtitle: SubtitleRead
+    message: str
+
+
+# --- Rating ---
+
+class RatingCreate(BaseModel):
+    score: int = Field(ge=1, le=5)
+
+
+class RatingRead(BaseModel):
+    id: int
+    user_id: int
+    media_id: int
+    score: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MediaRatingResponse(BaseModel):
+    average_score: float = 0.0
+    total_ratings: int = 0
+    user_rating: int | None = None
+
+
+# --- Collection ---
+
+class CollectionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=1000)
+
+
+class CollectionRead(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    poster_url: str | None = None
+    item_count: int = 0
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CollectionDetailRead(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    poster_url: str | None = None
+    items: list[MediaRead] = []
+    created_at: datetime
+
+
+class CollectionItemAdd(BaseModel):
+    media_id: int
+    sort_order: int = 0
+
+
+class BulkAdultFlagRequest(BaseModel):
+    media_ids: list[int]
+    adult_only: bool
+
+
+class HeroResponse(BaseModel):
+    id: int
+    title: str
+    backdrop: str
+    synopsis: str
+    year: int | None = None
+    duration: float | None = None
+    resume_position: float = 0.0
+    type: str
+
+
+class HomeItemRead(BaseModel):
+    id: int
+    title: str
+    poster: str
+    year: int | None = None
+    progress: float | None = None
+    duration: float | None = None
+
+
+class HomeRowResponse(BaseModel):
+    title: str
+    items: list[HomeItemRead]
+    type: str
+

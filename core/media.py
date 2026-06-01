@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import BASE_DIR, get_settings
 from core.exceptions import FileOperationError, ResourceNotFoundError
 from core.logging import get_logger
-from core.models import AuditLog, FolderSetting, MediaMetadata, PlayEvent
+from core.models import AuditLog, FolderSetting, MediaMetadata, PlayEvent, User
 from core.storage import is_media_file, is_path_adult, is_path_locked, relative_shared_path, resolve_shared_path
 
 
@@ -25,6 +25,30 @@ DIRECT_STREAM_EXTENSIONS = {".mp4", ".m4v", ".webm"}
 # Global locks to prevent redundant FFmpeg processes
 _active_transcodes: set[int] = set()
 _transcode_events: dict[int, asyncio.Event] = {}
+# Active FFmpeg processes registry for leak safeguards
+_active_processes: dict[int, asyncio.subprocess.Process] = {}
+
+# Scan progress tracking
+_scan_state = {
+    "scanning": False,
+    "files_scanned": 0,
+    "files_total": 0,
+    "last_scan_at": None,
+}
+
+
+def get_scan_status() -> dict:
+    """Return current scan progress."""
+    total = _scan_state["files_total"]
+    scanned = _scan_state["files_scanned"]
+    progress = (scanned / total * 100) if total > 0 else 0.0
+    return {
+        "scanning": _scan_state["scanning"],
+        "files_scanned": scanned,
+        "files_total": total,
+        "progress_percent": round(progress, 1),
+        "last_scan_at": _scan_state["last_scan_at"],
+    }
 
 
 def clean_title(path: Path) -> str:
@@ -175,6 +199,74 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str) -> str:
     return f"/thumbs/{destination.name}"
 
 
+# ── Sprite Sheet (Hover Preview Thumbnails) ────────────────────────────────────
+SPRITE_THUMB_W = 160
+SPRITE_THUMB_H = 90
+SPRITE_COLUMNS = 10
+SPRITE_INTERVAL = 5   # seconds between frames
+
+
+def sprite_path_for(media_id: int) -> Path:
+    return settings.sprites_folder / f"sprite_{media_id}.jpg"
+
+
+def build_sprite_sheet(source_path: Path, media_id: int) -> dict | None:
+    """
+    Generate a tiled JPEG sprite sheet for hover-preview thumbnails.
+    One frame every SPRITE_INTERVAL seconds, SPRITE_COLUMNS wide.
+    Returns metadata dict on success, None on failure.
+    """
+    destination = sprite_path_for(media_id)
+    if destination.exists():
+        return _sprite_meta(destination, media_id)
+
+    if not ffmpeg_available():
+        return None
+
+    vf = (
+        f"fps=1/{SPRITE_INTERVAL},"
+        f"scale={SPRITE_THUMB_W}:{SPRITE_THUMB_H},"
+        f"tile={SPRITE_COLUMNS}x"
+    )
+    command = [
+        settings.ffmpeg_path,
+        "-y",
+        "-i", str(source_path),
+        "-vf", vf,
+        "-q:v", "5",
+        str(destination),
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0 and destination.exists():
+            logger.info(f"Generated sprite sheet for media {media_id}")
+            return _sprite_meta(destination, media_id)
+        logger.error(f"Sprite generation failed for {media_id}: {result.stderr[-500:]}")
+    except subprocess.TimeoutExpired:
+        logger.error(f"Sprite generation timed out for media {media_id}")
+    except FileNotFoundError:
+        logger.error("FFmpeg not found during sprite sheet generation")
+    return None
+
+
+def _sprite_meta(path: Path, media_id: int) -> dict:
+    return {
+        "url": f"/api/media/sprites-secure/{media_id}",
+        "thumb_w": SPRITE_THUMB_W,
+        "thumb_h": SPRITE_THUMB_H,
+        "columns": SPRITE_COLUMNS,
+        "interval": SPRITE_INTERVAL,
+    }
+
+
+def get_sprite_info(media_id: int) -> dict | None:
+    """Return sprite metadata if the sheet already exists, else None."""
+    path = sprite_path_for(media_id)
+    if path.exists():
+        return _sprite_meta(path, media_id)
+    return None
+
+
 def probe_media(path: Path) -> dict:
     if not ffprobe_available():
         return {}
@@ -257,6 +349,9 @@ def get_all_media_files(root: Path, base_relative: str = "") -> list[tuple[Path,
 
 async def scan_media_library(session: AsyncSession) -> int:
     logger.info("Starting media library discovery and indexing...")
+    _scan_state["scanning"] = True
+    _scan_state["files_scanned"] = 0
+    _scan_state["files_total"] = 0
     indexed = 0
     seen_paths: set[str] = set()
 
@@ -265,16 +360,32 @@ async def scan_media_library(session: AsyncSession) -> int:
     existing_map = {m.relative_path: m for m in result.scalars()}
     
     fs_result = await session.execute(select(FolderSetting))
-    folder_settings_map = {s.path: s for s in fs_result.scalars()}
+    folder_settings_map = {s.path.lower(): s for s in fs_result.scalars() if s.path}
 
-    for target_path, virtual_rel in get_all_media_files(settings.shared_folder):
+    media_files = await asyncio.to_thread(get_all_media_files, settings.shared_folder)
+    _scan_state["files_total"] = len(media_files)
+
+    for target_path, virtual_rel in media_files:
         logger.debug(f"Processing file during scan: {target_path.name}")
         seen_paths.add(virtual_rel)
         media = existing_map.get(virtual_rel)
         stat = target_path.stat()
         title = clean_title(target_path)
-        thumbnail = build_thumbnail(target_path, virtual_rel, title)
-        probe = probe_media(target_path)
+        
+        # Performance optimization: if size is unchanged and duration is indexed, bypass heavy probe/thumbnail operations
+        if media and media.file_size == stat.st_size and media.duration_seconds:
+            thumbnail = media.thumbnail_path
+            probe = {
+                "width": media.width,
+                "height": media.height,
+                "bitrate": media.bitrate,
+                "video_codec": media.video_codec,
+                "audio_codec": media.audio_codec,
+                "duration_seconds": media.duration_seconds
+            }
+        else:
+            thumbnail = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title)
+            probe = await asyncio.to_thread(probe_media, target_path)
 
         if not media:
             media = MediaMetadata(relative_path=virtual_rel, path=str(target_path.resolve()))
@@ -298,7 +409,7 @@ async def scan_media_library(session: AsyncSession) -> int:
             virtual_parts.append(current)
 
         # Check cached settings for this file's folder(s)
-        db_settings = [folder_settings_map[p] for p in virtual_parts if p in folder_settings_map]
+        db_settings = [folder_settings_map[p.lower()] for p in virtual_parts if p.lower() in folder_settings_map]
         
         db_locked = any(s.is_locked for s in db_settings)
         db_adult = any(s.is_adult for s in db_settings)
@@ -315,6 +426,7 @@ async def scan_media_library(session: AsyncSession) -> int:
         media.audio_codec = probe.get("audio_codec")
         media.duration_seconds = probe.get("duration_seconds")
         indexed += 1
+        _scan_state["files_scanned"] = indexed
 
     result = await session.execute(select(MediaMetadata))
     for media in result.scalars():
@@ -322,16 +434,17 @@ async def scan_media_library(session: AsyncSession) -> int:
             await session.delete(media)
 
     await session.commit()
+    _scan_state["scanning"] = False
+    _scan_state["last_scan_at"] = datetime.now(UTC).isoformat()
     logger.info(f"Scan complete. Indexed {indexed} items.")
     from core.webhooks import trigger_webhook
     await trigger_webhook("library.updated", {"indexed_count": indexed})
     return indexed
 
 
-async def library_groups(session: AsyncSession, is_adult: bool = False) -> list[dict]:
+async def library_groups(session: AsyncSession, current_user: User) -> list[dict]:
     query = select(MediaMetadata).order_by(MediaMetadata.category, MediaMetadata.title)
-    if not is_adult:
-        query = query.where(MediaMetadata.adult_only == False)
+    query = await apply_media_security_filters(session, query, current_user)
         
     result = await session.execute(query)
     groups: dict[str, list[MediaMetadata]] = {}
@@ -350,12 +463,57 @@ async def get_media(session: AsyncSession, media_id: int) -> MediaMetadata:
 
 
 def media_source_path(media: MediaMetadata) -> Path:
-    return Path(media.path)
+    from core.storage import resolve_shared_path
+    return resolve_shared_path(media.relative_path)
 
 
-def build_hls_command(source_path: Path, output_dir: Path) -> list[str]:
-    manifest = output_dir / "index.m3u8"
+async def detect_intro_for_media(media_path: Path) -> tuple[float, float]:
+    """
+    Detect intro start and end using FFmpeg scene detection on the first 3 minutes.
+    Falls back to a default range (30.0, 90.0) if detection fails or finds no clear intro.
+    """
+    import subprocess
+    import re
     
+    settings = get_settings()
+    cmd = [
+        settings.ffmpeg_path,
+        "-ss", "0",
+        "-t", "180",
+        "-i", str(media_path),
+        "-filter_complex", "select='gt(scene,0.4)',metadata=print",
+        "-f", "null",
+        "-"
+    ]
+    
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        output = stderr.decode(errors="ignore")
+        
+        pts_times = []
+        for match in re.finditer(r'pts_time:(\d+\.?\d*)', output):
+            pts_times.append(float(match.group(1)))
+            
+        if len(pts_times) >= 2:
+            candidate_times = [t for t in pts_times if 10.0 <= t <= 120.0]
+            if len(candidate_times) >= 2:
+                intro_start = min(candidate_times)
+                intro_end = max(candidate_times)
+                if 20.0 <= (intro_end - intro_start) <= 100.0:
+                    return round(intro_start, 2), round(intro_end, 2)
+                    
+        return 30.0, 90.0
+    except Exception as e:
+        logger.warning(f"Intro detection failed for {media_path}: {e}. Using fallback.")
+        return 30.0, 90.0
+
+
+def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict], media: MediaMetadata) -> list[str]:
     # Check for Hardware Acceleration
     has_nvenc = False
     has_qsv = False
@@ -368,45 +526,77 @@ def build_hls_command(source_path: Path, output_dir: Path) -> list[str]:
 
     video_encoder = "h264_nvenc" if has_nvenc else ("h264_qsv" if has_qsv else "libx264")
     preset = "p1" if has_nvenc else ("veryfast" if has_qsv else "ultrafast")
-    
-    # Smoothness Optimization:
-    # 1. Standardized GOP (Group of Pictures) structure ensures seamless segment transitions.
-    # 2. Increased segment duration (6s) reduces request overhead for smoother VOD.
-    # 3. Bitrate floor and cap prevent drastic quality swings.
-    
+
     hw_args = []
     if has_nvenc:
         hw_args = ["-hwaccel", "cuda"]
     elif has_qsv:
         hw_args = ["-hwaccel", "qsv"]
 
-    return [
+    num_profiles = len(profiles)
+    v_splits = "".join(f"[v{i}]" for i in range(num_profiles))
+    filter_parts = [f"[0:v]split={num_profiles}{v_splits}"]
+    
+    for i, p in enumerate(profiles):
+        filter_parts.append(f"[v{i}]scale=w={p['width']}:h={p['height']}[v{i}out]")
+    
+    filter_complex = "; ".join(filter_parts)
+
+    cmd = [
         settings.ffmpeg_path,
         "-y",
         *hw_args,
         "-i", str(source_path),
-        "-c:v", video_encoder,
-        "-preset", preset,
-        "-tune", "zerolatency",
-        "-b:v", "6000k",
-        "-maxrate", "9000k",
-        "-bufsize", "12000k",
-        "-g", "120", # GOP size of 2x hls_time (60fps assumed max) or fixed interval
-        "-keyint_min", "60",
-        "-sc_threshold", "0", # Force keyframes at segment boundaries
-        "-c:a", "aac", 
-        "-b:a", "192k",
+        "-filter_complex", filter_complex,
+    ]
+
+    # Map each video output
+    for i, p in enumerate(profiles):
+        cmd.extend([
+            "-map", f"[v{i}out]",
+            f"-c:v:{i}", video_encoder,
+            f"-preset:v:{i}", preset,
+            f"-b:v:{i}", p["bitrate"],
+            f"-maxrate:v:{i}", p.get("maxrate", p["bitrate"]),
+            f"-bufsize:v:{i}", p.get("bufsize", "12000k"),
+        ])
+
+    has_audio = bool(media.audio_codec)
+    if has_audio:
+        cmd.extend([
+            "-map", "0:a",
+            "-c:a", "aac",
+            "-b:a", "192k",
+        ])
+
+    cmd.extend([
         "-f", "hls",
-        "-hls_time", "6", 
+        "-hls_time", "6",
         "-hls_playlist_type", "vod",
         "-hls_flags", "independent_segments",
         "-hls_segment_type", "fmp4",
-        "-hls_segment_filename", str(output_dir / "data%03d.m4s"),
-        str(output_dir / "master.m3u8"),
-    ]
+        "-master_pl_name", "master.m3u8",
+    ])
+
+    stream_map_parts = []
+    for i in range(num_profiles):
+        if has_audio:
+            stream_map_parts.append(f"v:{i},a:0")
+        else:
+            stream_map_parts.append(f"v:{i}")
+    var_stream_map = " ".join(stream_map_parts)
+
+    cmd.extend([
+        "-var_stream_map", var_stream_map,
+        "-hls_segment_filename", str(output_dir / "stream_%v" / "data%03d.m4s"),
+        str(output_dir / "stream_%v" / "index.m3u8"),
+    ])
+
+    return cmd
 
 
 async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, priority: bool = False) -> Path:
+    from core.exceptions import MediaHubError
     output_dir = hls_output_dir(media.id)
     master_manifest = output_dir / "master.m3u8"
     
@@ -423,16 +613,30 @@ async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, prior
         logger.error("FFmpeg not found in path")
         raise MediaHubError("FFmpeg is required for transcoding but is missing.", status_code=500)
 
+    # Fetch profiles using the session
+    from core.system import get_setting
+    profiles = await get_setting(session, "transcode_profiles", [])
+    if not profiles:
+        profiles = [
+            {"name": "1080p", "width": 1920, "height": 1080, "bitrate": "6000k", "maxrate": "9000k", "bufsize": "12000k"},
+            {"name": "720p", "width": 1280, "height": 720, "bitrate": "3000k", "maxrate": "4500k", "bufsize": "6000k"},
+            {"name": "480p", "width": 854, "height": 480, "bitrate": "1000k", "maxrate": "1500k", "bufsize": "2000k"},
+        ]
+
     # Initialize event for others to wait on
     event = asyncio.Event()
     _transcode_events[media.id] = event
     _active_transcodes.add(media.id)
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Pre-create profile subdirectories so FFmpeg var_stream_map works smoothly
+    for i in range(len(profiles)):
+        (output_dir / f"stream_{i}").mkdir(parents=True, exist_ok=True)
+
     process = None
     try:
         logger.info(f"Starting ABR HLS transcoding for media ID {media.id} (priority: {priority})")
-        command = build_hls_command(media_source_path(media), output_dir)
+        command = build_hls_command(media_source_path(media), output_dir, profiles, media)
         
         # Windows-specific priority setting
         creation_flags = 0
@@ -444,10 +648,11 @@ async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, prior
 
         process = await asyncio.create_subprocess_exec(
             *command,
-            stdout=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
             creationflags=creation_flags if os.name == 'nt' else 0
         )
+        _active_processes[media.id] = process
         
         async def broadcast_logs(stream):
             from core.events import socket_manager
@@ -491,6 +696,7 @@ async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, prior
         event.set()
         _transcode_events.pop(media.id, None)
         _active_transcodes.discard(media.id)
+        _active_processes.pop(media.id, None)
         if process and process.returncode is None:
             try:
                 process.terminate()
@@ -503,8 +709,14 @@ async def build_stream_response(session: AsyncSession, media: MediaMetadata, pri
         return {
             "url": f"/api/media/{media.id}/file",
             "mode": "direct",
-            "media_id": media.id
+            "media_id": media.id,
+            "qualities": None
         }
+
+    # Fetch active transcode profiles
+    from core.system import get_setting
+    profiles = await get_setting(session, "transcode_profiles", [])
+    quality_names = [p["name"] for p in profiles] if profiles else ["1080p", "720p", "480p"]
 
     output_dir = hls_output_dir(media.id)
     manifest = output_dir / "master.m3u8"
@@ -512,9 +724,19 @@ async def build_stream_response(session: AsyncSession, media: MediaMetadata, pri
     if not manifest.exists():
         # Start the transcode in the background instead of waiting
         asyncio.create_task(ensure_hls_manifest(session, media, priority=priority))
-        return {"mode": "hls", "url": f"/temp/hls/{media.id}/master.m3u8", "status": "preparing"}
+        return {
+            "mode": "hls",
+            "url": f"/api/media/hls-secure/{media.id}/master.m3u8",
+            "status": "preparing",
+            "qualities": quality_names
+        }
 
-    return {"mode": "hls", "url": f"/temp/hls/{media.id}/master.m3u8", "status": "ready"}
+    return {
+        "mode": "hls",
+        "url": f"/api/media/hls-secure/{media.id}/master.m3u8",
+        "status": "ready",
+        "qualities": quality_names
+    }
 
 
 async def log_play_event(
@@ -627,11 +849,78 @@ async def watch_media_library():
         logger.warning("watchfiles not installed. Auto-rescan disabled.")
     except Exception as e:
         logger.error(f"Media watcher failed: {e}")
-async def get_smart_home_data(session: AsyncSession, user_id: int, is_adult: bool = False) -> dict:
+async def apply_media_security_filters(
+    session: AsyncSession,
+    stmt,
+    current_user: User,
+):
+    # 1. R18 / Adult Filter
+    if not current_user.is_adult:
+        stmt = stmt.where(MediaMetadata.adult_only == False)
+        
+    # 2. Locked Content Filter
+    if current_user.role not in ("admin", "super-admin"):
+        from sqlalchemy import exists, and_, or_
+        from core.models import FolderPermission
+        
+        perm_exists = exists().where(
+            and_(
+                FolderPermission.user_id == current_user.id,
+                FolderPermission.can_view == True,
+                or_(
+                    func.lower(MediaMetadata.relative_path) == func.lower(FolderPermission.folder_path),
+                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderPermission.folder_path) + "/%")
+                )
+            )
+        )
+        
+        stmt = stmt.where(
+            or_(
+                MediaMetadata.requires_pin == False,
+                perm_exists
+            )
+        )
+        
+    return stmt
+
+
+async def is_media_accessible(
+    session: AsyncSession,
+    media: MediaMetadata,
+    current_user: User,
+) -> bool:
+    # 1. R18 / Adult check
+    if media.adult_only and not current_user.is_adult:
+        return False
+        
+    # 2. Locked Content check
+    if media.requires_pin and current_user.role not in ("admin", "super-admin"):
+        from sqlalchemy import exists, and_, or_
+        from core.models import FolderPermission
+        
+        perm_exists = exists().where(
+            and_(
+                FolderPermission.user_id == current_user.id,
+                FolderPermission.can_view == True,
+                or_(
+                    func.lower(MediaMetadata.relative_path) == func.lower(FolderPermission.folder_path),
+                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderPermission.folder_path) + "/%")
+                )
+            )
+        )
+        stmt = select(1).where(MediaMetadata.id == media.id).where(perm_exists)
+        has_perm = (await session.execute(stmt)).scalar() is not None
+        if not has_perm:
+            return False
+            
+    return True
+
+
+async def get_smart_home_data(session: AsyncSession, current_user: User) -> dict:
     # 1. Continue Watching
     subq = (
         select(PlayEvent.media_id, func.max(PlayEvent.created_at).label("latest"))
-        .where(PlayEvent.user_id == user_id, PlayEvent.completed == False)
+        .where(PlayEvent.user_id == current_user.id, PlayEvent.completed == False)
         .group_by(PlayEvent.media_id)
         .subquery()
     )
@@ -643,9 +932,7 @@ async def get_smart_home_data(session: AsyncSession, user_id: int, is_adult: boo
         .order_by(PlayEvent.created_at.desc())
         .limit(12)
     )
-    
-    if not is_adult:
-        cw_query = cw_query.where(MediaMetadata.adult_only == False)
+    cw_query = await apply_media_security_filters(session, cw_query, current_user)
 
     cw_res = await session.execute(cw_query)
     continue_watching = [
@@ -658,8 +945,7 @@ async def get_smart_home_data(session: AsyncSession, user_id: int, is_adult: boo
 
     # 2. Recently Added
     ra_query = select(MediaMetadata).order_by(MediaMetadata.created_at.desc(), MediaMetadata.id.desc()).limit(12)
-    if not is_adult:
-        ra_query = ra_query.where(MediaMetadata.adult_only == False)
+    ra_query = await apply_media_security_filters(session, ra_query, current_user)
     
     ra_res = await session.execute(ra_query)
     recently_added = list(ra_res.scalars().all())
@@ -673,16 +959,14 @@ async def get_smart_home_data(session: AsyncSession, user_id: int, is_adult: boo
         .subquery()
     )
     t_query = select(MediaMetadata).join(t_subq, MediaMetadata.id == t_subq.c.media_id)
-    if not is_adult:
-        t_query = t_query.where(MediaMetadata.adult_only == False)
+    t_query = await apply_media_security_filters(session, t_query, current_user)
         
     t_res = await session.execute(t_query)
     trending = list(t_res.scalars().all())
 
     # 4. Recommendations (Random unwatched/unseen)
     rec_query = select(MediaMetadata).order_by(func.random()).limit(12)
-    if not is_adult:
-        rec_query = rec_query.where(MediaMetadata.adult_only == False)
+    rec_query = await apply_media_security_filters(session, rec_query, current_user)
         
     rec_res = await session.execute(rec_query)
     recommendations = list(rec_res.scalars().all())
@@ -691,8 +975,7 @@ async def get_smart_home_data(session: AsyncSession, user_id: int, is_adult: boo
     # fetch some items without strict ordering to ensure Home is not empty.
     if not recently_added:
         fallback_query = select(MediaMetadata).limit(24)
-        if not is_adult:
-            fallback_query = fallback_query.where(MediaMetadata.adult_only == False)
+        fallback_query = await apply_media_security_filters(session, fallback_query, current_user)
         fallback_res = await session.execute(fallback_query)
         recently_added = list(fallback_res.scalars().all())
 
@@ -702,3 +985,16 @@ async def get_smart_home_data(session: AsyncSession, user_id: int, is_adult: boo
         "trending": trending,
         "recommendations": recommendations,
     }
+
+
+async def cleanup_active_processes():
+    """Terminate and clean up all active transcoder/subprocesses to prevent leaks on shutdown."""
+    logger.info("Cleaning up active subprocesses...")
+    for media_id, proc in list(_active_processes.items()):
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await proc.wait()
+            except Exception as e:
+                logger.error(f"Error terminating process {media_id}: {e}")
+    _active_processes.clear()

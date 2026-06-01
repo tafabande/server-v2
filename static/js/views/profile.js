@@ -121,6 +121,28 @@ export class ProfileView {
                             <button type="submit" class="btn btn-sm">Change Password</button>
                         </form>
                     </div>
+
+                    <!-- Folder PIN Lock Config -->
+                    <div class="surface" style="margin-top: 24px; border-left: 3px solid var(--color-accent); background: rgba(99, 102, 241, 0.02);">
+                        <div class="section-title" style="display: flex; align-items: center; gap: 8px;">
+                            <span>🔐</span> Folder PIN Security
+                        </div>
+                        <p class="text-muted text-xs mb-sm">
+                            Configure your custom unlock PIN (4-12 digits). This PIN allows you to unlock PIN-protected folders and media files directly without requiring the master admin PIN.
+                        </p>
+                        <form id="pin-form">
+                            <div class="form-group">
+                                <label>${user.has_pin ? 'Update Custom PIN' : 'Setup Custom PIN'}</label>
+                                <input id="pin-value" class="input" type="password" placeholder="Enter 4-12 digits PIN" minlength="4" maxlength="12" pattern="[0-9]*" inputmode="numeric" required>
+                            </div>
+                            <div class="flex gap-sm items-center" style="display: flex; gap: 8px; align-items: center;">
+                                <button type="submit" class="btn btn-accent btn-sm">${user.has_pin ? 'Update PIN' : 'Save PIN'}</button>
+                                ${user.has_pin ? `
+                                    <button type="button" id="clear-pin-btn" class="btn btn-ghost btn-sm" style="color: var(--color-error); border: 1px solid rgba(239, 68, 68, 0.2);">Remove PIN</button>
+                                ` : ''}
+                            </div>
+                        </form>
+                    </div>
                 </div>
  
                 <!-- Sidebar -->
@@ -189,11 +211,44 @@ export class ProfileView {
 
         document.getElementById('profile-form').addEventListener('submit', (e) => this._updateProfile(e));
         document.getElementById('password-form').addEventListener('submit', (e) => this._changePassword(e));
+        
+        const pinForm = document.getElementById('pin-form');
+        if (pinForm) {
+            pinForm.addEventListener('submit', (e) => this._updatePin(e));
+        }
+        
+        const clearPinBtn = document.getElementById('clear-pin-btn');
+        if (clearPinBtn) {
+            clearPinBtn.addEventListener('click', () => this._clearPin());
+        }
+
         document.getElementById('logout-profile').addEventListener('click', () => {
             localStorage.removeItem('mediahub_token');
             localStorage.removeItem('mediahub_user');
             window.location.href = '/login';
         });
+
+        const themeSelect = document.getElementById('pref-theme');
+        if (themeSelect) {
+            themeSelect.addEventListener('change', async () => {
+                const selectedTheme = themeSelect.value;
+                try {
+                    await api.updateProfile({ theme: selectedTheme });
+                    
+                    // Update user in local storage
+                    const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+                    user.preferences = user.preferences || {};
+                    user.preferences.theme = selectedTheme;
+                    localStorage.setItem('mediahub_user', JSON.stringify(user));
+                    
+                    // Apply theme immediately
+                    document.documentElement.setAttribute('data-theme', selectedTheme);
+                    toast('Theme updated', 'success');
+                } catch (err) {
+                    toast(err.message || 'Failed to update theme', 'error');
+                }
+            });
+        }
 
         document.getElementById('req-adult-btn')?.addEventListener('click', async () => {
             const { confirm } = await import('../utils.js');
@@ -243,6 +298,45 @@ export class ProfileView {
         } catch (err) {
             pwErr.textContent = err.message;
             pwErr.hidden = false;
+        }
+    }
+
+    async _updatePin(e) {
+        e.preventDefault();
+        const pinInput = document.getElementById('pin-value');
+        const pin = pinInput.value.trim();
+        
+        if (!pin) {
+            toast('Please enter a valid numeric PIN.', 'error');
+            return;
+        }
+        
+        if (!/^\d{4,12}$/.test(pin)) {
+            toast('PIN must be 4 to 12 digits numeric.', 'error');
+            return;
+        }
+        
+        try {
+            await api.updateProfile({ pin });
+            toast('Custom security PIN updated successfully.', 'success');
+            pinInput.value = '';
+            this.render();
+        } catch (err) {
+            toast(err.message || 'Failed to update PIN', 'error');
+        }
+    }
+
+    async _clearPin() {
+        const { confirm } = await import('../utils.js');
+        const yes = await confirm('Remove PIN Lock', 'Are you sure you want to delete your custom unlock PIN? You will need the master admin PIN to access locked paths.');
+        if (!yes) return;
+        
+        try {
+            await api.updateProfile({ pin: "" });
+            toast('Custom PIN removed.', 'success');
+            this.render();
+        } catch (err) {
+            toast(err.message || 'Failed to clear PIN', 'error');
         }
     }
 

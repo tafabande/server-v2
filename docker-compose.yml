@@ -9,15 +9,14 @@ services:
     ports:
       - "51733:51733"
     volumes:
-      # Absolute host path mappings for reliability
+      # Consolidated Host Mappings
       - ./shared_media:/app/shared_media:ro # Media is read-only for safety
-      - ./thumbs:/app/thumbs
-      - ./logs:/app/logs
-      - ./temp:/app/temp
-      - ./data:/app/data # Consolidate DB and app state
+      - ./data:/app/data # Consolidates DB, thumbs, logs, temp, HLS and sprites
       - ./.env:/app/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
+    networks:
+      - mediahub-net
     depends_on:
       - redis
 

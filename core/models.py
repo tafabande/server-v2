@@ -50,6 +50,8 @@ class MediaMetadata(Base):
     hls_status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
     requires_pin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     adult_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    intro_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    intro_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -62,6 +64,9 @@ class MediaMetadata(Base):
     playlist_items: Mapped[list["PlaylistItem"]] = relationship(back_populates="media", cascade="all, delete-orphan")
     permissions: Mapped[list["Permission"]] = relationship(back_populates="media", cascade="all, delete-orphan")
     favorites: Mapped[list["Favorite"]] = relationship(back_populates="media", cascade="all, delete-orphan")
+    subtitles: Mapped[list["Subtitle"]] = relationship(back_populates="media", cascade="all, delete-orphan")
+    ratings: Mapped[list["Rating"]] = relationship(back_populates="media", cascade="all, delete-orphan")
+    collection_items: Mapped[list["CollectionItem"]] = relationship(back_populates="media", cascade="all, delete-orphan")
 
 
 class PlayEvent(Base):
@@ -215,4 +220,79 @@ class Favorite(Base):
 
     user: Mapped[User] = relationship(back_populates="favorites")
     media: Mapped[MediaMetadata] = relationship(back_populates="favorites")
+
+
+class Subtitle(Base):
+    __tablename__ = "subtitles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(String(10), default="en", nullable=False)
+    label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    auto_matched: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    media: Mapped[MediaMetadata] = relationship(back_populates="subtitles")
+
+
+class Rating(Base):
+    __tablename__ = "ratings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[User] = relationship(backref="ratings")
+    media: Mapped[MediaMetadata] = relationship(back_populates="ratings")
+
+
+class Collection(Base):
+    __tablename__ = "collections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    poster_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    items: Mapped[list["CollectionItem"]] = relationship(back_populates="collection", cascade="all, delete-orphan")
+
+
+class CollectionItem(Base):
+    __tablename__ = "collection_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    collection_id: Mapped[int] = mapped_column(ForeignKey("collections.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    collection: Mapped[Collection] = relationship(back_populates="items")
+    media: Mapped[MediaMetadata] = relationship(back_populates="collection_items")
+
+
+class IdempotentRequest(Base):
+    __tablename__ = "idempotent_requests"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    response_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FolderPermission(Base):
+    __tablename__ = "folder_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    folder_path: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    can_view: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 

@@ -6,7 +6,7 @@ from core.database import get_db
 from core.events import broadcast_library_updated
 from core.media import log_audit, scan_media_library
 from core.models import FolderSetting, User
-from core.schemas import DeleteRequest, DirectoryListing, FolderSettingRead, FolderSettingUpdate, MessageResponse, RenameRequest
+from core.schemas import DeleteRequest, DirectoryListing, FolderSettingRead, FolderSettingUpdate, MessageResponse, MkdirRequest, RenameRequest
 from core.security import get_current_user, require_roles
 from core.storage import delete_path, ensure_pin_for_path, is_path_adult, list_directory, relative_shared_path, rename_path, resolve_shared_path, save_upload, settings
 
@@ -28,7 +28,7 @@ async def browse(
     session: AsyncSession = Depends(get_db),
 ) -> DirectoryListing:
     target = resolve_shared_path(path)
-    await ensure_pin_for_path(session, target, pin)
+    await ensure_pin_for_path(session, target, pin, current_user=current_user)
     
     # Check if user is trying to access an adult folder but is not adult
     if not current_user.is_adult and await is_path_adult(session, target):
@@ -53,10 +53,15 @@ async def upload(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     target_dir = resolve_shared_path(path)
-    await ensure_pin_for_path(session, target_dir, pin)
+    await ensure_pin_for_path(session, target_dir, pin, current_user=current_user)
+    
+    if not current_user.is_adult and await is_path_adult(session, target_dir):
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+        
     destination = await save_upload(path, upload_file)
     await refresh_library_view(session)
-    await log_audit(session, current_user.id, "upload", str(destination), {"filename": upload_file.filename})
+    await log_audit(session, current_user.id, "upload", relative_shared_path(destination), {"filename": upload_file.filename})
     return MessageResponse(message="Upload completed.")
 
 
@@ -68,7 +73,12 @@ async def rename(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     target = resolve_shared_path(payload.path)
-    await ensure_pin_for_path(session, target, pin)
+    await ensure_pin_for_path(session, target, pin, current_user=current_user)
+    
+    if not current_user.is_adult and await is_path_adult(session, target):
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+        
     destination = rename_path(payload.path, payload.new_name)
     await refresh_library_view(session)
     await log_audit(session, current_user.id, "rename", payload.path, {"new_name": destination.name})
@@ -83,11 +93,47 @@ async def remove(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     target = resolve_shared_path(payload.path)
-    await ensure_pin_for_path(session, target, pin)
+    await ensure_pin_for_path(session, target, pin, current_user=current_user)
+    
+    if not current_user.is_adult and await is_path_adult(session, target):
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+        
     deleted = delete_path(payload.path)
     await refresh_library_view(session)
-    await log_audit(session, current_user.id, "delete", payload.path, {"deleted_path": str(deleted)})
+    await log_audit(session, current_user.id, "delete", payload.path, {"deleted_path": relative_shared_path(deleted)})
     return MessageResponse(message="Delete completed.")
+
+
+@router.post("/mkdir", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "family"))])
+async def mkdir(
+    payload: MkdirRequest,
+    pin: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Create a new folder."""
+    target_dir = resolve_shared_path(payload.path)
+    await ensure_pin_for_path(session, target_dir, pin, current_user=current_user)
+    
+    if not current_user.is_adult and await is_path_adult(session, target_dir):
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+        
+    new_dir = (target_dir / payload.name).resolve()
+    
+    # Safety check: ensure it's within the resolved target parent directory
+    if target_dir.resolve() not in new_dir.parents:
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Cannot create folder outside parent directory.")
+    
+    if new_dir.exists():
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Folder already exists.")
+    
+    new_dir.mkdir(parents=True, exist_ok=True)
+    await log_audit(session, current_user.id, "mkdir", relative_shared_path(new_dir), {"name": payload.name})
+    return MessageResponse(message=f"Folder '{payload.name}' created.")
 
 
 @router.get("/settings", response_model=FolderSettingRead, dependencies=[Depends(get_current_user)])
@@ -97,7 +143,7 @@ async def get_folder_settings(
 ) -> FolderSettingRead:
     # Normalize path
     target = resolve_shared_path(path)
-    rel_path = relative_shared_path(target) if target != settings.shared_folder.resolve() else ""
+    rel_path = (relative_shared_path(target) if target != settings.shared_folder.resolve() else "").lower()
 
     result = await session.execute(select(FolderSetting).where(FolderSetting.path == rel_path))
     setting = result.scalar_one_or_none()
@@ -119,7 +165,7 @@ async def update_folder_settings(
     
     # Normalize path
     target = resolve_shared_path(path)
-    rel_path = relative_shared_path(target) if target != settings.shared_folder.resolve() else ""
+    rel_path = (relative_shared_path(target) if target != settings.shared_folder.resolve() else "").lower()
 
     result = await session.execute(select(FolderSetting).where(FolderSetting.path == rel_path))
     setting = result.scalar_one_or_none()

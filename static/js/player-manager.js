@@ -33,6 +33,16 @@ export class PlayerManager {
         
         this._lastProgressSecond = -1;
 
+        // Async play safety lock — prevents Promise abort errors on rapid clicks
+        this._playLock = false;
+
+        // requestAnimationFrame ID for silky-smooth progress bar (60fps)
+        this._rafId = null;
+
+        // Sprite sheet state for hover-preview thumbnails
+        this._sprite = null;  // { url, thumb_w, thumb_h, columns, interval }
+        this._spriteRetryTimer = null;
+
         this._bindElements();
         this._bindEvents();
         this._bindKeyboard();
@@ -41,6 +51,44 @@ export class PlayerManager {
         
         // Throttling for seek preview
         this._lastSeekUpdateTime = 0;
+        this._wasPlayingBeforeDrag = false;
+        
+        // Restore volume
+        const savedVol = localStorage.getItem('mediahub_volume');
+        if (savedVol !== null) {
+            this.setVolume(parseFloat(savedVol), true);
+        }
+
+        // Screen Wake Lock Sentinel
+        this.wakeLock = null;
+
+        // Auto re-acquire wake lock when returning to foreground while playing
+        document.addEventListener('visibilitychange', async () => {
+            if (this.modal && this.modal.open && this.video && !this.video.paused && document.visibilityState === 'visible') {
+                await this.requestWakeLock();
+            }
+        });
+
+        // Flush smart state progress immediately on tab/window unload via keepalive fetch
+        window.addEventListener('pagehide', () => {
+            if (this.modal && this.modal.open && this.currentMedia && this.video && this.video.currentTime > 5) {
+                const url = `/api/media/${this.currentMedia.id}/events`;
+                const payload = JSON.stringify({
+                    position_seconds: this.video.currentTime,
+                    completed: this.video.ended || (this.video.duration && this.video.currentTime / this.video.duration > 0.95),
+                    event_type: 'stop',
+                });
+                fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${api.token}`
+                    },
+                    body: payload,
+                    keepalive: true
+                }).catch(() => {});
+            }
+        });
     }
 
     _bindElements() {
@@ -59,6 +107,7 @@ export class PlayerManager {
         this.btnQueueToggle = document.getElementById('btn-queue-toggle');
         this.btnBack = document.getElementById('btn-back');
         this.btnSettings = document.getElementById('btn-settings');
+        this.btnFavorite = document.getElementById('btn-favorite');
         
         // Queue Sheet & Toast
         this.queueSheet = document.getElementById('queue-sheet');
@@ -78,12 +127,15 @@ export class PlayerManager {
 
         // Seek Preview Elements
         this.seekPreview = document.getElementById('seek-preview');
-        this.previewVideo = document.getElementById('preview-video');
+        this.previewFrame = document.getElementById('preview-frame');
         this.previewTimeDisplay = document.getElementById('seek-preview-time');
 
         // Volume
         this.volumeBar = document.getElementById('volume-bar');
         this.volumeSegments = this.volumeBar?.querySelectorAll('.volume-seg');
+        this.volumeSlider = document.getElementById('volume-slider');
+        this.volumeIcon = document.getElementById('volume-icon');
+        this.transportBuffer = document.getElementById('transport-buffer');
     }
 
     _bindEvents() {
@@ -94,8 +146,8 @@ export class PlayerManager {
         this.btnQueueToggle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleQueueSheet(); });
         this.btnBack?.addEventListener('click', (e) => { e.stopPropagation(); this.eject(); });
         this.btnSettings?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleDrawer(); });
+        this.btnFavorite?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFavorite(); });
 
-        this._boundUpdateTransport = () => this._updateTransport();
         this._boundPlay = () => {
             this._onPlayState(true);
             this._startThemeAnalysis();
@@ -103,25 +155,125 @@ export class PlayerManager {
         this._boundPause = () => {
             this._onPlayState(false);
             this._stopThemeAnalysis();
+            
+            // Save state immediately on pause
+            if (this.currentMedia && this.video.currentTime > 5) {
+                api.recordPlayback(this.currentMedia.id, {
+                    position_seconds: this.video.currentTime,
+                    completed: false,
+                    event_type: 'progress',
+                }).catch(() => {});
+            }
         };
         this._boundEnded = () => this._onEnded();
         this._boundTimeUpdate = () => this._onTimeUpdate();
         this._boundLoaded = () => this._onLoaded();
 
-        this.video.addEventListener('timeupdate', this._boundUpdateTransport);
         this.video.addEventListener('play', this._boundPlay);
         this.video.addEventListener('pause', this._boundPause);
         this.video.addEventListener('ended', this._boundEnded);
         this.video.addEventListener('timeupdate', this._boundTimeUpdate);
         this.video.addEventListener('loadedmetadata', this._boundLoaded);
 
-        this.transportTrack?.addEventListener('click', (e) => {
-            e.stopPropagation();
+        // Buffer progress: fires when the browser downloads more of the video
+        this.video.addEventListener('progress', () => this._onBufferUpdate());
+        
+        this.video.addEventListener('waiting', () => {
+            if (!this.video.paused) {
+                this.isLoading = true;
+                this.modal.classList.add('is-loading');
+            }
+        });
+        
+        this.video.addEventListener('playing', () => {
+            this.isLoading = false;
+            this.modal.classList.remove('is-loading');
+        });
+        
+        this.video.addEventListener('canplay', () => {
+            this.isLoading = false;
+            this.modal.classList.remove('is-loading');
+        });
+        
+        this.modal.addEventListener('dblclick', (e) => {
+            // Ignore double clicks on drawer or UI controls
+            if (e.target.closest('.player-drawer') || e.target.closest('.player-overlay') && !e.target.classList.contains('player-gesture-zones') && !e.target.classList.contains('gesture-zone')) return;
+            this.toggleFullscreen();
+        });
+
+        // Unified Premium Pointer-Based Seek/Drag Scrubbing
+        let isDragging = false;
+        let dragSeekTime = 0;
+        const handleDrag = (clientX) => {
+            let duration = this.video.duration;
+            if (!duration || isNaN(duration) || !isFinite(duration)) {
+                duration = this.currentMedia?.duration_seconds || 0;
+            }
+            if (duration <= 0) return;
+
             const rect = this.transportTrack.getBoundingClientRect();
-            const pct = (e.clientX - rect.left) / rect.width;
-            this.video.currentTime = pct * this.video.duration;
+            const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+            
+            // Only update visuals during drag, not the video's actual time to prevent network stutter
+            if (this.transportFill) this.transportFill.style.width = `${pct * 100}%`;
+            
+            dragSeekTime = pct * duration;
+            if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(dragSeekTime);
+
+            // Connect live seek preview bubble during active drag
+            if (this._sprite && this.seekPreview) {
+                this._handleSeekMove({ clientX });
+            }
+        };
+
+        this.transportTrack?.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            isDragging = true;
+            this._wasPlayingBeforeDrag = !this.video.paused;
+            if (this._wasPlayingBeforeDrag) this.video.pause();
+            
+            this.transportTrack.setPointerCapture(e.pointerId);
+            handleDrag(e.clientX);
             this._showControls();
         });
+
+        this.transportTrack?.addEventListener('pointermove', (e) => {
+            if (isDragging) {
+                e.stopPropagation();
+                handleDrag(e.clientX);
+            }
+        });
+
+        const stopDragging = (e) => {
+            if (isDragging) {
+                e.stopPropagation();
+                isDragging = false;
+                this.transportTrack.releasePointerCapture(e.pointerId);
+                
+                // Commit the seek ONLY when drag ends
+                this.video.currentTime = dragSeekTime;
+                
+                if (this._wasPlayingBeforeDrag) {
+                    this.video.play().catch(() => {});
+                }
+                this._showControls();
+
+                // Hide the live preview bubble instantly
+                this._handleSeekLeave();
+
+                // Smart State Saving: Save the seek progress state instantly
+                if (this.currentMedia && dragSeekTime > 5) {
+                    api.recordPlayback(this.currentMedia.id, {
+                        position_seconds: dragSeekTime,
+                        completed: false,
+                        event_type: 'progress',
+                    }).catch(() => {});
+                }
+            }
+        };
+
+        this.transportTrack?.addEventListener('pointerup', stopDragging);
+        this.transportTrack?.addEventListener('pointercancel', stopDragging);
 
         // Drawer Logic
         this.drawer?.addEventListener('click', (e) => e.stopPropagation());
@@ -171,7 +323,7 @@ export class PlayerManager {
             }
         });
 
-        // Volume Bar click handling
+        // Volume Bar click handling (legacy segments — now replaced by slider)
         this.volumeSegments?.forEach((seg, i) => {
             seg.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -179,6 +331,18 @@ export class PlayerManager {
                 const vol = (8 - i) / 8;
                 this.setVolume(vol);
             });
+        });
+
+        // Volume Slider (continuous)
+        this.volumeSlider?.addEventListener('input', (e) => {
+            e.stopPropagation();
+            this.setVolume(parseFloat(e.target.value), true);
+        });
+
+        // Volume icon click = mute toggle
+        this.volumeIcon?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleMute();
         });
 
         // Wheel for volume
@@ -194,10 +358,21 @@ export class PlayerManager {
     _bindKeyboard() {
         document.addEventListener('keydown', (e) => {
             if (!this.modal.open) return;
+            
+            // Ignore keystrokes if the user is typing in an input or textarea
+            const targetTag = e.target.tagName;
+            if (targetTag === 'INPUT' || targetTag === 'TEXTAREA') return;
+
             switch (e.key) {
+                case 'j': case 'J': e.preventDefault(); this.seek(-10); break;
+                case 'k': case 'K': e.preventDefault(); this.togglePlay(); break;
+                case 'l': case 'L': e.preventDefault(); this.seek(10); break;
                 case ' ': e.preventDefault(); this.togglePlay(); break;
                 case 'ArrowLeft': e.preventDefault(); this.seek(-10); break;
                 case 'ArrowRight': e.preventDefault(); this.seek(10); break;
+                case 'ArrowUp': e.preventDefault(); this.setVolume(this.video.volume + 0.1); break;
+                case 'ArrowDown': e.preventDefault(); this.setVolume(this.video.volume - 0.1); break;
+                case 'm': case 'M': e.preventDefault(); this.toggleMute(); break;
                 case 's': case 'S': this.toggleShuffle(); break;
                 case 'q': case 'Q': this.toggleQueueSheet(); break;
                 case 'f': case 'F': this.toggleFullscreen(); break;
@@ -387,15 +562,23 @@ export class PlayerManager {
         this.togglePlay();
     }
 
-    togglePlay() {
-        if (this.isLoading || (!this.video.src && !this.hls)) return;
-        
-        if (this.video.paused) {
-            this.video.play().catch(err => {
-                console.warn("Play interrupted or failed:", err);
-            });
-        } else {
-            this.video.pause();
+    async togglePlay() {
+        if (this._playLock || this.isLoading || (!this.video.src && !this.hls)) return;
+
+        this._playLock = true;
+        try {
+            if (this.video.paused) {
+                await this.video.play();
+            } else {
+                this.video.pause();
+            }
+        } catch (err) {
+            // Silently swallow AbortError from rapid-click race conditions
+            if (err.name !== 'AbortError') {
+                console.warn('Play interrupted:', err);
+            }
+        } finally {
+            this._playLock = false;
         }
         this._showControls();
     }
@@ -447,6 +630,35 @@ export class PlayerManager {
         
         this._renderQueueSheet();
         this._showControls();
+        this._updateFavoriteButton();
+
+        // Begin async sprite-sheet fetch for hover-preview thumbnails
+        this._loadSprite(media.id);
+
+        // Integrate with OS Media Session API (Button Bar)
+        if ('mediaSession' in navigator) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: media.title || 'Untitled',
+                artist: 'MediaHub Server',
+            });
+            
+            // Set action handlers so the OS button bar has full functionality
+            navigator.mediaSession.setActionHandler('play', () => this.video.play());
+            navigator.mediaSession.setActionHandler('pause', () => this.video.pause());
+            navigator.mediaSession.setActionHandler('previoustrack', () => this.previous());
+            navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
+            navigator.mediaSession.setActionHandler('seekbackward', (evt) => {
+                this.seek(-(evt.seekOffset || 10));
+            });
+            navigator.mediaSession.setActionHandler('seekforward', (evt) => {
+                this.seek(evt.seekOffset || 10);
+            });
+            navigator.mediaSession.setActionHandler('seekto', (evt) => {
+                if (this.video.duration) {
+                    this.video.currentTime = evt.seekTime;
+                }
+            });
+        }
 
         this.isLoading = true;
         this.modal.classList.add('is-loading');
@@ -454,6 +666,7 @@ export class PlayerManager {
         try {
             this._upNextShown = false;
             this._prefetchedNext = false;
+            this._autoNextCancelled = false;
             
             // Adaptive Error Failover: Check if we can swap from preload
             if (this.preloadedMediaId === this.currentMedia.id && this.preloadHls) {
@@ -677,11 +890,15 @@ export class PlayerManager {
     }
 
     _handleVideoEnd() {
+        if (this._autoNextCancelled) {
+            // User explicitly cancelled auto-next, do nothing and stay on ended state
+            return;
+        }
         if (this.queueIndex < this.queue.length - 1) {
             this._showUpNextOverlay();
         } else {
             this.showToast('Playlist Finished');
-            setTimeout(() => this.close(), 3000);
+            setTimeout(() => this.eject(), 3000);
         }
     }
 
@@ -691,6 +908,10 @@ export class PlayerManager {
 
         const overlay = document.getElementById('up-next-overlay');
         if (!overlay) return;
+
+        if (this._upNextInterval) {
+            clearInterval(this._upNextInterval);
+        }
 
         overlay.querySelector('.up-next-title').textContent = nextMedia.title;
         overlay.classList.add('visible');
@@ -704,6 +925,7 @@ export class PlayerManager {
             timer.textContent = countdown;
             if (countdown <= 0) {
                 clearInterval(this._upNextInterval);
+                this._upNextInterval = null;
                 overlay.classList.remove('visible');
                 this.next();
             }
@@ -711,7 +933,9 @@ export class PlayerManager {
 
         overlay.querySelector('.btn-cancel-next').onclick = () => {
             clearInterval(this._upNextInterval);
+            this._upNextInterval = null;
             overlay.classList.remove('visible');
+            this._autoNextCancelled = true;
         };
 
         overlay.querySelector('.btn-play-now').onclick = () => {
@@ -773,18 +997,33 @@ export class PlayerManager {
         });
     }
 
-    setVolume(val) {
+    setVolume(val, silent = false) {
         const vol = Math.max(0, Math.min(1, val));
         this.video.volume = vol;
-        
-        // Update visual segments (8 total)
-        const activeCount = Math.round(vol * 8);
-        this.volumeSegments?.forEach((seg, i) => {
-            // segments are 0..7 (8 down to 1)
-            seg.classList.toggle('active', (8 - i) <= activeCount);
-        });
+        localStorage.setItem('mediahub_volume', vol.toString());
 
-        this.showToast(`Volume: ${Math.round(vol * 100)}%`);
+        // Update slider position
+        if (this.volumeSlider) this.volumeSlider.value = vol;
+
+        // Update volume icon: muted vs active
+        if (this.volumeIcon) {
+            this.volumeIcon.className = vol === 0
+                ? 'v-icon icon-mute'
+                : 'v-icon icon-volume';
+        }
+
+        if (!silent) {
+            this.showToast(vol === 0 ? 'Muted' : `Volume: ${Math.round(vol * 100)}%`);
+        }
+    }
+
+    toggleMute() {
+        if (this.video.volume > 0) {
+            this._lastVolume = this.video.volume;
+            this.setVolume(0);
+        } else {
+            this.setVolume(this._lastVolume || 1);
+        }
     }
 
     setAspectRatio(mode) {
@@ -813,6 +1052,77 @@ export class PlayerManager {
         if (this.btnPlay) {
             this.btnPlay.classList.toggle('active', playing);
         }
+        // Drive progress bar at 60fps while playing; stop on pause
+        if (playing) {
+            this._startRaf();
+            this.requestWakeLock();
+        } else {
+            this._stopRaf();
+            this.releaseWakeLock();
+            // Do one final tick so the bar snaps to the exact paused position
+            this._rafTick();
+        }
+    }
+
+    async requestWakeLock() {
+        if (!('wakeLock' in navigator)) return;
+        try {
+            if (this.wakeLock) return; // Already locked
+            this.wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Screen Wake Lock acquired successfully');
+            this.wakeLock.addEventListener('release', () => {
+                console.log('Screen Wake Lock released by browser');
+            });
+        } catch (err) {
+            console.warn('Failed to acquire Screen Wake Lock:', err);
+        }
+    }
+
+    releaseWakeLock() {
+        if (this.wakeLock) {
+            this.wakeLock.release().catch(() => {});
+            this.wakeLock = null;
+            console.log('Screen Wake Lock released manually');
+        }
+    }
+
+    /** Start the requestAnimationFrame loop for smooth progress rendering */
+    _startRaf() {
+        if (this._rafId) return; // Already running
+        const tick = () => {
+            this._rafTick();
+            this._rafId = requestAnimationFrame(tick);
+        };
+        this._rafId = requestAnimationFrame(tick);
+    }
+
+    /** Stop the RAF loop */
+    _stopRaf() {
+        if (this._rafId) {
+            cancelAnimationFrame(this._rafId);
+            this._rafId = null;
+        }
+    }
+
+    /**
+     * One RAF frame: update the progress fill and current-time display.
+     * Runs at the screen refresh rate (~60fps) while playing for buttery smoothness.
+     * Side-effect-free — no API calls, no heavy work here.
+     */
+    _rafTick() {
+        const currentTime = this.video.currentTime || 0;
+        let duration = this.video.duration;
+        if (!duration || isNaN(duration) || !isFinite(duration)) {
+            duration = this.currentMedia?.duration_seconds || 0;
+        }
+
+        if (duration > 0) {
+            const pct = (currentTime / duration) * 100;
+            if (this.transportFill) this.transportFill.style.width = `${pct}%`;
+        }
+        if (this.transportCurrent) {
+            this.transportCurrent.textContent = this._formatTime(currentTime, duration || undefined);
+        }
     }
 
     _onEnded() {
@@ -827,20 +1137,50 @@ export class PlayerManager {
     }
 
     _onTimeUpdate() {
-        // If the UI element doesn't exist, stop executing the function
-        if (!this.transportCurrent) {
-            return;
+        const currentTime = this.video.currentTime || 0;
+        let duration = this.video.duration;
+        
+        // Fallback for HLS streams where duration might be NaN or Infinity
+        if (!duration || isNaN(duration) || !isFinite(duration)) {
+            duration = this.currentMedia?.duration_seconds || 0;
         }
 
-        // Update seek bar etc (assumed existing logic or I'll add it)
-        const pct = (this.video.currentTime / this.video.duration) * 100;
-        if (this.transportFill) this.transportFill.style.width = `${pct}%`;
-        
-        if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(this.video.currentTime);
-        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(this.video.duration);
+        // NOTE: Progress bar visuals are driven by _rafTick() at 60fps.
+        // This handler only handles side-effects that don't need per-frame precision.
+
+        // Update total duration display (only when valid)
+        if (duration > 0 && this.transportTotal) {
+            this.transportTotal.textContent = this._formatTime(duration, duration);
+        }
+
+        const tapePos = document.getElementById('tape-position');
+        if (tapePos) tapePos.textContent = this._formatTime(currentTime, duration || undefined);
+
+        const currentSec = Math.floor(currentTime);
+        if (this.currentMedia && currentSec % 5 === 0 && currentSec > 5 && currentSec !== this._lastProgressSecond) {
+            this._lastProgressSecond = currentSec;
+            api.recordPlayback(this.currentMedia.id, {
+                position_seconds: currentTime,
+                completed: false,
+                event_type: 'progress',
+            }).catch(() => {});
+        }
+
+        // Update Media Session Progress
+        if ('mediaSession' in navigator && navigator.mediaSession.setPositionState && duration > 0) {
+            try {
+                navigator.mediaSession.setPositionState({
+                    duration: duration,
+                    playbackRate: this.video.playbackRate || 1.0,
+                    position: currentTime
+                });
+            } catch (e) {
+                // Ignore transient errors if duration/position are temporarily out of bounds
+            }
+        }
 
         // Intelligent Auto-Next Trigger
-        if (this.video.duration > 30 && this.video.duration - this.video.currentTime < 10) {
+        if (duration > 30 && duration - currentTime < 10) {
             if (!this._upNextShown && this.queueIndex < this.queue.length - 1) {
                 this._upNextShown = true;
                 this._showUpNextOverlay();
@@ -848,16 +1188,20 @@ export class PlayerManager {
         }
 
         // Adaptive Buffer: Prefetch next item when 70% done
-        if (this.video.duration > 0 && (this.video.currentTime / this.video.duration) > 0.7) {
+        if (duration > 0 && (currentTime / duration) > 0.7) {
             this._prefetchNext();
         }
     }
 
     _onLoaded() {
-        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(this.video.duration);
+        const dur = this.video.duration;
+        // Hard NaN guard: metadata can fire before the codec resolves the duration
+        if (!dur || isNaN(dur) || !isFinite(dur)) return;
+
+        if (this.transportTotal) this.transportTotal.textContent = this._formatTime(dur, dur);
         
         const tapeDur = document.getElementById('tape-duration');
-        if (tapeDur) tapeDur.textContent = this._formatTime(this.video.duration);
+        if (tapeDur) tapeDur.textContent = this._formatTime(dur, dur);
         
         const tapeRes = document.getElementById('tape-resolution');
         if (tapeRes) tapeRes.textContent = `${this.video.videoWidth}x${this.video.videoHeight}`;
@@ -869,24 +1213,24 @@ export class PlayerManager {
         if (tapeQual) tapeQual.textContent = this.video.videoHeight >= 1080 ? 'FHD' : (this.video.videoHeight >= 720 ? 'HD' : 'SD');
     }
 
-    _updateTransport() {
-        if (!this.video.duration) return;
-        const pct = (this.video.currentTime / this.video.duration) * 100;
-        if (this.transportFill) this.transportFill.style.width = `${pct}%`;
-        if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(this.video.currentTime);
-
-        const tapePos = document.getElementById('tape-position');
-        if (tapePos) tapePos.textContent = this._formatTime(this.video.currentTime);
-
-        const currentSec = Math.floor(this.video.currentTime);
-        if (this.currentMedia && currentSec % 15 === 0 && currentSec > 5 && currentSec !== this._lastProgressSecond) {
-            this._lastProgressSecond = currentSec;
-            api.recordPlayback(this.currentMedia.id, {
-                position_seconds: this.video.currentTime,
-                completed: false,
-                event_type: 'progress',
-            }).catch(() => {});
+    _onBufferUpdate() {
+        if (!this.transportBuffer) return;
+        const video = this.video;
+        let duration = video.duration;
+        if (!duration || isNaN(duration) || !isFinite(duration)) {
+            duration = this.currentMedia?.duration_seconds || 0;
         }
+        if (duration <= 0 || !video.buffered.length) return;
+
+        // Find the buffered range that encompasses the current playhead
+        let bufferedEnd = 0;
+        for (let i = 0; i < video.buffered.length; i++) {
+            if (video.buffered.start(i) <= video.currentTime) {
+                bufferedEnd = Math.max(bufferedEnd, video.buffered.end(i));
+            }
+        }
+        const pct = Math.min(100, (bufferedEnd / duration) * 100);
+        this.transportBuffer.style.width = `${pct}%`;
     }
 
     _showControls() {
@@ -904,15 +1248,17 @@ export class PlayerManager {
     }
 
     _cleanup() {
-        // 1. Remove the event listeners first so they stop firing callbacks
-        if (this.video) {
-            if (this._boundUpdateTransport) this.video.removeEventListener('timeupdate', this._boundUpdateTransport);
-            if (this._boundPlay) this.video.removeEventListener('play', this._boundPlay);
-            if (this._boundPause) this.video.removeEventListener('pause', this._boundPause);
-            if (this._boundEnded) this.video.removeEventListener('ended', this._boundEnded);
-            if (this._boundTimeUpdate) this.video.removeEventListener('timeupdate', this._boundTimeUpdate);
-            if (this._boundLoaded) this.video.removeEventListener('loadedmetadata', this._boundLoaded);
-        }
+        // Stop the 60fps RAF loop before tearing down the video element
+        this._stopRaf();
+        this._playLock = false;
+
+        // Release Screen Wake Lock
+        this.releaseWakeLock();
+
+        // Cancel any pending sprite-sheet retry and clear state
+        clearTimeout(this._spriteRetryTimer);
+        this._sprite = null;
+        this.seekPreview?.classList.remove('visible');
 
         if (this.hls) { this.hls.destroy(); this.hls = null; }
         if (this.previewHls) { this.previewHls.destroy(); this.previewHls = null; }
@@ -928,6 +1274,7 @@ export class PlayerManager {
         }
 
         if (this.transportFill) this.transportFill.style.width = '0%';
+        if (this.transportBuffer) this.transportBuffer.style.width = '0%';
         this.currentMedia = null;
         this.toggleDrawer(false);
         this.toggleQueueSheet(false);
@@ -940,12 +1287,15 @@ export class PlayerManager {
         }
     }
 
-    _formatTime(s) {
+    _formatTime(s, totalDuration) {
         if (!s || isNaN(s)) return '00:00';
+        const showHours = totalDuration
+            ? totalDuration >= 3600
+            : s >= 3600;
         const h = Math.floor(s / 3600);
         const m = Math.floor((s % 3600) / 60);
         const sec = Math.floor(s % 60);
-        if (h > 0) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+        if (showHours) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
         return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
     }
 
@@ -1033,7 +1383,9 @@ export class PlayerManager {
     }
 
     /**
-     * Professional Standard: Seek Preview (Frame-by-frame)
+     * Professional Standard: Seek Preview via Sprite Sheet
+     * Replaces the old hidden-video approach (Option B) which caused lag.
+     * Uses a pre-generated JPEG tile grid (Option A) for zero-decode-overhead previews.
      */
     _bindSeekPreview() {
         if (!this.transportTrack || !this.seekPreview) return;
@@ -1041,49 +1393,107 @@ export class PlayerManager {
         this.transportTrack.addEventListener('mousemove', (e) => this._handleSeekMove(e));
         this.transportTrack.addEventListener('mouseleave', () => this._handleSeekLeave());
         this.transportTrack.addEventListener('mouseenter', () => {
-            this.seekPreview.classList.add('visible');
+            if (this._sprite) this.seekPreview.classList.add('visible');
         });
     }
 
     _handleSeekMove(e) {
         if (!this.video.duration || isNaN(this.video.duration)) return;
+        if (!this._sprite) return; // Don't show preview box if sprite isn't ready
 
         const rect = this.transportTrack.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         const seekTime = pct * this.video.duration;
 
-        // Position preview
-        this.seekPreview.style.left = `${pct * 100}%`;
-        this.previewTimeDisplay.textContent = this._formatTime(seekTime);
+        // ── Sprite math ──────────────────────────────────────────────────────
+        const { url, thumb_w, thumb_h, columns, interval } = this._sprite;
+        const frameIndex = Math.floor(seekTime / interval);
+        const col = frameIndex % columns;
+        const row = Math.floor(frameIndex / columns);
+        const bgX = -(col * thumb_w);
+        const bgY = -(row * thumb_h);
 
-        // Update preview frame (Throttled for performance)
-        const now = Date.now();
-        if (now - this._lastSeekUpdateTime > 50) { // Max 20fps preview seek
-            if (this.previewVideo.readyState >= 1) {
-                this.previewVideo.currentTime = seekTime;
-                this._lastSeekUpdateTime = now;
-            }
+        if (this.previewFrame) {
+            this.previewFrame.style.backgroundImage = `url(${url})`;
+            this.previewFrame.style.backgroundPosition = `${bgX}px ${bgY}px`;
+        }
+
+        // ── Clamp preview box to player edges ─────────────────────────────
+        // getBoundingClientRect gives us accurate positioning regardless of
+        // nested elements (fixes the offsetX inaccuracy edge case).
+        const trackRect = this.transportTrack.getBoundingClientRect();
+        const playerRect = this.modal.getBoundingClientRect();
+        const halfPreview = thumb_w / 2;
+
+        let left = e.clientX - trackRect.left; // position relative to track
+        // Convert to percentage for CSS left
+        const leftPct = (left / trackRect.width) * 100;
+
+        // Clamp in pixels so the box doesn't overflow either side of the player
+        const leftPx = e.clientX - playerRect.left;
+        const clampedPx = Math.max(halfPreview, Math.min(playerRect.width - halfPreview, leftPx));
+        this.seekPreview.style.left = `${clampedPx - (trackRect.left - playerRect.left)}px`;
+        this.seekPreview.classList.add('visible');
+
+        // ── Time label ────────────────────────────────────────────────────
+        if (this.previewTimeDisplay) {
+            this.previewTimeDisplay.textContent = this._formatTime(seekTime, this.video.duration);
         }
     }
 
     _handleSeekLeave() {
         this.seekPreview.classList.remove('visible');
-        this._lastSeekUpdateTime = 0;
     }
 
-    _initPreviewStream(url) {
-        if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-            if (this.previewHls) this.previewHls.destroy();
-            this.previewHls = new Hls({
-                autoStartLoad: true,
-                startLevel: 0, // Low quality for preview
-                capLevelToPlayerSize: true
-            });
-            this.previewHls.loadSource(url);
-            this.previewHls.attachMedia(this.previewVideo);
-        } else {
-            this.previewVideo.src = url;
+    /**
+     * Fetch sprite sheet metadata from the backend.
+     * If the server returns 202 (still generating), retries with backoff up to ~2 min.
+     */
+    async _loadSprite(mediaId) {
+        this._sprite = null;
+        if (this.previewFrame) {
+            this.previewFrame.style.backgroundImage = 'none';
         }
+        clearTimeout(this._spriteRetryTimer);
+
+        let attempts = 0;
+        const maxAttempts = 8;
+        const delays = [2000, 4000, 8000, 12000, 16000, 20000, 30000, 40000];
+
+        const tryFetch = async () => {
+            try {
+                const res = await fetch(`/api/media/${mediaId}/sprites`, {
+                    credentials: 'include',
+                });
+                if (res.status === 200) {
+                    const data = await res.json();
+                    this._sprite = data;
+
+                    // Pre-load the sprite image so first hover is instant
+                    const img = new Image();
+                    img.src = data.url;
+                    return;
+                }
+                // 202 = still generating — schedule retry
+                if (res.status === 202 && attempts < maxAttempts) {
+                    attempts++;
+                    this._spriteRetryTimer = setTimeout(tryFetch, delays[attempts - 1] ?? 40000);
+                }
+            } catch (_) {
+                // Network error: retry silently
+                if (attempts < maxAttempts) {
+                    attempts++;
+                    this._spriteRetryTimer = setTimeout(tryFetch, delays[attempts - 1] ?? 40000);
+                }
+            }
+        };
+        tryFetch();
+    }
+
+    /** No-op: replaced by sprite sheet. Kept so existing call sites don't throw. */
+    _initPreviewStream(_url) {
+        // Previously spun up a second HLS stream for live seek previews.
+        // Now handled by the sprite sheet via _loadSprite().
     }
 
     async _onRenameClick() {
@@ -1229,6 +1639,30 @@ export class PlayerManager {
             // If it failed, reload current media to restore state
             this._loadCurrent();
         }
+    }
+
+    async toggleFavorite() {
+        if (!this.currentMedia) return;
+        try {
+            await api.toggleFavorite(this.currentMedia.id);
+            this.currentMedia.is_favorite = !this.currentMedia.is_favorite;
+            this._updateFavoriteButton();
+            
+            // Dispatch a global event or refresh views if needed
+            document.dispatchEvent(new CustomEvent('favorite-toggled', { 
+                detail: { mediaId: this.currentMedia.id, isFavorite: this.currentMedia.is_favorite } 
+            }));
+            
+            toast(this.currentMedia.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+        } catch (e) {
+            console.error("Failed to toggle favorite:", e);
+            toast('Failed to toggle favorite', 'error');
+        }
+    }
+
+    _updateFavoriteButton() {
+        if (!this.btnFavorite || !this.currentMedia) return;
+        this.btnFavorite.classList.toggle('active', !!this.currentMedia.is_favorite);
     }
 }
 
