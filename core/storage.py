@@ -92,7 +92,7 @@ def relative_shared_path(path: Path) -> str:
         for lnk, target in get_shortcut_mappings():
             try:
                 rel = path_resolved.relative_to(target.resolve())
-                lnk_rel = lnk.resolve().relative_to(base_resolved)
+                lnk_rel = lnk.parent.resolve().relative_to(base_resolved) / lnk.stem
                 return (lnk_rel / rel).as_posix()
             except ValueError:
                 continue
@@ -122,7 +122,11 @@ def resolve_shared_path(raw_path: str | None = None) -> Path:
             current = parent_candidate
             continue
             
-        candidate = (current / part).resolve()
+        lnk_candidate = current / f"{part}.lnk"
+        if lnk_candidate.is_file():
+            candidate = lnk_candidate.resolve()
+        else:
+            candidate = (current / part).resolve()
         
         if candidate.suffix.lower() == ".lnk" and candidate.is_file():
             target = resolve_shortcut(candidate)
@@ -331,7 +335,8 @@ async def save_upload(raw_path: str | None, upload: UploadFile) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     if not upload.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Upload filename is required.")
-    destination = (directory / upload.filename).resolve()
+    safe_filename = Path(upload.filename.replace("\\", "/")).name
+    destination = (directory / safe_filename).resolve()
     if directory.resolve() not in destination.parents:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsafe upload path.")
 
@@ -346,7 +351,10 @@ def rename_path(raw_path: str, new_name: str) -> Path:
     target = resolve_shared_path(raw_path)
     if not target.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found.")
-    destination = target.with_name(new_name)
+    safe_new_name = Path(new_name.replace("\\", "/")).name
+    if not safe_new_name or safe_new_name in {".", ".."}:
+        raise AccessDeniedError("Invalid target name.")
+    destination = target.with_name(safe_new_name)
     if target.parent.resolve() not in destination.resolve().parents:
         logger.error(f"Unsafe rename attempt from {raw_path} to {new_name}")
         raise AccessDeniedError("Unsafe rename target.")

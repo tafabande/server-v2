@@ -3,11 +3,11 @@
  * System metrics, log streams, system fixes, users, webhooks, requests, media management.
  */
 import { api } from '../app.js';
-import { toast, confirm, formatDateTime } from '../utils.js';
+import { toast, confirm, formatDateTime, escapeHtml } from '../utils.js';
 
 export class AdminView {
-    constructor(container) { 
-        this.container = container; 
+    constructor(container) {
+        this.container = container;
         this._mediaList = [];
     }
 
@@ -191,7 +191,7 @@ export class AdminView {
             });
 
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
         }
     }
 
@@ -228,7 +228,7 @@ export class AdminView {
                         <thead><tr><th>Username</th><th>Role / Elevation</th><th>Last Active</th><th>Joined</th><th>Actions</th></tr></thead>
                         <tbody>${users.map(u => `
                             <tr>
-                                <td><strong>${u.username}</strong></td>
+                                <td><strong>${escapeHtml(u.username)}</strong></td>
                                 <td>
                                     <select class="select change-role-select" data-id="${u.id}" style="width:auto; padding:4px 8px; font-size:0.8rem;">
                                         <option value="family" ${u.role === 'family' ? 'selected' : ''}>family</option>
@@ -298,37 +298,57 @@ export class AdminView {
                 });
             });
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
         }
     }
 
     async _loadMediaManagement(target) {
         try {
-            const groups = await api.getLibrary();
-            this._mediaList = groups.flatMap(g => g.items.map(m => ({ ...m, _category: g.label })));
+            let allItems = [];
+            let currentPage = 1;
+            let totalPages = 1;
+            let isFirstRender = true;
 
-            target.innerHTML = `
-                <div class="surface mb-md flex-between" style="padding: 12px 20px;">
-                    <div style="font-weight:700; color:var(--text);">Site Media: <span class="badge badge-accent">${this._mediaList.length} items</span></div>
-                    <div class="search-bar" style="margin:0; width:220px;">
-                        <input id="media-mgmt-search" class="input" type="text" placeholder="Search title or path...">
-                    </div>
-                </div>
+            while (currentPage <= totalPages) {
+                const response = await api.getLibrary({ page: currentPage, per_page: 500 });
+                const rawItems = Array.isArray(response) ? response : (response?.items ?? []);
 
-                <div class="surface" style="padding:0; overflow-x:auto">
-                    <table class="table" id="media-mgmt-table">
-                        <thead><tr><th>Preview</th><th>Title</th><th>Format Path</th><th>Security / Lock</th><th>Adult Content</th></tr></thead>
-                        <tbody id="media-mgmt-tbody"></tbody>
-                    </table>
-                </div>
-            `;
+                allItems.push(...rawItems);
+                this._mediaList = allItems.map(m => ({ ...m, _category: m.category || 'Uncategorised' }));
 
-            const searchInput = document.getElementById('media-mgmt-search');
-            searchInput.addEventListener('input', () => this._filterMediaList());
+                if (isFirstRender) {
+                    target.innerHTML = `
+                        <div class="surface mb-md flex-between" style="padding: 12px 20px;">
+                            <div style="font-weight:700; color:var(--text);">Site Media: <span class="badge badge-accent" id="media-mgmt-count">${this._mediaList.length} items</span></div>
+                            <div class="search-bar" style="margin:0; width:220px;">
+                                <input id="media-mgmt-search" class="input" type="text" placeholder="Search title or path...">
+                            </div>
+                        </div>
 
-            this._renderMediaRows(this._mediaList);
+                        <div class="surface" style="padding:0; overflow-x:auto">
+                            <table class="table" id="media-mgmt-table">
+                                <thead><tr><th>Preview</th><th>Title</th><th>Format Path</th><th>Security / Lock</th><th>Adult Content</th></tr></thead>
+                                <tbody id="media-mgmt-tbody"></tbody>
+                            </table>
+                        </div>
+                    `;
+
+                    const searchInput = document.getElementById('media-mgmt-search');
+                    searchInput.addEventListener('input', () => this._filterMediaList());
+                    isFirstRender = false;
+                } else {
+                    const countBadge = document.getElementById('media-mgmt-count');
+                    if (countBadge) countBadge.textContent = `${this._mediaList.length} items`;
+                }
+
+                this._filterMediaList();
+
+                if (Array.isArray(response)) break;
+                totalPages = response?.pages || 1;
+                currentPage++;
+            }
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
         }
     }
 
@@ -339,8 +359,8 @@ export class AdminView {
         tbody.innerHTML = items.map(m => `
             <tr data-id="${m.id}">
                 <td style="width:48px"><img src="/api/media/${m.id}/backdrop" style="width:36px; height:24px; object-fit:cover; border-radius:2px;" onerror="this.src='/static/placeholder.svg'"></td>
-                <td><strong>${m.title}</strong></td>
-                <td class="text-muted text-xs" style="max-width:320px; overflow:hidden; text-overflow:ellipsis;" title="${m.relative_path}">${m.relative_path}</td>
+                <td><strong>${escapeHtml(m.title)}</strong></td>
+                <td class="text-muted text-xs" style="max-width:320px; overflow:hidden; text-overflow:ellipsis;" title="${escapeHtml(m.relative_path)}">${escapeHtml(m.relative_path)}</td>
                 <td>
                     <button class="btn btn-sm btn-ghost toggle-lock-btn ${m.requires_pin ? 'text-warning' : ''}" data-id="${m.id}">
                         ${m.requires_pin ? '🔒 Locked' : '🔓 Public'}
@@ -398,8 +418,8 @@ export class AdminView {
             return;
         }
 
-        const filtered = this._mediaList.filter(m => 
-            m.title.toLowerCase().includes(q) || 
+        const filtered = this._mediaList.filter(m =>
+            m.title.toLowerCase().includes(q) ||
             m.relative_path.toLowerCase().includes(q)
         );
         this._renderMediaRows(filtered);
@@ -426,8 +446,8 @@ export class AdminView {
                         <thead><tr><th>URL</th><th>Events</th><th>Status</th><th>Failures</th><th>Last Triggered</th><th>Actions</th></tr></thead>
                         <tbody>${hooks.map(h => `
                             <tr>
-                                <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis"><strong>${h.url}</strong></td>
-                                <td><code>${h.events}</code></td>
+                                <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis"><strong>${escapeHtml(h.url)}</strong></td>
+                                <td><code>${escapeHtml(h.events)}</code></td>
                                 <td><span class="badge ${h.is_active ? 'badge-success' : 'badge-danger'}">${h.is_active ? 'Active' : 'Disabled'}</span></td>
                                 <td class="text-center">${h.failure_count}</td>
                                 <td class="text-muted">${formatDateTime(h.last_triggered_at)}</td>
@@ -479,7 +499,7 @@ export class AdminView {
                 });
             });
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
         }
     }
 
@@ -497,9 +517,9 @@ export class AdminView {
                         <thead><tr><th>User</th><th>Request Scope</th><th>Target Path</th><th>Requested</th><th>Actions</th></tr></thead>
                         <tbody>${requests.map(req => `
                             <tr>
-                                <td><strong>${req.username}</strong></td>
-                                <td><span class="badge badge-accent">${req.request_type.replace('_', ' ')}</span></td>
-                                <td class="text-muted text-xs" style="max-width:280px; overflow:hidden; text-overflow:ellipsis;">${req.target_path || 'All Site Access'}</td>
+                                <td><strong>${escapeHtml(req.username)}</strong></td>
+                                <td><span class="badge badge-accent">${escapeHtml(req.request_type.replace('_', ' '))}</span></td>
+                                <td class="text-muted text-xs" style="max-width:280px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(req.target_path || 'All Site Access')}</td>
                                 <td class="text-muted">${formatDateTime(req.created_at)}</td>
                                 <td>
                                     ${req.status === 'pending' ? `
@@ -518,6 +538,7 @@ export class AdminView {
             target.querySelectorAll('.approve-btn').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const comment = prompt('Admin comment (optional):');
+                    if (comment === null) return; // Ignore request if prompt was cancelled
                     try {
                         await api.processRequest(parseInt(btn.dataset.id), 'approved', comment);
                         toast('Request approved successfully', 'success');
@@ -538,7 +559,7 @@ export class AdminView {
                 });
             });
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
         }
     }
 
@@ -556,8 +577,8 @@ export class AdminView {
                         <thead><tr><th>Action Protocol</th><th>Target Path</th><th>Action Time</th></tr></thead>
                         <tbody>${logs.items.map(log => `
                             <tr>
-                                <td><span class="badge badge-muted">${log.action}</span></td>
-                                <td class="text-muted text-xs">${log.target_path || '—'}</td>
+                                <td><span class="badge badge-muted">${escapeHtml(log.action)}</span></td>
+                                <td class="text-muted text-xs">${escapeHtml(log.target_path || '—')}</td>
                                 <td class="text-muted">${formatDateTime(log.created_at)}</td>
                             </tr>
                         `).join('')}</tbody>
@@ -565,18 +586,40 @@ export class AdminView {
                 </div>
             `;
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
         }
     }
 
     async _rescan() {
+        const btn = document.getElementById('rescan-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Scanning...';
+        }
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const status = await api.request('/api/media/scan-status');
+                if (status.scanning && btn) {
+                    const folder = status.current_folder || '';
+                    btn.textContent = `Scanning: ${status.files_scanned}/${status.files_total} ${folder ? `[${folder}]` : ''}`;
+                }
+            } catch (err) { }
+        }, 800);
+
         try {
             const result = await api.rescan();
             toast(result.message, 'success');
         } catch (err) {
             toast(err.message, 'error');
+        } finally {
+            clearInterval(pollInterval);
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '↻ Scan Library';
+            }
         }
     }
 
-    destroy() {}
+    destroy() { }
 }

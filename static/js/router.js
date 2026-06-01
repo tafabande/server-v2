@@ -1,6 +1,5 @@
-/**
- * MediaHub — Client-side Router
- */
+import { escapeHtml } from './utils.js';
+
 export class Router {
     constructor(routes = []) {
         this.routes = routes;
@@ -46,13 +45,21 @@ export class Router {
             this.currentView = new ViewClass(this.container);
 
             if (typeof this.currentView.render === 'function') {
-                await this.currentView.render();
+                const renderPromise = this.currentView.render();
+                if (renderPromise instanceof Promise) {
+                    renderPromise.catch(err => {
+                        console.error('Rendering error:', err);
+                        this.container.innerHTML = `<div class="empty-state"><p>Failed to load page: ${escapeHtml(err.message)}</p></div>`;
+                    });
+                }
             }
         };
 
         try {
             if (document.startViewTransition) {
                 const transition = document.startViewTransition(updateUI);
+                transition.ready.catch(() => {});
+                transition.updateCallbackDone.catch(() => {});
                 try {
                     await transition.finished;
                 } catch (tErr) {

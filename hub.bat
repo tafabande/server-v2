@@ -39,33 +39,35 @@ echo   ================================================
 echo.
 echo   [93m[LOCAL INSTANCE][0m
 echo     1. Start Local Server    (Native boot)
-echo     2. Rebuild venv          (Re-create + reinstall deps)
-echo     3. Clean Python Cache    (Remove __pycache__)
+echo     2. Pre-Index ^& Thumbs    (Offline library scan)
+echo     3. Rebuild venv          (Re-create + reinstall deps)
+echo     4. Clean Python Cache    (Remove __pycache__)
 echo.
 echo   [92m[DOCKER CONTAINER][0m
-echo     4. Boot Docker Stack     (Compose up + build)
-echo     5. Halt Docker Stack     (Compose down)
-echo     6. Docker Status/Logs    (Compose ps + tail logs)
+echo     5. Boot Docker Stack     (Compose up + build)
+echo     6. Halt Docker Stack     (Compose down)
+echo     7. Docker Status/Logs    (Compose ps + tail logs)
 echo.
 echo   [91m[SYSTEM TOOLS][0m
-echo     7. Nuclear Reset         (Stop all + Wipe DB/Cache)
-echo     8. View Server Logs      (Open logs explorer)
-echo     9. Exit
+echo     8. Nuclear Reset         (Stop all + Wipe DB/Cache)
+echo     9. View Server Logs      (Open logs explorer)
+echo    10. Exit
 echo.
 echo   ================================================
 echo.
 set "choice=1"
-set /p choice="Enter your command (1-9) [Default=1]: "
+set /p choice="Enter your command (1-10) [Default=1]: "
 
 if "%choice%"=="1" goto start_local
-if "%choice%"=="2" goto rebuild_venv
-if "%choice%"=="3" goto clean_cache
-if "%choice%"=="4" goto start_docker
-if "%choice%"=="5" goto stop_docker
-if "%choice%"=="6" goto docker_status
-if "%choice%"=="7" goto nuclear_reset
-if "%choice%"=="8" goto view_logs
-if "%choice%"=="9" exit /b 0
+if "%choice%"=="2" goto pre_index
+if "%choice%"=="3" goto rebuild_venv
+if "%choice%"=="4" goto clean_cache
+if "%choice%"=="5" goto start_docker
+if "%choice%"=="6" goto stop_docker
+if "%choice%"=="7" goto docker_status
+if "%choice%"=="8" goto nuclear_reset
+if "%choice%"=="9" goto view_logs
+if "%choice%"=="10" exit /b 0
 goto menu
 
 :: ============================================================
@@ -104,7 +106,64 @@ pause
 goto menu
 
 :: ============================================================
-::  2. Rebuild venv
+::  2. Pre-Index & Thumbs
+:: ============================================================
+:pre_index
+cls
+echo [96m[INFO] Initiating Offline Library Scan ^& Thumbnail Generation...[0m
+set /p force_choice="Force regenerate ALL thumbnails? (Overrides existing) [Y/N] (Default=N): "
+if /i "!force_choice!"=="Y" (
+    set "FORCE_THUMBS=True"
+    echo [93m[INFO] Force overwrite ENABLED. This will take a long time.[0m
+) else (
+    set "FORCE_THUMBS=False"
+    echo [92m[INFO] Force overwrite DISABLED (Skipping existing).[0m
+)
+
+call :check_env
+call :sync_deps
+
+echo [93m[INFO] This may take a while depending on your library size.[0m
+echo import sys, asyncio, logging > temp_scan.py
+echo from core.database import init_db, AsyncSessionLocal >> temp_scan.py
+echo from core.bootstrap import self_heal_tables >> temp_scan.py
+echo from core.media import scan_media_library, get_scan_status >> temp_scan.py
+echo logging.disable(logging.CRITICAL) >> temp_scan.py
+echo async def run(): >> temp_scan.py
+echo     await init_db() >> temp_scan.py
+echo     await self_heal_tables() >> temp_scan.py
+echo     async with AsyncSessionLocal() as s: >> temp_scan.py
+echo         task = asyncio.create_task(scan_media_library(s, use_cache=False, force_thumbs=!FORCE_THUMBS!)) >> temp_scan.py
+echo         while not task.done(): >> temp_scan.py
+echo             status = get_scan_status() >> temp_scan.py
+echo             if status.get("scanning"): >> temp_scan.py
+echo                 total = status.get("files_total", 0) >> temp_scan.py
+echo                 scanned = status.get("files_scanned", 0) >> temp_scan.py
+echo                 pct = status.get("progress_percent", 0) >> temp_scan.py
+echo                 if total == 0: >> temp_scan.py
+echo                     sys.stdout.write('\r\033[96m    [SCAN]\033[0m Discovering files in library...' + ' '*20) >> temp_scan.py
+echo                 else: >> temp_scan.py
+echo                     bar_len = 40 >> temp_scan.py
+echo                     filled = int(bar_len * pct / 100) >> temp_scan.py
+echo                     bar = '=' * filled + '-' * (bar_len - filled) >> temp_scan.py
+echo                     sys.stdout.write(f'\r\033[96m    [SCAN]\033[0m [{bar}] \033[93m{pct}%%\033[0m ({scanned}/{total})' + ' '*10) >> temp_scan.py
+echo                 sys.stdout.flush() >> temp_scan.py
+echo             await asyncio.sleep(0.2) >> temp_scan.py
+echo         print() >> temp_scan.py
+echo         await task >> temp_scan.py
+echo if sys.platform == 'win32': >> temp_scan.py
+echo     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy()) >> temp_scan.py
+echo asyncio.run(run()) >> temp_scan.py
+
+"!PYTHON_EXE!" temp_scan.py
+del temp_scan.py
+
+echo [92m[DONE] Indexing and thumbnail generation complete.[0m
+pause
+goto menu
+
+:: ============================================================
+::  3. Rebuild venv
 :: ============================================================
 :rebuild_venv
 cls

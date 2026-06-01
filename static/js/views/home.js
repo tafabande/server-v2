@@ -4,7 +4,7 @@
  * my list, and categories with horizontal scroll rows and hover previews.
  */
 import { api, player, router } from '../app.js';
-import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog } from '../utils.js';
+import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog, escapeHtml } from '../utils.js';
 
 export class HomeView {
     constructor(container) {
@@ -127,8 +127,8 @@ export class HomeView {
                 <div class="suggestion-item" data-id="${m.id}">
                     <img src="${thumbUrl(m)}" class="suggestion-thumb" onerror="this.src='/static/placeholder.svg'">
                     <div class="suggestion-info">
-                        <div class="suggestion-title">${m.title}</div>
-                        <div class="suggestion-meta">${m.duration_seconds ? formatDuration(m.duration_seconds) + ' · ' : ''}${m.video_codec || 'VIDEO'}</div>
+                        <div class="suggestion-title">${escapeHtml(m.title)}</div>
+                        <div class="suggestion-meta">${m.duration_seconds ? formatDuration(m.duration_seconds) + ' · ' : ''}${escapeHtml(m.video_codec || 'VIDEO')}</div>
                     </div>
                 </div>
             `).join('');
@@ -161,15 +161,15 @@ export class HomeView {
             const requests = await api.getRequests();
             const sortedReqs = requests.sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
             const latestReq = sortedReqs[0];
-            
+
             if (latestReq) {
                 const storageKey = `dismissed_req_${latestReq.id}`;
                 const isDismissed = localStorage.getItem(storageKey);
-                
+
                 if (!isDismissed) {
                     let bannerHtml = '';
-                    const title = latestReq.request_type === 'adult_elevation' ? '🔞 18+ Account Elevation' : `📁 Folder Access ("${latestReq.target_path?.split('/').pop()}")`;
-                    
+                    const title = latestReq.request_type === 'adult_elevation' ? '🔞 18+ Account Elevation' : `📁 Folder Access ("${latestReq.target_path?.split('/').pop() || ''}")`;
+
                     if (latestReq.status === 'pending') {
                         bannerHtml = `
                             <div class="surface rounded mb-md flex-between fade-in" id="req-banner-${latestReq.id}" style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); padding: 12px 16px; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; width: 100%; position: relative; z-index: 5;">
@@ -178,7 +178,7 @@ export class HomeView {
                                     <div>
                                         <strong style="color: var(--warning);">Access Request Pending Review</strong>
                                         <div class="text-muted text-xs" style="margin-top: 2px;">
-                                            Your request for <strong>${title}</strong> is currently pending administrator review.
+                                            Your request for <strong>${escapeHtml(title)}</strong> is currently pending administrator review.
                                         </div>
                                     </div>
                                 </div>
@@ -196,7 +196,7 @@ export class HomeView {
                                     <div>
                                         <strong style="color: var(--error);">Access Request Denied</strong>
                                         <div class="text-muted text-xs" style="margin-top: 2px;">
-                                            Your request for <strong>${title}</strong> was denied. Reason: <span style="font-style: italic;">"${latestReq.admin_comment || 'No reason provided'}"</span>
+                                            Your request for <strong>${escapeHtml(title)}</strong> was denied. Reason: <span style="font-style: italic;">"${escapeHtml(latestReq.admin_comment || 'No reason provided')}"</span>
                                         </div>
                                     </div>
                                 </div>
@@ -214,7 +214,7 @@ export class HomeView {
                                     <div>
                                         <strong style="color: var(--success);">Access Request Approved!</strong>
                                         <div class="text-muted text-xs" style="margin-top: 2px;">
-                                            Your request for <strong>${title}</strong> has been APPROVED! Enjoy full access.
+                                            Your request for <strong>${escapeHtml(title)}</strong> has been APPROVED! Enjoy full access.
                                         </div>
                                     </div>
                                 </div>
@@ -225,7 +225,7 @@ export class HomeView {
                             </div>
                         `;
                     }
-                    
+
                     if (bannerHtml) {
                         bannerContainer.innerHTML = bannerHtml;
                         bannerContainer.querySelector('.dismiss-banner-btn')?.addEventListener('click', () => {
@@ -252,7 +252,7 @@ export class HomeView {
         const cacheTimeKey = 'mediahub_home_cache_time';
         const cachedData = localStorage.getItem(cacheKey);
         const cachedTime = localStorage.getItem(cacheTimeKey);
-        
+
         let hero = null;
         let rows = [];
 
@@ -270,15 +270,19 @@ export class HomeView {
 
         if (!rows.length) {
             try {
-                hero = await api.getHeroContent();
-                rows = await api.getHomeRows(0);
+                const [heroData, rowsData] = await Promise.all([
+                    api.getHeroContent(),
+                    api.getHomeRows(0)
+                ]);
+                hero = heroData;
+                rows = rowsData;
                 this.rowsOffset = rows.length;
 
                 localStorage.setItem(cacheKey, JSON.stringify({ hero, rows }));
                 localStorage.setItem(cacheTimeKey, now.toString());
             } catch (err) {
                 console.error('Home load error:', err);
-                target.innerHTML = `<div class="empty-state"><p>Error loading home feed: ${err.message}</p></div>`;
+                target.innerHTML = `<div class="empty-state"><p>Error loading home feed: ${escapeHtml(err.message)}</p></div>`;
                 return;
             }
         }
@@ -342,7 +346,7 @@ export class HomeView {
         heroDiv.querySelector('.hero-synopsis').textContent = hero.synopsis || '';
         heroDiv.querySelector('.hero-year').textContent = hero.year || '';
         heroDiv.querySelector('.hero-duration').textContent = this._formatDuration(hero.duration);
-        
+
         const badgeType = heroDiv.querySelector('#hero-badge-type');
         if (badgeType) {
             badgeType.textContent = hero.type === 'resume' ? 'Continue Watching' : 'New Release';
@@ -390,7 +394,7 @@ export class HomeView {
         const rowDiv = document.createElement('div');
         rowDiv.className = 'home-row';
         rowDiv.innerHTML = `
-            <h2 class="row-title">${row.title}</h2>
+            <h2 class="row-title">${escapeHtml(row.title)}</h2>
             <div class="row-scroll">
                 <div class="row-items">
                     ${row.items.map(item => this._createCard(item, row.type)).join('')}
@@ -421,16 +425,16 @@ export class HomeView {
             : '';
 
         return `
-            <div class="home-card" data-id="${item.id}" data-title="${item.title}" style="will-change: transform;">
+            <div class="home-card" data-id="${item.id}" data-title="${escapeHtml(item.title)}" style="will-change: transform;">
                 <div class="card-poster">
-                    <img src="/static/placeholder.svg" data-src="${item.poster}" alt="${item.title}" class="lazy-poster">
+                    <img src="/static/placeholder.svg" data-src="${item.poster}" alt="${escapeHtml(item.title)}" class="lazy-poster">
                     ${progressHtml}
                     <div class="card-hover-info">
                         <button class="card-play-btn">▶</button>
-                        <span class="card-year">${item.year || ''}</span>
+                        <span class="card-year">${escapeHtml(String(item.year || ''))}</span>
                     </div>
                 </div>
-                <div class="card-title">${item.title}</div>
+                <div class="card-title">${escapeHtml(item.title)}</div>
             </div>
         `;
     }
@@ -454,13 +458,13 @@ export class HomeView {
         }
 
         container.querySelectorAll('.home-row').forEach((rowEl, rowIdx) => {
-            const rowData = rows[rowIdx];
+            const rowData = rows.at(rowIdx);
             rowEl.querySelectorAll('.home-card').forEach((card, cardIdx) => {
                 card.addEventListener('click', (e) => {
                     const id = parseInt(card.dataset.id);
                     const list = rowData.items.map(item => ({ id: item.id, title: item.title, duration_seconds: item.duration }));
-                    const resumePos = (rowData.type === 'resume') ? (rowData.items[cardIdx].progress * rowData.items[cardIdx].duration) : 0;
-                    
+                    const resumePos = (rowData.type === 'resume') ? (rowData.items.at(cardIdx).progress * rowData.items.at(cardIdx).duration) : 0;
+
                     player.play(list, cardIdx, resumePos);
                 });
             });
@@ -474,6 +478,11 @@ export class HomeView {
         smartSections.addEventListener('mouseenter', (e) => {
             const card = e.target.closest('.home-card');
             if (!card) return;
+
+            if (this.hoverTimeout) {
+                clearTimeout(this.hoverTimeout);
+            }
+            this._cleanupPreview();
 
             this.hoverTimeout = setTimeout(() => {
                 const mediaId = card.dataset.id;
@@ -491,7 +500,7 @@ export class HomeView {
                 this.previewVideo.addEventListener('error', () => {
                     this._cleanupPreview(card, posterImg);
                 });
-                
+
                 Object.assign(this.previewVideo.style, {
                     position: 'absolute',
                     top: '0',
@@ -504,9 +513,11 @@ export class HomeView {
                 });
 
                 const posterContainer = card.querySelector('.card-poster');
-                posterContainer.style.position = 'relative';
-                posterContainer.appendChild(this.previewVideo);
-                posterImg.style.opacity = '0.1';
+                if (posterContainer) {
+                    posterContainer.style.position = 'relative';
+                    posterContainer.appendChild(this.previewVideo);
+                }
+                if (posterImg) posterImg.style.opacity = '0.1';
 
                 this.previewVideo.play().catch(() => console.log('Autoplay blocked'));
 
@@ -516,19 +527,45 @@ export class HomeView {
             }, 500);
 
             card.addEventListener('mouseleave', () => {
-                clearTimeout(this.hoverTimeout);
+                if (this.hoverTimeout) {
+                    clearTimeout(this.hoverTimeout);
+                    this.hoverTimeout = null;
+                }
             }, { once: true });
         }, true);
     }
 
     _cleanupPreview(card, posterImg) {
+        if (this.hoverTimeout) {
+            clearTimeout(this.hoverTimeout);
+            this.hoverTimeout = null;
+        }
         if (this.previewVideo) {
-            this.previewVideo.pause();
-            this.previewVideo.remove();
+            try {
+                this.previewVideo.pause();
+                this.previewVideo.src = '';
+                this.previewVideo.load();
+                this.previewVideo.remove();
+            } catch (e) { }
             this.previewVideo = null;
         }
+
+        // Global safeguard: remove any other playing previews
+        document.querySelectorAll('.card-preview-video').forEach(video => {
+            try {
+                video.pause();
+                video.src = '';
+                video.load();
+                video.remove();
+            } catch (e) { }
+        });
+
         if (posterImg) {
             posterImg.style.opacity = '1';
+        } else {
+            document.querySelectorAll('.home-card img').forEach(img => {
+                img.style.opacity = '1';
+            });
         }
     }
 
@@ -555,12 +592,12 @@ export class HomeView {
                         rowsContainer.appendChild(this._createRow(row));
                     }
                     this.rowsOffset += moreRows.length;
-                    
+
                     const cacheKey = 'mediahub_home_cache';
                     const cached = JSON.parse(localStorage.getItem(cacheKey) || '{"rows":[]}');
                     const mergedRows = [...cached.rows, ...moreRows];
                     this._bindRowClickHandlers(rowsContainer, mergedRows);
-                    
+
                     localStorage.setItem(cacheKey, JSON.stringify({ hero: cached.hero, rows: mergedRows }));
                 }
             }
@@ -599,23 +636,23 @@ export class HomeView {
         try {
             const results = await api.getSearch(q);
             if (!results || results.length === 0) {
-                target.innerHTML = `<div class="empty-state"><p>No results found for "${query}"</p></div>`;
+                target.innerHTML = `<div class="empty-state"><p>No results found for "${escapeHtml(q)}"</p></div>`;
                 return;
             }
 
             target.innerHTML = `
                 <div class="gallery-row" style="margin-left: 0;">
-                    <div class="section-title">Search Results for "${query}"</div>
+                    <div class="section-title">Search Results for "${escapeHtml(q)}"</div>
                     <div class="gallery-track results-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:20px; overflow:visible; padding:0;">
                         ${results.map((m) => `
-                            <div class="home-card" data-id="${m.id}" data-title="${m.title}" style="width: 100%;">
+                            <div class="home-card" data-id="${m.id}" data-title="${escapeHtml(m.title)}" style="width: 100%;">
                                 <div class="card-poster">
-                                    <img src="${thumbUrl(m)}" alt="${m.title}" onerror="this.src='/static/placeholder.svg'">
+                                    <img src="${thumbUrl(m)}" alt="${escapeHtml(m.title)}" onerror="this.src='/static/placeholder.svg'">
                                     <div class="card-hover-info">
                                         <button class="card-play-btn">▶</button>
                                     </div>
                                 </div>
-                                <div class="card-title">${m.title}</div>
+                                <div class="card-title">${escapeHtml(m.title)}</div>
                             </div>
                         `).join('')}
                     </div>
@@ -629,7 +666,7 @@ export class HomeView {
                 });
             });
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>Search error: ${err.message}</p></div>`;
+            target.innerHTML = `<div class="empty-state"><p>Search error: ${escapeHtml(err.message)}</p></div>`;
         }
     }
 

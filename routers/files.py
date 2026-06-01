@@ -120,7 +120,13 @@ async def mkdir(
         from core.exceptions import AccessDeniedError
         raise AccessDeniedError("Access to 18+ content denied for this account.")
         
-    new_dir = (target_dir / payload.name).resolve()
+    from pathlib import Path
+    safe_name = Path(payload.name.replace("\\", "/")).name
+    if not safe_name or safe_name in {".", ".."}:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid folder name.")
+        
+    new_dir = (target_dir / safe_name).resolve()
     
     # Safety check: ensure it's within the resolved target parent directory
     if target_dir.resolve() not in new_dir.parents:

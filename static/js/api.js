@@ -104,8 +104,8 @@ export class ApiClient {
   getHeroContent() { return this.request("/api/media/home/hero"); }
   getHomeRows(offset = 0) { return this.request("/api/media/home/rows", { query: { offset } }); }
   getSearch(q) { return this.request("/api/media/search", { query: { q } }); }
-  async stream(mediaId, pin = "") {
-    const res = await this.request(`/api/media/${mediaId}/stream`, { query: { pin } });
+  async stream(mediaId, pin = "", priority = true) {
+    const res = await this.request(`/api/media/${mediaId}/stream`, { query: { pin, priority } });
     if (res && res.url && this.token) {
       res.url += (res.url.includes("?") ? "&" : "?") + `token=${encodeURIComponent(this.token)}`;
     }

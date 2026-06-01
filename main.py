@@ -4,6 +4,22 @@ import asyncio
 # Fix for WinError 10038 and asyncio race conditions on Windows (esp. Python 3.12+)
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    
+    # Suppress noisy WinError 10054 (browser closed tab mid-stream) from asyncio logs
+    from asyncio.proactor_events import _ProactorBasePipeTransport
+    
+    def silence_winerror_10054(func):
+        def wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except ConnectionResetError as e:
+                if getattr(e, 'winerror', 0) == 10054:
+                    pass
+                else:
+                    raise
+        return wrapper
+        
+    _ProactorBasePipeTransport._call_connection_lost = silence_winerror_10054(_ProactorBasePipeTransport._call_connection_lost)
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -63,6 +79,10 @@ async def lifespan(_: FastAPI):
     # Start Background Media Watcher
     from core.media import watch_media_library
     asyncio.create_task(watch_media_library())
+
+    # Start Background Orphan Cleanup Job
+    from core.media import run_orphan_cleanup_job
+    asyncio.create_task(run_orphan_cleanup_job())
     
     yield
     
@@ -108,27 +128,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal server error occurred. Please contact the administrator."},
     )
-
-
-@app.on_event("startup")
-async def _suppress_win_connection_reset():
-    """Suppress noisy WinError 10054 (browser closed tab mid-stream) from asyncio logs."""
-    import asyncio, sys
-    if sys.platform != "win32":
-        return
-    loop = asyncio.get_event_loop()
-    original = loop.get_exception_handler()
-
-    def _handler(loop, context):
-        exc = context.get("exception")
-        if isinstance(exc, ConnectionResetError):
-            return  # swallow — browser closed the connection, not a server error
-        if original:
-            original(loop, context)
-        else:
-            loop.default_exception_handler(context)
-
-    loop.set_exception_handler(_handler)
 
 
 app.add_middleware(
@@ -228,7 +227,10 @@ async def add_cache_control_header(request: Request, call_next):
     response = await call_next(request)
     # Cache static assets and HLS segments for better multi-device performance
     if request.url.path.startswith(("/static", "/thumbs", "/temp/hls", "/sprites")):
-        response.headers["Cache-Control"] = "public, max-age=3600"
+        if request.url.path.endswith((".js", ".html", ".m3u8")):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=3600"
     return response
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

@@ -59,6 +59,8 @@ class MediaMetadata(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    file_exists: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     play_events: Mapped[list["PlayEvent"]] = relationship(back_populates="media", cascade="all, delete-orphan")
     playlist_items: Mapped[list["PlaylistItem"]] = relationship(back_populates="media", cascade="all, delete-orphan")

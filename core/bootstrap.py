@@ -1,8 +1,7 @@
 import asyncio
 import shutil
 from pathlib import Path
-
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, select, text, func
 
 from config import get_settings
 from core.database import AsyncSessionLocal, Base, engine
@@ -44,6 +43,8 @@ _TABLE_COLUMNS: dict[str, dict[str, str]] = {
         "intro_start": "FLOAT",
         "intro_end": "FLOAT",
         "updated_at": "DATETIME",
+        "file_exists": "BOOLEAN DEFAULT 1",
+        "last_verified_at": "DATETIME",
     },
     "play_events": {
         "event_type": "VARCHAR(20) DEFAULT 'progress'",
@@ -257,12 +258,23 @@ async def bootstrap_application() -> None:
             await session.commit()
             logger.info("Guest account provisioned.")
 
-        # 8. Trigger the scan in the background with its own session lifecycle
-        async def run_background_scan():
-            async with AsyncSessionLocal() as scan_session:
-                await scan_media_library(scan_session)
-
-        asyncio.create_task(run_background_scan())
+        # 8. Trigger the scan (synchronously if empty to avoid blank startup page)
+        count_res = await session.execute(select(func.count(MediaMetadata.id)))
+        media_count = count_res.scalar() or 0
+        if media_count == 0:
+            logger.info("Database is empty. Running initial synchronous library scan...")
+            try:
+                await scan_media_library(session, use_cache=True)
+            except Exception:
+                logger.exception("Initial synchronous scan failed")
+        else:
+            async def run_background_scan():
+                async with AsyncSessionLocal() as scan_session:
+                    try:
+                        await scan_media_library(scan_session)
+                    except Exception:
+                        logger.exception("Background scan failed")
+            asyncio.create_task(run_background_scan())
 
     # NOTE: File watcher is started in main.py lifespan — NOT here to avoid duplicates.
 

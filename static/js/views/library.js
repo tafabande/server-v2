@@ -4,12 +4,12 @@
  * Optimized with batch rendering and debounced search.
  */
 import { api, player, router } from '../app.js';
-import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved, showAdultAccessDialog } from '../utils.js';export class LibraryView {
-    constructor(container) { 
-        this.container = container; 
-        this._allMedia = []; 
+import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved, showAdultAccessDialog } from '../utils.js'; export class LibraryView {
+    constructor(container) {
+        this.container = container;
+        this._allMedia = [];
         this._filteredItems = [];
-        this._viewMode = localStorage.getItem('lib_view_mode') || 'grid'; 
+        this._viewMode = localStorage.getItem('lib_view_mode') || 'grid';
         this._collapsedSubfolders = new Set();
         this.hoverTimeout = null;
         this.previewVideo = null;
@@ -60,7 +60,7 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         if (searchInput) {
             searchInput.addEventListener('input', debounce(() => this._applyFilters(), 300));
         }
-        
+
         document.getElementById('lib-sort')?.addEventListener('change', () => this._applyFilters());
         document.getElementById('lib-toggle')?.addEventListener('click', () => this._toggleView());
         document.getElementById('lib-play-all')?.addEventListener('click', () => this._playAll());
@@ -78,19 +78,35 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
 
     async _loadMedia() {
         try {
-            // getLibrary() returns PaginatedMediaResponse: { items, total, page, per_page, pages }
-            // Load up to 500 items so the full library is visible without pagination UI.
-            const response = await api.getLibrary({ per_page: 500 });
-            const rawItems = Array.isArray(response)
-                ? response                   // legacy: array of MediaRead
-                : (response?.items ?? []);   // current: PaginatedMediaResponse
+            // Fetch all media across pages (backend limits per_page to 200)
+            let allItems = [];
+            let currentPage = 1;
+            let totalPages = 1;
+            let isFirstRender = true;
 
-            this._allMedia = rawItems.map(m => ({ ...m, _category: m.category || 'Uncategorised' }));
-            this._categories = [...new Set(this._allMedia.map(m => m._category))].sort();
-            this._activeCategory = null;
+            while (currentPage <= totalPages) {
+                const response = await api.getLibrary({ page: currentPage, per_page: 200 });
+                const rawItems = Array.isArray(response)
+                    ? response
+                    : (response?.items ?? []);
 
-            this._renderTabs();
-            this._applyFilters();
+                allItems.push(...rawItems);
+
+                this._allMedia = allItems.map(m => ({ ...m, _category: m.category || 'Uncategorised' }));
+                this._categories = [...new Set(this._allMedia.map(m => m._category))].sort();
+
+                if (isFirstRender) {
+                    this._activeCategory = null;
+                    isFirstRender = false;
+                }
+
+                this._renderTabs();
+                this._applyFilters();
+
+                if (Array.isArray(response)) break;
+                totalPages = response?.pages || 1;
+                currentPage++;
+            }
         } catch (err) {
             const target = document.getElementById('lib-content');
             if (target) {
@@ -107,13 +123,14 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
     _renderTabs() {
         const tabs = document.getElementById('lib-filter-tabs');
         if (!tabs) return;
-        
+
         tabs.innerHTML = `
-            <button class="tab active" data-cat="">All Collections <span class="tab-count">${this._allMedia.length}</span></button>
+            <button class="tab ${!this._activeCategory ? 'active' : ''}" data-cat="">All Collections <span class="tab-count">${this._allMedia.length}</span></button>
             ${this._categories.map(c => {
-                const count = this._allMedia.filter(m => m._category === c).length;
-                return `<button class="tab" data-cat="${c}">${c} <span class="tab-count">${count}</span></button>`;
-            }).join('')}
+            const count = this._allMedia.filter(m => m._category === c).length;
+            const isActive = this._activeCategory === c ? 'active' : '';
+            return `<button class="tab ${isActive}" data-cat="${c}">${c} <span class="tab-count">${count}</span></button>`;
+        }).join('')}
         `;
 
         tabs.addEventListener('click', (e) => {
@@ -150,11 +167,11 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         });
 
         this._filteredItems = items;
-        
+
         const target = document.getElementById('lib-content');
         if (!target) return;
         target.innerHTML = '';
-        
+
         if (items.length === 0) {
             target.innerHTML = `
                 <div class="empty-state">
@@ -183,7 +200,7 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             const subfolderItems = groups[subfolderName];
             const isCollapsed = this._collapsedSubfolders.has(subfolderName);
             const collapsedClass = isCollapsed ? 'collapsed' : '';
-            
+
             html += `
                 <div class="subfolder-section" data-subfolder="${subfolderName}">
                     <div class="subfolder-header ${collapsedClass}">
@@ -229,7 +246,7 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
                 const section = header.closest('.subfolder-section');
                 const subfolderName = section.dataset.subfolder;
                 const content = section.querySelector('.subfolder-content');
-                
+
                 if (this._collapsedSubfolders.has(subfolderName)) {
                     this._collapsedSubfolders.delete(subfolderName);
                     header.classList.remove('collapsed');
@@ -391,10 +408,10 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             toast('Nothing to play.', 'warning');
             return;
         }
-        
+
         const adultItems = this._filteredItems.filter(m => m.adult_only);
         if (adultItems.length > 0 && !isAdultApproved()) {
-             toast('Adult content hidden. Verify age to play all.', 'error', {
+            toast('Adult content hidden. Verify age to play all.', 'error', {
                 label: 'Verify',
                 onClick: () => showAdultAccessDialog()
             });
@@ -417,6 +434,11 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             const card = e.target.closest('.media-card');
             if (!card) return;
 
+            if (this.hoverTimeout) {
+                clearTimeout(this.hoverTimeout);
+            }
+            this._cleanupActivePreview();
+
             this.hoverTimeout = setTimeout(() => {
                 const mediaId = card.dataset.mediaId;
                 const posterImg = card.querySelector('.media-card-thumb');
@@ -428,7 +450,7 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
                 this.previewVideo.autoplay = true;
                 this.previewVideo.loop = true;
                 this.previewVideo.className = 'card-preview-video';
-                
+
                 Object.assign(this.previewVideo.style, {
                     position: 'absolute',
                     top: '0',
@@ -455,19 +477,22 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             }, 500);
 
             card.addEventListener('mouseleave', () => {
-                clearTimeout(this.hoverTimeout);
+                if (this.hoverTimeout) {
+                    clearTimeout(this.hoverTimeout);
+                    this.hoverTimeout = null;
+                }
             }, { once: true });
         }, true);
     }
 
     _cleanupPreview(card, posterImg) {
-        if (this.previewVideo) {
-            this.previewVideo.pause();
-            this.previewVideo.remove();
-            this.previewVideo = null;
-        }
+        this._cleanupActivePreview();
         if (posterImg) {
             posterImg.style.opacity = '1';
+        } else {
+            document.querySelectorAll('.media-card-thumb').forEach(img => {
+                img.style.opacity = '1';
+            });
         }
     }
 
@@ -477,10 +502,24 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             this.hoverTimeout = null;
         }
         if (this.previewVideo) {
-            this.previewVideo.pause();
-            this.previewVideo.remove();
+            try {
+                this.previewVideo.pause();
+                this.previewVideo.src = '';
+                this.previewVideo.load();
+                this.previewVideo.remove();
+            } catch (e) { }
             this.previewVideo = null;
         }
+
+        // Global safeguard: remove any other playing previews
+        document.querySelectorAll('.card-preview-video').forEach(video => {
+            try {
+                video.pause();
+                video.src = '';
+                video.load();
+                video.remove();
+            } catch (e) { }
+        });
     }
 
     destroy() {

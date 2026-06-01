@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import BASE_DIR, get_settings
@@ -33,21 +34,23 @@ _scan_state = {
     "scanning": False,
     "files_scanned": 0,
     "files_total": 0,
+    "current_folder": "",
     "last_scan_at": None,
 }
 
 
 def get_scan_status() -> dict:
     """Return current scan progress."""
-    total = _scan_state["files_total"]
-    scanned = _scan_state["files_scanned"]
+    total = _scan_state.get("files_total", 0)
+    scanned = _scan_state.get("files_scanned", 0)
     progress = (scanned / total * 100) if total > 0 else 0.0
     return {
-        "scanning": _scan_state["scanning"],
+        "scanning": _scan_state.get("scanning", False),
         "files_scanned": scanned,
         "files_total": total,
         "progress_percent": round(progress, 1),
-        "last_scan_at": _scan_state["last_scan_at"],
+        "current_folder": _scan_state.get("current_folder", ""),
+        "last_scan_at": _scan_state.get("last_scan_at", None),
     }
 
 
@@ -111,7 +114,7 @@ def ffprobe_available() -> bool:
 def write_placeholder_thumbnail(destination: Path, title: str) -> None:
     import hashlib
     # Generate a stable color based on title
-    h = hashlib.md5(title.encode()).hexdigest()
+    h = hashlib.sha256(title.encode()).hexdigest()
     hue = int(h[:2], 16) % 360
     color1 = f"hsl({hue}, 60%, 25%)"
     color2 = f"hsl({(hue + 40) % 360}, 70%, 15%)"
@@ -191,18 +194,22 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
             f"{seek_seconds:.2f}",
             "-i",
             str(source_path),
+            "-an",
+            "-sn",
             "-vf",
-            "scale=480:-1",
-            "-strict",
-            "-2",
-            "-frames:v",
+            "scale=480:-2",
+            "-vframes",
             "1",
             "-q:v",
             "4",
             str(jpg_destination),
         ]
         try:
-            completed = subprocess.run(command, capture_output=True, text=True)
+            creation_flags = 0
+            if os.name == 'nt':
+                creation_flags = 0x08000000  # CREATE_NO_WINDOW
+                
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=30, creationflags=creation_flags)
             if completed.returncode == 0 and jpg_destination.exists():
                 logger.info(f"Generated thumbnail for {relative_path}")
                 if destination.exists():
@@ -259,8 +266,19 @@ def build_sprite_sheet(source_path: Path, media_id: int) -> dict | None:
         "-q:v", "5",
         str(destination),
     ]
+    
+    creation_flags = 0
+    if os.name == 'nt':
+        creation_flags = 0x00000040 # IDLE_PRIORITY_CLASS
+
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            creationflags=creation_flags
+        )
         if result.returncode == 0 and destination.exists():
             logger.info(f"Generated sprite sheet for media {media_id}")
             return _sprite_meta(destination, media_id)
@@ -343,38 +361,184 @@ def resolve_shortcut(lnk_path: Path) -> Path | None:
     return None
 
 
-def get_all_media_files(root: Path, base_relative: str = "") -> list[tuple[Path, str]]:
-    items = []
+def _path_is_inside(path: Path, root: Path | None) -> bool:
+    if root is None:
+        return False
     try:
-        if not root.exists(): return []
-        for p in root.iterdir():
-            if p.name.startswith("."): continue
-            try:
-                if p.is_dir():
-                    if p.name.lower() in {"icons", "icon"}:
-                        continue
-                    items.extend(get_all_media_files(p, f"{base_relative}{p.name}/"))
-                elif p.suffix.lower() == ".lnk":
-                    target = resolve_shortcut(p)
-                    if target:
-                        if target.is_dir():
-                            items.extend(get_all_media_files(target, f"{base_relative}{p.stem}/"))
-                        elif target.is_file() and is_media_file(target):
-                            items.append((target, f"{base_relative}{p.stem}{target.suffix}"))
-                elif is_media_file(p):
-                    items.append((p, f"{base_relative}{p.name}"))
-            except (PermissionError, OSError) as e:
-                logger.warning(f"Skipping {p}: {e}")
+        resolved_path = path.resolve(strict=False)
+        resolved_root = root.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return False
+    return resolved_path == resolved_root or resolved_root in resolved_path.parents
+
+
+def _configured_log_dir_candidates() -> list[Path]:
+    candidates = [settings.logs_folder]
+    raw_log_dir = os.getenv("LOGS_FOLDER")
+    if raw_log_dir:
+        raw_path = Path(raw_log_dir)
+        candidates.append(raw_path if raw_path.is_absolute() else BASE_DIR / raw_path)
+    return candidates
+
+
+def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = True) -> list[tuple[Path, str]]:
+    logger.info(f"Configured scan root: {root}")
+
+    try:
+        resolved_root_str = str(root.resolve(strict=False))
+    except Exception:
+        resolved_root_str = str(root)
+
+    items: list[tuple[Path, str]] = []
+    visited_dirs: set[str] = set()
+    visited_files: set[str] = set()
+    logged_errors: set[str] = set()
+
+    cache_file = settings.temp_folder / "file_scan_cache.json"
+    if use_cache and cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                if data.get("version") == "1.1" and data.get("root") == resolved_root_str:
+                    cached_items = []
+                    resolved_root = os.path.realpath(resolved_root_str)
+                    from core.storage import get_shortcut_mappings
+                    shortcut_targets = []
+                    for lnk, target in get_shortcut_mappings():
+                        try:
+                            shortcut_targets.append(os.path.realpath(str(target.resolve())))
+                        except Exception:
+                            continue
+
+                    for p, rel in data.get("items", []):
+                        resolved_p = os.path.realpath(p)
+                        is_safe = resolved_p == resolved_root or resolved_p.startswith(resolved_root + os.sep)
+                        if not is_safe:
+                            for target_path in shortcut_targets:
+                                if resolved_p == target_path or resolved_p.startswith(target_path + os.sep):
+                                    is_safe = True
+                                    break
+                        if is_safe:
+                            cached_items.append((Path(resolved_p), rel))
+                        else:
+                            logger.warning("Path traversal or outside-root path detected in scan cache: %s", p)
+                    return cached_items
+                else:
+                    logger.info("Scan cache context mismatch (root or version). Rebuilding...")
+            else:
+                logger.info("Legacy scan cache format detected. Rebuilding...")
+        except Exception as e:
+            logger.warning(f"Failed to read scan cache: {e}")
+
+    def log_skip_once(path: Path, error: BaseException) -> None:
+        key = str(path)
+        if key in logged_errors:
+            return
+        logged_errors.add(key)
+        logger.warning("Skipping inaccessible media scan path %s: %s", path, error)
+
+    try:
+        if not root.exists(): 
+            return []
     except (PermissionError, OSError) as e:
-        logger.error(f"Could not access directory {root}: {e}")
+        log_skip_once(root, e)
+        return []
+
+    log_dir_roots: list[Path] = []
+    for candidate in _configured_log_dir_candidates():
+        try:
+            log_dir_roots.append(candidate.resolve(strict=False))
+        except (OSError, RuntimeError):
+            continue
+
+    def is_excluded_scan_path(path: Path) -> bool:
+        return any(_path_is_inside(path, excluded_root) for excluded_root in log_dir_roots)
+
+    stack = [(root, base_relative)]
+
+    while stack:
+        current_dir, current_rel = stack.pop()
+        _scan_state["current_folder"] = current_dir.name or str(current_dir)
+
+        if is_excluded_scan_path(current_dir):
+            continue
+
+        try:
+            resolved_current = current_dir.resolve(strict=False)
+        except (PermissionError, OSError) as e:
+            log_skip_once(current_dir, e)
+            continue
+
+        current_key = os.path.normcase(str(resolved_current))
+        if current_key in visited_dirs:
+            continue
+        visited_dirs.add(current_key)
+
+        try:
+            for p in current_dir.iterdir():
+                try:
+                    if p.name.startswith("."):
+                        continue
+                    if is_excluded_scan_path(p):
+                        continue
+
+                    if p.is_dir():
+                        if p.name.lower() in {"icons", "icon"}:
+                            continue
+                        stack.append((p, f"{current_rel}{p.name}/"))
+                    elif p.suffix.lower() == ".lnk":
+                        target = resolve_shortcut(p)
+                        if target:
+                            if is_excluded_scan_path(target):
+                                continue
+                            if target.is_dir():
+                                stack.append((target, f"{current_rel}{p.stem}/"))
+                            elif target.is_file() and is_media_file(target):
+                                try:
+                                    resolved_target = target.resolve(strict=False)
+                                    file_key = os.path.normcase(str(resolved_target))
+                                    if file_key in visited_files:
+                                        continue
+                                    visited_files.add(file_key)
+                                except Exception:
+                                    pass
+                                items.append((target, f"{current_rel}{p.stem}{target.suffix}"))
+                    elif is_media_file(p):
+                        try:
+                            resolved_p = p.resolve(strict=False)
+                            file_key = os.path.normcase(str(resolved_p))
+                            if file_key in visited_files:
+                                continue
+                            visited_files.add(file_key)
+                        except Exception:
+                            pass
+                        items.append((p, f"{current_rel}{p.name}"))
+                except (PermissionError, OSError) as e:
+                    log_skip_once(p, e)
+        except (PermissionError, OSError) as e:
+            log_skip_once(current_dir, e)
+
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_payload = {
+            "version": "1.1",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "root": resolved_root_str,
+            "items": [(str(p), rel) for p, rel in items]
+        }
+        cache_file.write_text(json.dumps(cache_payload), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Could not write scan cache: {e}")
+
     return items
 
 
-async def scan_media_library(session: AsyncSession) -> int:
+async def scan_media_library(session: AsyncSession, use_cache: bool = True, force_thumbs: bool = False) -> int:
     logger.info("Starting media library discovery and indexing...")
     _scan_state["scanning"] = True
     _scan_state["files_scanned"] = 0
     _scan_state["files_total"] = 0
+    _scan_state["current_folder"] = "Initializing..."
     indexed = 0
     seen_paths: set[str] = set()
 
@@ -385,18 +549,23 @@ async def scan_media_library(session: AsyncSession) -> int:
     fs_result = await session.execute(select(FolderSetting))
     folder_settings_map = {s.path.lower(): s for s in fs_result.scalars() if s.path}
 
-    media_files = await asyncio.to_thread(get_all_media_files, settings.shared_folder)
+    media_files = await asyncio.to_thread(get_all_media_files, settings.shared_folder, "", use_cache)
     _scan_state["files_total"] = len(media_files)
 
     for target_path, virtual_rel in media_files:
+        _scan_state["current_folder"] = target_path.parent.name or "Root"
         logger.debug(f"Processing file during scan: {target_path.name}")
-        seen_paths.add(virtual_rel)
         media = existing_map.get(virtual_rel)
-        stat = target_path.stat()
+        try:
+            stat = target_path.stat()
+        except OSError as e:
+            logger.warning(f"Failed to access file {target_path} during scan, skipping: {e}")
+            continue
+        seen_paths.add(virtual_rel)
         title = clean_title(target_path)
         
         # Performance optimization: if size is unchanged, duration is indexed, and thumbnail is not a placeholder (SVG), bypass heavy probe/thumbnail operations
-        if media and media.file_size == stat.st_size and media.duration_seconds and media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
+        if not force_thumbs and media and media.file_size == stat.st_size and media.duration_seconds and media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
             thumbnail = media.thumbnail_path
             probe = {
                 "width": media.width,
@@ -410,20 +579,6 @@ async def scan_media_library(session: AsyncSession) -> int:
             probe = await asyncio.to_thread(probe_media, target_path)
             duration = probe.get("duration_seconds")
             thumbnail = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title, duration)
-
-        if not media:
-            media = MediaMetadata(relative_path=virtual_rel, path=str(target_path.resolve()))
-            session.add(media)
-
-        media.title = title
-        media.category = virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added"
-        media.file_size = stat.st_size
-        media.container = target_path.suffix.lower().lstrip(".")
-        media.thumbnail_path = thumbnail
-        media.stream_mode = detect_stream_mode(target_path)
-        media.hls_status = "ready" if media.stream_mode == "direct" else "pending"
-        # We manually compute adult/pin for virtual relative paths
-
 
         virtual_parts = [""]
         current = ""
@@ -439,28 +594,78 @@ async def scan_media_library(session: AsyncSession) -> int:
         db_adult = any(s.is_adult for s in db_settings)
 
         keyword_parts = {piece for piece in virtual_rel.lower().split("/") if piece}
-        media.requires_pin = db_locked or bool(keyword_parts & settings.pin_keyword_set)
-        media.adult_only = db_adult or bool(keyword_parts & settings.adult_keyword_set)
+        requires_pin = db_locked or bool(keyword_parts & settings.pin_keyword_set)
+        adult_only = db_adult or bool(keyword_parts & settings.adult_keyword_set)
+        stream_mode = detect_stream_mode(target_path)
         
-        media.last_scanned_at = datetime.now(UTC)
-        media.width = probe.get("width")
-        media.height = probe.get("height")
-        media.bitrate = probe.get("bitrate")
-        media.video_codec = probe.get("video_codec")
-        media.audio_codec = probe.get("audio_codec")
-        media.duration_seconds = probe.get("duration_seconds")
+        # Use an UPSERT instead of a plain INSERT to prevent duplicate path constraint crashes
+        media_values = {
+            "relative_path": virtual_rel,
+            "path": str(target_path.resolve()),
+            "title": title,
+            "category": virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added",
+            "file_size": stat.st_size,
+            "container": target_path.suffix.lower().lstrip("."),
+            "thumbnail_path": thumbnail,
+            "stream_mode": stream_mode,
+            "hls_status": "ready" if stream_mode == "direct" else "pending",
+            "requires_pin": requires_pin,
+            "adult_only": adult_only,
+            "last_scanned_at": datetime.now(UTC),
+            "width": probe.get("width"),
+            "height": probe.get("height"),
+            "bitrate": probe.get("bitrate"),
+            "video_codec": probe.get("video_codec"),
+            "audio_codec": probe.get("audio_codec"),
+            "duration_seconds": probe.get("duration_seconds"),
+            "file_exists": True,
+            "last_verified_at": datetime.now(UTC),
+        }
+        
+        stmt = insert(MediaMetadata).values(**media_values)
+        upsert_stmt = stmt.on_conflict_do_update(
+            index_elements=["path"],
+            # Intentionally omit hls_status to avoid re-triggering transcodes on previously indexed items
+            set_={k: v for k, v in media_values.items() if k not in ["path", "hls_status"]} 
+        )
+        await session.execute(upsert_stmt)
+
         indexed += 1
         _scan_state["files_scanned"] = indexed
+
+        # Progressive commit to allow fast loadup of UI during heavy scans
+        if indexed % 50 == 0:
+            await session.commit()
+            await asyncio.sleep(0.01) # Yield to event loop so API can serve items
 
     result = await session.execute(select(MediaMetadata))
     for media in result.scalars():
         if media.relative_path not in seen_paths:
-            await session.delete(media)
+            if media.file_exists:
+                # Soft-delete
+                media.file_exists = False
+                media.last_verified_at = datetime.now(UTC)
+                logger.warning(f"Scan cleanup: Media '{media.title}' (ID {media.id}) missing. Marked as inactive.")
+            else:
+                # Check if stale (older than 7 days)
+                from datetime import timedelta
+                stale_days = getattr(settings, "stale_db_days", 7)
+                cutoff = datetime.now(UTC) - timedelta(days=stale_days)
+                last_verified = media.last_verified_at
+                if last_verified:
+                    if last_verified.tzinfo is None:
+                        last_verified = last_verified.replace(tzinfo=UTC)
+                    if last_verified < cutoff:
+                        # Hard-delete
+                        await session.delete(media)
+                        logger.info(f"Scan cleanup: Stale media '{media.title}' (ID {media.id}) deleted.")
 
     await session.commit()
     _scan_state["scanning"] = False
     _scan_state["last_scan_at"] = datetime.now(UTC).isoformat()
     logger.info(f"Scan complete. Indexed {indexed} items.")
+    from core.events import broadcast_library_updated
+    await broadcast_library_updated(indexed)
     from core.webhooks import trigger_webhook
     await trigger_webhook("library.updated", {"indexed_count": indexed})
     return indexed
@@ -477,12 +682,15 @@ async def library_groups(session: AsyncSession, current_user: User) -> list[dict
     return [{"label": label, "items": items} for label, items in groups.items()]
 
 
-async def get_media(session: AsyncSession, media_id: int) -> MediaMetadata:
+async def get_media(session: AsyncSession, media_id: int, allow_missing: bool = False) -> MediaMetadata:
     result = await session.execute(select(MediaMetadata).where(MediaMetadata.id == media_id))
     media = result.scalar_one_or_none()
     if not media:
         logger.warning(f"Media resource not found: ID {media_id}")
         raise ResourceNotFoundError(f"Media with ID {media_id} not found.")
+    if not media.file_exists and not allow_missing:
+        logger.warning(f"Media file is marked as missing: ID {media_id}")
+        raise ResourceNotFoundError(f"Media with ID {media_id} is missing.")
     return media
 
 
@@ -559,7 +767,7 @@ def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict],
 
     num_profiles = len(profiles)
     v_splits = "".join(f"[v{i}]" for i in range(num_profiles))
-    filter_parts = [f"[0:v]split={num_profiles}{v_splits}"]
+    filter_parts = [f"[0:v:0]split={num_profiles}{v_splits}"]
     
     for i, p in enumerate(profiles):
         filter_parts.append(f"[v{i}]scale=w={p['width']}:h={p['height']}[v{i}out]")
@@ -571,6 +779,7 @@ def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict],
         "-y",
         *hw_args,
         "-i", str(source_path),
+        "-sn",  # Disable subtitles during video transcode to prevent pipeline crashes
         "-filter_complex", filter_complex,
     ]
 
@@ -580,24 +789,33 @@ def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict],
             "-map", f"[v{i}out]",
             f"-c:v:{i}", video_encoder,
             f"-preset:v:{i}", preset,
+        ])
+        if video_encoder == "libx264":
+            cmd.extend([f"-tune:v:{i}", "zerolatency"])
+        cmd.extend([
             f"-b:v:{i}", p["bitrate"],
             f"-maxrate:v:{i}", p.get("maxrate", p["bitrate"]),
             f"-bufsize:v:{i}", p.get("bufsize", "12000k"),
+            f"-g:v:{i}", "120",           # Enforce uniform keyframes
+            f"-keyint_min:v:{i}", "120",  # Prevent variable length chunk mismatches
+            f"-sc_threshold:v:{i}", "0",  # Disable scene change keyframe insertion
         ])
 
     has_audio = bool(media.audio_codec)
     if has_audio:
         cmd.extend([
-            "-map", "0:a",
+            "-map", "0:a:0",
             "-c:a", "aac",
+            "-ac", "2",
             "-b:a", "192k",
         ])
 
     cmd.extend([
         "-f", "hls",
-        "-hls_time", "6",
+        "-hls_init_time", "2",
+        "-hls_time", "5",
         "-hls_playlist_type", "vod",
-        "-hls_flags", "independent_segments",
+        "-hls_flags", "independent_segments+temp_file",
         "-hls_segment_type", "fmp4",
         "-master_pl_name", "master.m3u8",
     ])
@@ -659,16 +877,36 @@ async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, prior
 
     process = None
     try:
+        if priority:
+            # Kill all other active transcodes to give this one 100% CPU/GPU resources
+            other_ids = [mid for mid in list(_active_processes.keys()) if mid != media.id]
+            for mid in other_ids:
+                proc = _active_processes.get(mid)
+                if proc:
+                    logger.info(f"Terminating background transcode for media ID {mid} to prioritize media ID {media.id}")
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    _active_processes.pop(mid, None)
+                    _active_transcodes.discard(mid)
+                    if mid in _transcode_events:
+                        _transcode_events[mid].set()
+                        _transcode_events.pop(mid, None)
+
         logger.info(f"Starting ABR HLS transcoding for media ID {media.id} (priority: {priority})")
         command = build_hls_command(media_source_path(media), output_dir, profiles, media)
         
         # Windows-specific priority setting
         creation_flags = 0
-        if priority:
-            import os
-            if os.name == 'nt':
-                # ABOVE_NORMAL_PRIORITY_CLASS
-                creation_flags = 0x00008000 
+        import os
+        if os.name == 'nt':
+            if priority:
+                # HIGH_PRIORITY_CLASS
+                creation_flags = 0x00000080
+            else:
+                # IDLE_PRIORITY_CLASS
+                creation_flags = 0x00000040
 
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -867,7 +1105,7 @@ async def watch_media_library():
             # Wait a bit for file operations to settle
             await asyncio.sleep(2)
             async with AsyncSessionLocal() as session:
-                total = await scan_media_library(session)
+                total = await scan_media_library(session, use_cache=False)
                 await broadcast_library_updated(total)
     except ImportError:
         logger.warning("watchfiles not installed. Auto-rescan disabled.")
@@ -878,6 +1116,9 @@ async def apply_media_security_filters(
     stmt,
     current_user: User,
 ):
+    # Filter out files that do not physically exist on disk
+    stmt = stmt.where(MediaMetadata.file_exists == True)
+
     # 1. R18 / Adult Filter
     if not current_user.is_adult:
         stmt = stmt.where(MediaMetadata.adult_only == False)
@@ -1022,3 +1263,132 @@ async def cleanup_active_processes():
             except Exception as e:
                 logger.error(f"Error terminating process {media_id}: {e}")
     _active_processes.clear()
+
+
+async def run_orphan_cleanup_job() -> None:
+    """
+    Background job that runs periodically to:
+    1. Verify media file physical existence, marking `file_exists` (soft delete flag) and `last_verified_at`.
+    2. Safely clean up (hard delete) records that have been missing for more than settings.stale_db_days (default 7 days).
+    3. Rebuild missing sprite sheets for existing active files sequentially at idle priority.
+    """
+    import asyncio
+    import shutil
+    from pathlib import Path
+    from datetime import timedelta
+    from core.database import AsyncSessionLocal
+    from core.bootstrap import self_heal_data_integrity
+    from core.events import broadcast_library_updated
+
+    # Initial delay on startup to let the system fully initialize
+    await asyncio.sleep(30)
+
+    while True:
+        try:
+            logger.info("Starting background orphan cleanup & validation job...")
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(MediaMetadata))
+                all_media = result.scalars().all()
+
+                stale_days = getattr(settings, "stale_db_days", 7)
+                cutoff_time = datetime.now(UTC) - timedelta(days=stale_days)
+
+                updated_count = 0
+                deleted_count = 0
+                valid_media = []
+
+                for media in all_media:
+                    source = media_source_path(media)
+                    exists_on_disk = source.exists() and source.is_file()
+
+                    if exists_on_disk:
+                        valid_media.append(media)
+                        if not media.file_exists:
+                            media.file_exists = True
+                            media.last_verified_at = datetime.now(UTC)
+                            updated_count += 1
+                            logger.info(f"Orphan worker: Media '{media.title}' (ID {media.id}) found on disk again, marked active.")
+                    else:
+                        # File does not exist on disk
+                        if media.file_exists:
+                            # Just became missing
+                            media.file_exists = False
+                            media.last_verified_at = datetime.now(UTC)
+                            updated_count += 1
+                            logger.warning(f"Orphan worker: Media '{media.title}' (ID {media.id}) is missing on disk. Flagged as missing.")
+                        else:
+                            # Already missing, check if it's stale (older than cutoff_time)
+                            last_verified = media.last_verified_at
+                            if last_verified:
+                                if last_verified.tzinfo is None:
+                                    last_verified = last_verified.replace(tzinfo=UTC)
+                                
+                                if last_verified < cutoff_time:
+                                    # Hard delete!
+                                    # 1. Clean up sprite sheet file
+                                    sprite_file = sprite_path_for(media.id)
+                                    if sprite_file.exists():
+                                        try:
+                                            sprite_file.unlink()
+                                            logger.info(f"Orphan worker: Deleted sprite file for stale media ID {media.id}")
+                                        except Exception as e:
+                                            logger.warning(f"Orphan worker: Failed to delete sprite file {sprite_file}: {e}")
+
+                                    # 2. Clean up HLS directory
+                                    hls_dir = hls_output_dir(media.id)
+                                    if hls_dir.exists():
+                                        try:
+                                            shutil.rmtree(hls_dir, ignore_errors=True)
+                                            logger.info(f"Orphan worker: Deleted HLS directory for stale media ID {media.id}")
+                                        except Exception as e:
+                                            logger.warning(f"Orphan worker: Failed to delete HLS directory {hls_dir}: {e}")
+
+                                    # 3. Clean up thumbnail
+                                    if media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
+                                        thumb_file = settings.thumbs_folder / Path(media.thumbnail_path.replace(chr(92), "/")).name
+                                        if thumb_file.exists() and thumb_file.is_file():
+                                            try:
+                                                thumb_file.unlink()
+                                                logger.info(f"Orphan worker: Deleted thumbnail file for stale media ID {media.id}")
+                                            except Exception as e:
+                                                logger.warning(f"Orphan worker: Failed to delete thumbnail {thumb_file}: {e}")
+
+                                    # 4. Delete DB record
+                                    await session.delete(media)
+                                    deleted_count += 1
+                                    logger.info(f"Orphan worker: Hard deleted stale DB entry for '{media.title}' (ID {media.id})")
+
+                if updated_count or deleted_count:
+                    await session.commit()
+                    # Notify frontend to refresh library
+                    await broadcast_library_updated(0)
+                    
+                    if deleted_count:
+                        # Clean up secondary relations
+                        await self_heal_data_integrity()
+                else:
+                    logger.info("Orphan worker: All DB records verified. No stale media found.")
+
+                # Rebuild missing sprites for existing media files sequentially
+                missing_sprites = []
+                for media in valid_media:
+                    sprite_file = sprite_path_for(media.id)
+                    if not sprite_file.exists():
+                        missing_sprites.append(media)
+
+                if missing_sprites:
+                    logger.info(f"Orphan worker: Found {len(missing_sprites)} media items missing sprite sheets. Rebuilding sequentially...")
+                    for media in missing_sprites:
+                        source = media_source_path(media)
+                        logger.info(f"Orphan worker: Generating sprite sheet for '{media.title}' (ID {media.id})")
+                        await asyncio.to_thread(build_sprite_sheet, source, media.id)
+                        await asyncio.sleep(2)  # Pause to yield to event loop and prevent CPU spikes
+                else:
+                    logger.info("Orphan worker: All active media items have sprite sheets.")
+
+            logger.info("Background orphan cleanup & validation job completed.")
+        except Exception as e:
+            logger.error(f"Error in background orphan cleanup job: {e}", exc_info=True)
+
+        # Run every 1 hour (3600 seconds)
+        await asyncio.sleep(3600)

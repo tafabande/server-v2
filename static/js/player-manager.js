@@ -2,7 +2,7 @@
  * MediaHub — Modern Cinematic Video Player Manager
  */
 import { api } from './app.js';
-import { isAdultApproved, toast, confirm } from './utils.js';
+import { isAdultApproved, toast, confirm, escapeHtml } from './utils.js';
 
 export class PlayerManager {
     constructor() {
@@ -18,7 +18,7 @@ export class PlayerManager {
         this.controlsTimer = null;
         this.lastTap = 0;
         this.isLoading = false;
-        
+
         // Dynamic Theming State
         this.themeTimer = null;
         this.analyzerCanvas = document.createElement('canvas');
@@ -30,7 +30,7 @@ export class PlayerManager {
         this.preloadedMediaId = null;
         this.preloadVideo = document.createElement('video');
         this.preloadVideo.muted = true;
-        
+
         this._lastProgressSecond = -1;
 
         // Async play safety lock — prevents Promise abort errors on rapid clicks
@@ -42,17 +42,21 @@ export class PlayerManager {
         // Sprite sheet state for hover-preview thumbnails
         this._sprite = null;  // { url, thumb_w, thumb_h, columns, interval }
         this._spriteRetryTimer = null;
+        this._spriteCache = new Map();
+
+        // Media validity cache to prevent spamming 404s
+        this._mediaValidityCache = new Map();
 
         this._bindElements();
         this._bindEvents();
         this._bindKeyboard();
         this._bindGestures();
         this._bindSeekPreview();
-        
+
         // Throttling for seek preview
         this._lastSeekUpdateTime = 0;
         this._wasPlayingBeforeDrag = false;
-        
+
         // Restore volume
         const savedVol = localStorage.getItem('mediahub_volume');
         if (savedVol !== null) {
@@ -75,7 +79,7 @@ export class PlayerManager {
                 const url = `/api/media/${this.currentMedia.id}/events`;
                 const payload = JSON.stringify({
                     position_seconds: this.video.currentTime,
-                    completed: this.video.ended || (this.video.duration && this.video.currentTime / this.video.duration > 0.95),
+                    completed: !!(this.video.ended || (this.video.duration > 0 && this.video.currentTime / this.video.duration > 0.95)),
                     event_type: 'stop',
                 });
                 fetch(url, {
@@ -86,7 +90,7 @@ export class PlayerManager {
                     },
                     body: payload,
                     keepalive: true
-                }).catch(() => {});
+                }).catch(() => { });
             }
         });
     }
@@ -108,7 +112,7 @@ export class PlayerManager {
         this.btnBack = document.getElementById('btn-back');
         this.btnSettings = document.getElementById('btn-settings');
         this.btnFavorite = document.getElementById('btn-favorite');
-        
+
         // Queue Sheet & Toast
         this.queueSheet = document.getElementById('queue-sheet');
         this.queueList = document.getElementById('queue-list');
@@ -120,7 +124,7 @@ export class PlayerManager {
         this.mainMenu = document.getElementById('drawer-main-menu');
         this.speedMenu = document.getElementById('drawer-speed-menu');
         this.ratioMenu = document.getElementById('drawer-ratio-menu');
-        
+
         this.valSpeed = document.getElementById('val-speed');
         this.valRatio = document.getElementById('val-ratio');
         this.valSubs = document.getElementById('val-subs');
@@ -155,14 +159,14 @@ export class PlayerManager {
         this._boundPause = () => {
             this._onPlayState(false);
             this._stopThemeAnalysis();
-            
+
             // Save state immediately on pause
             if (this.currentMedia && this.video.currentTime > 5) {
                 api.recordPlayback(this.currentMedia.id, {
                     position_seconds: this.video.currentTime,
                     completed: false,
                     event_type: 'progress',
-                }).catch(() => {});
+                }).catch(() => { });
             }
         };
         this._boundEnded = () => this._onEnded();
@@ -175,26 +179,34 @@ export class PlayerManager {
         this.video.addEventListener('timeupdate', this._boundTimeUpdate);
         this.video.addEventListener('loadedmetadata', this._boundLoaded);
 
+        this._boundVideoError = (e) => {
+            if (this.currentMedia && this._playbackState !== 'FAILED') {
+                console.warn("Video Element Error event:", e);
+                this._handleFailover(e);
+            }
+        };
+        this.video.addEventListener('error', this._boundVideoError);
+
         // Buffer progress: fires when the browser downloads more of the video
         this.video.addEventListener('progress', () => this._onBufferUpdate());
-        
+
         this.video.addEventListener('waiting', () => {
             if (!this.video.paused) {
                 this.isLoading = true;
                 this.modal.classList.add('is-loading');
             }
         });
-        
+
         this.video.addEventListener('playing', () => {
             this.isLoading = false;
             this.modal.classList.remove('is-loading');
         });
-        
+
         this.video.addEventListener('canplay', () => {
             this.isLoading = false;
             this.modal.classList.remove('is-loading');
         });
-        
+
         this.modal.addEventListener('dblclick', (e) => {
             // Ignore double clicks on drawer or UI controls
             if (e.target.closest('.player-drawer') || e.target.closest('.player-overlay') && !e.target.classList.contains('player-gesture-zones') && !e.target.classList.contains('gesture-zone')) return;
@@ -213,10 +225,10 @@ export class PlayerManager {
 
             const rect = this.transportTrack.getBoundingClientRect();
             const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-            
+
             // Only update visuals during drag, not the video's actual time to prevent network stutter
             if (this.transportFill) this.transportFill.style.width = `${pct * 100}%`;
-            
+
             dragSeekTime = pct * duration;
             if (this.transportCurrent) this.transportCurrent.textContent = this._formatTime(dragSeekTime);
 
@@ -231,7 +243,7 @@ export class PlayerManager {
             isDragging = true;
             this._wasPlayingBeforeDrag = !this.video.paused;
             if (this._wasPlayingBeforeDrag) this.video.pause();
-            
+
             this.transportTrack.setPointerCapture(e.pointerId);
             handleDrag(e.clientX);
             this._showControls();
@@ -249,12 +261,12 @@ export class PlayerManager {
                 e.stopPropagation();
                 isDragging = false;
                 this.transportTrack.releasePointerCapture(e.pointerId);
-                
+
                 // Commit the seek ONLY when drag ends
                 this.video.currentTime = dragSeekTime;
-                
+
                 if (this._wasPlayingBeforeDrag) {
-                    this.video.play().catch(() => {});
+                    this.video.play().catch(() => { });
                 }
                 this._showControls();
 
@@ -267,7 +279,7 @@ export class PlayerManager {
                         position_seconds: dragSeekTime,
                         completed: false,
                         event_type: 'progress',
-                    }).catch(() => {});
+                    }).catch(() => { });
                 }
             }
         };
@@ -278,7 +290,7 @@ export class PlayerManager {
         // Drawer Logic
         this.drawer?.addEventListener('click', (e) => e.stopPropagation());
         this.drawerBack?.addEventListener('click', () => this._showMainMenu());
-        
+
         this.mainMenu.querySelectorAll('.drawer-item').forEach(item => {
             item.addEventListener('click', () => {
                 const menu = item.dataset.menu;
@@ -358,7 +370,7 @@ export class PlayerManager {
     _bindKeyboard() {
         document.addEventListener('keydown', (e) => {
             if (!this.modal.open) return;
-            
+
             // Ignore keystrokes if the user is typing in an input or textarea
             const targetTag = e.target.tagName;
             if (targetTag === 'INPUT' || targetTag === 'TEXTAREA') return;
@@ -376,10 +388,10 @@ export class PlayerManager {
                 case 's': case 'S': this.toggleShuffle(); break;
                 case 'q': case 'Q': this.toggleQueueSheet(); break;
                 case 'f': case 'F': this.toggleFullscreen(); break;
-                case 'Escape': 
+                case 'Escape':
                     if (this.drawer.classList.contains('open')) this.toggleDrawer(false);
                     else if (this.queueSheet?.classList.contains('open')) this.toggleQueueSheet(false);
-                    else this.eject(); 
+                    else this.eject();
                     break;
             }
         });
@@ -391,18 +403,18 @@ export class PlayerManager {
         this.longPressTimer = null;
         this.seekInterval = null;
         this.isLongPress = false;
-        
+
         // Per-zone state tracking for taps and double-taps
-        this._gestureState = {
-            left: { lastTap: 0, timer: null },
-            middle: { lastTap: 0, timer: null },
-            right: { lastTap: 0, timer: null }
-        };
+        this._gestureState = new Map([
+            ['left', { lastTap: 0, timer: null }],
+            ['middle', { lastTap: 0, timer: null }],
+            ['right', { lastTap: 0, timer: null }]
+        ]);
 
         const handleStart = (e, zone) => {
             // Only handle primary pointer (left mouse button or first touch)
             if (e.button !== undefined && e.button !== 0) return;
-            
+
             // Prevent browser defaults for custom gestures
             if (e.pointerType === 'touch') {
                 e.target.setPointerCapture(e.pointerId);
@@ -410,7 +422,7 @@ export class PlayerManager {
 
             this.isLongPress = false;
             clearTimeout(this.longPressTimer);
-            
+
             this.longPressTimer = setTimeout(() => {
                 this.isLongPress = true;
                 this._handleLongPressStart(zone);
@@ -419,16 +431,16 @@ export class PlayerManager {
 
         const handleEnd = (e, zone) => {
             clearTimeout(this.longPressTimer);
-            
+
             if (this.isLongPress) {
                 this._handleLongPressEnd(zone);
                 this.isLongPress = false;
                 return;
             }
 
-            const state = this._gestureState[zone];
+            const state = this._gestureState.get(zone);
             const now = Date.now();
-            
+
             if (now - state.lastTap < 300) {
                 // Double tap detected
                 clearTimeout(state.timer);
@@ -452,20 +464,20 @@ export class PlayerManager {
                 this._handleLongPressEnd(zone);
             }
             this.isLongPress = false;
-            
-            const state = this._gestureState[zone];
+
+            const state = this._gestureState.get(zone);
             clearTimeout(state.timer);
             state.lastTap = 0;
         };
 
         this.gestureOverlay.querySelectorAll('.gesture-zone').forEach(zoneEl => {
             const zone = zoneEl.dataset.zone;
-            
+
             // Pointer events are unified and more reliable
             zoneEl.addEventListener('pointerdown', (e) => handleStart(e, zone));
             zoneEl.addEventListener('pointerup', (e) => handleEnd(e, zone));
             zoneEl.addEventListener('pointercancel', (e) => handleCancel(e, zone));
-            
+
             // If pointer leaves, we should cancel the long press but not trigger a tap
             zoneEl.addEventListener('pointerleave', (e) => {
                 if (this.isLongPress) {
@@ -587,7 +599,7 @@ export class PlayerManager {
         if (Array.isArray(input)) {
             this.originalQueue = [...input];
             this.queue = [...input];
-            const selectedItem = this.queue[index];
+            const selectedItem = this.queue.at(index);
 
             if (this.isShuffle) {
                 this.shuffleQueue();
@@ -606,12 +618,12 @@ export class PlayerManager {
             this.modal.showModal();
             document.body.classList.add('player-active');
         }
-        
+
         this._loadCurrent();
     }
 
     async _loadCurrent() {
-        const media = this.queue[this.queueIndex];
+        const media = this.queue.at(this.queueIndex);
         if (!media) return;
 
         if (media.adult_only && !isAdultApproved()) {
@@ -622,12 +634,12 @@ export class PlayerManager {
 
         this._cleanup();
         this.currentMedia = media;
-        
+
         // Update UI
         if (this.tapeTitle) this.tapeTitle.textContent = media.title || 'Untitled';
         const sideTitle = document.getElementById('tape-title');
         if (sideTitle) sideTitle.textContent = media.title || 'Untitled';
-        
+
         this._renderQueueSheet();
         this._showControls();
         this._updateFavoriteButton();
@@ -641,7 +653,7 @@ export class PlayerManager {
                 title: media.title || 'Untitled',
                 artist: 'MediaHub Server',
             });
-            
+
             // Set action handlers so the OS button bar has full functionality
             navigator.mediaSession.setActionHandler('play', () => this.video.play());
             navigator.mediaSession.setActionHandler('pause', () => this.video.pause());
@@ -667,7 +679,13 @@ export class PlayerManager {
             this._upNextShown = false;
             this._prefetchedNext = false;
             this._autoNextCancelled = false;
-            
+
+            this._playbackState = 'INIT';
+            const cachedValidity = this._mediaValidityCache.get(media.id);
+            if (cachedValidity && !cachedValidity.valid && (Date.now() - cachedValidity.ts < 60000)) {
+                throw new Error("Media is cached as invalid (recently returned 404)");
+            }
+
             // Adaptive Error Failover: Check if we can swap from preload
             if (this.preloadedMediaId === this.currentMedia.id && this.preloadHls) {
                 console.log("Zero-Latency: Swapping to preloaded stream");
@@ -676,16 +694,38 @@ export class PlayerManager {
                 this.hls.attachMedia(this.video);
                 this.preloadHls = null;
                 this.preloadedMediaId = null;
+                this._playbackState = 'HLS';
                 this._startPlayback();
                 return;
             }
 
-            const res = await api.stream(this.currentMedia.id, { priority: true });
+            const fetchStreamWithRetry = async () => {
+                let delay = 300;
+                for (let i = 0; i < 3; i++) {
+                    try {
+                        const res = await api.stream(this.currentMedia.id, null, true);
+                        if (res) return res;
+                    } catch (e) {
+                        if (e.status === 404) {
+                            this._mediaValidityCache.set(media.id, { valid: false, ts: Date.now() });
+                            throw e;
+                        }
+                        if (i === 2) throw e;
+                        await new Promise(r => setTimeout(r, delay));
+                        delay *= 2;
+                    }
+                }
+                throw new Error("Failed to fetch stream after retries");
+            };
+
+            const res = await fetchStreamWithRetry();
             if (!res || !res.url) throw new Error("No stream URL");
 
             if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                this._playbackState = 'HLS';
                 this._initMainStream(res.url, res.mode);
             } else {
+                this._playbackState = 'DIRECT';
                 this.video.src = res.url;
                 this._startPlayback();
             }
@@ -728,15 +768,29 @@ export class PlayerManager {
         this.hls.on(Hls.Events.MANIFEST_PARSED, () => this._startPlayback());
     }
 
-    async _handleFailover() {
+    async _handleFailover(err) {
         if (!this.currentMedia) return;
+        if (this._playbackState === 'DIRECT' || this._playbackState === 'FAILED') {
+            console.error("Failover: Already failed in Direct mode. Stopping.");
+            this._playbackState = 'FAILED';
+            this.showToast("Playback Failure");
+            this.eject();
+            return;
+        }
+
         console.log("Adaptive Failover: Attempting direct stream fallback");
+        this._playbackState = 'DIRECT';
         try {
+            if (this.hls) {
+                this.hls.destroy();
+                this.hls = null;
+            }
             // Force direct mode in backend or just use file endpoint if available
             const directUrl = `/api/media/${this.currentMedia.id}/file`;
             this.video.src = directUrl;
             this._startPlayback();
         } catch (e) {
+            this._playbackState = 'FAILED';
             this.showToast("Playback Failure");
             this.eject();
         }
@@ -748,13 +802,13 @@ export class PlayerManager {
     async _prefetchNext() {
         if (this._prefetchedNext) return;
         if (this.queueIndex < this.queue.length - 1) {
-            const nextMedia = this.queue[this.queueIndex + 1];
+            const nextMedia = this.queue.at(this.queueIndex + 1);
             if (nextMedia && nextMedia.stream_mode !== 'direct') {
                 console.log("Adaptive Buffer: Pre-initializing background transcode for:", nextMedia.title);
                 this._prefetchedNext = true;
                 try {
-                    const res = await api.stream(nextMedia.id, { priority: false });
-                    
+                    const res = await api.stream(nextMedia.id, null, false);
+
                     // Zero-Latency: Preload the next stream in a background HLS instance
                     if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
                         this._preloadNext(res.url, nextMedia.id);
@@ -770,14 +824,14 @@ export class PlayerManager {
         if (this.preloadHls) {
             this.preloadHls.destroy();
         }
-        
+
         console.log("Zero-Latency: Pre-buffering next item...");
         this.preloadHls = new Hls({
             startLevel: 0, // lowest for background pre-buffer
             maxBufferLength: 15,
             autoStartLoad: true
         });
-        
+
         this.preloadedMediaId = mediaId;
         this.preloadHls.loadSource(url);
         this.preloadHls.attachMedia(this.preloadVideo);
@@ -839,7 +893,10 @@ export class PlayerManager {
         // Fisher-Yates Shuffle
         for (let i = this.queue.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [this.queue[i], this.queue[j]] = [this.queue[j], this.queue[i]];
+            const itemI = this.queue.at(i);
+            const itemJ = this.queue.at(j);
+            this.queue.splice(i, 1, itemJ);
+            this.queue.splice(j, 1, itemI);
         }
     }
 
@@ -858,17 +915,17 @@ export class PlayerManager {
     _renderQueueSheet() {
         if (!this.queueList) return;
         this.queueList.innerHTML = '';
-        
+
         this.queue.forEach((media, index) => {
             const item = document.createElement('div');
             item.className = `queue-item ${index === this.queueIndex ? 'active' : ''}`;
-            
+
             item.innerHTML = `
                 <span class="queue-item-index">${String(index + 1).padStart(2, '0')}</span>
-                <span class="queue-item-title">${media.title || 'Untitled'}</span>
+                <span class="queue-item-title">${escapeHtml(media.title || 'Untitled')}</span>
                 ${index === this.queueIndex ? '<i class="v-icon icon-play" style="width:16px; height:16px;"></i>' : ''}
             `;
-            
+
             item.addEventListener('click', () => {
                 this.jumpToQueueIndex(index);
                 this.toggleQueueSheet(false);
@@ -903,7 +960,7 @@ export class PlayerManager {
     }
 
     _showUpNextOverlay() {
-        const nextMedia = this.queue[this.queueIndex + 1];
+        const nextMedia = this.queue.at(this.queueIndex + 1);
         if (!nextMedia) return;
 
         const overlay = document.getElementById('up-next-overlay');
@@ -949,9 +1006,9 @@ export class PlayerManager {
         if (this.currentMedia && this.video.currentTime > 5) {
             api.recordPlayback(this.currentMedia.id, {
                 position_seconds: this.video.currentTime,
-                completed: this.video.ended || (this.video.duration && this.video.currentTime / this.video.duration > 0.95),
+                completed: !!(this.video.ended || (this.video.duration > 0 && this.video.currentTime / this.video.duration > 0.95)),
                 event_type: 'stop',
-            }).catch(() => {});
+            }).catch(() => { });
         }
         this.modal.close();
     }
@@ -1028,8 +1085,12 @@ export class PlayerManager {
 
     setAspectRatio(mode) {
         this.video.style.objectFit = mode;
-        const labels = { contain: 'Fit', cover: 'Zoom', fill: 'Stretch' };
-        this.valRatio.textContent = labels[mode];
+        const labels = new Map([
+            ['contain', 'Fit'],
+            ['cover', 'Zoom'],
+            ['fill', 'Stretch']
+        ]);
+        this.valRatio.textContent = labels.get(mode) || 'Fit';
         this.ratioMenu.querySelectorAll('.drawer-option').forEach(opt => {
             opt.classList.toggle('selected', opt.dataset.ratio === mode);
         });
@@ -1080,7 +1141,7 @@ export class PlayerManager {
 
     releaseWakeLock() {
         if (this.wakeLock) {
-            this.wakeLock.release().catch(() => {});
+            this.wakeLock.release().catch(() => { });
             this.wakeLock = null;
             console.log('Screen Wake Lock released manually');
         }
@@ -1128,10 +1189,10 @@ export class PlayerManager {
     _onEnded() {
         if (this.currentMedia) {
             api.recordPlayback(this.currentMedia.id, {
-                position_seconds: this.video.duration,
+                position_seconds: this.video.currentTime || 0,
                 completed: true,
                 event_type: 'complete',
-            }).catch(() => {});
+            }).catch(() => { });
         }
         this._handleVideoEnd();
     }
@@ -1139,7 +1200,7 @@ export class PlayerManager {
     _onTimeUpdate() {
         const currentTime = this.video.currentTime || 0;
         let duration = this.video.duration;
-        
+
         // Fallback for HLS streams where duration might be NaN or Infinity
         if (!duration || isNaN(duration) || !isFinite(duration)) {
             duration = this.currentMedia?.duration_seconds || 0;
@@ -1163,7 +1224,7 @@ export class PlayerManager {
                 position_seconds: currentTime,
                 completed: false,
                 event_type: 'progress',
-            }).catch(() => {});
+            }).catch(() => { });
         }
 
         // Update Media Session Progress
@@ -1199,13 +1260,13 @@ export class PlayerManager {
         if (!dur || isNaN(dur) || !isFinite(dur)) return;
 
         if (this.transportTotal) this.transportTotal.textContent = this._formatTime(dur, dur);
-        
+
         const tapeDur = document.getElementById('tape-duration');
         if (tapeDur) tapeDur.textContent = this._formatTime(dur, dur);
-        
+
         const tapeRes = document.getElementById('tape-resolution');
         if (tapeRes) tapeRes.textContent = `${this.video.videoWidth}x${this.video.videoHeight}`;
-        
+
         const tapeFormat = document.getElementById('tape-format');
         if (tapeFormat) tapeFormat.textContent = this.currentMedia?.video_codec?.toUpperCase() || 'VIDEO';
 
@@ -1252,6 +1313,10 @@ export class PlayerManager {
         this._stopRaf();
         this._playLock = false;
 
+        if (this._boundVideoError) {
+            this.video.removeEventListener('error', this._boundVideoError);
+        }
+
         // Release Screen Wake Lock
         this.releaseWakeLock();
 
@@ -1262,9 +1327,9 @@ export class PlayerManager {
 
         if (this.hls) { this.hls.destroy(); this.hls = null; }
         if (this.previewHls) { this.previewHls.destroy(); this.previewHls = null; }
-        
+
         this._stopThemeAnalysis();
-        
+
         this.video.src = '';
         this.video.load();
 
@@ -1279,7 +1344,7 @@ export class PlayerManager {
         this.toggleDrawer(false);
         this.toggleQueueSheet(false);
         document.body.classList.remove('player-active');
-        
+
         const upNext = document.getElementById('up-next-overlay');
         if (upNext) {
             upNext.classList.remove('visible');
@@ -1325,15 +1390,15 @@ export class PlayerManager {
         try {
             this.analyzerCtx.drawImage(this.video, 0, 0, w, h);
             const data = this.analyzerCtx.getImageData(0, 0, w, h).data;
-            
+
             let r = 0, g = 0, b = 0, count = 0;
             // Sample every 4th pixel for speed
             for (let i = 0; i < data.length; i += 16) {
                 // Ignore very dark pixels to keep colors vibrant
-                if (data[i] + data[i+1] + data[i+2] > 60) {
-                    r += data[i];
-                    g += data[i+1];
-                    b += data[i+2];
+                if (data.at(i) + data.at(i + 1) + data.at(i + 2) > 60) {
+                    r += data.at(i);
+                    g += data.at(i + 1);
+                    b += data.at(i + 2);
                     count++;
                 }
             }
@@ -1342,7 +1407,7 @@ export class PlayerManager {
                 const avgR = Math.round(r / count);
                 const avgG = Math.round(g / count);
                 const avgB = Math.round(b / count);
-                
+
                 // Boost saturation for the accent
                 const hsl = this._rgbToHsl(avgR, avgG, avgB);
                 const accentHsl = `hsl(${hsl.h}, ${Math.min(100, hsl.s + 20)}%, ${Math.max(40, Math.min(70, hsl.l))}%)`;
@@ -1352,7 +1417,7 @@ export class PlayerManager {
                 this.modal.style.setProperty('--player-accent-glow', `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, 0.4)`);
                 this.modal.style.setProperty('--player-bg', `rgb(${bgRgb})`);
                 this.modal.style.setProperty('--player-bg-rgb', bgRgb);
-                
+
                 // Also update the sidebar if it exists
                 const playerInfo = this.modal.querySelector('.player-info');
                 if (playerInfo) {
@@ -1456,6 +1521,18 @@ export class PlayerManager {
         }
         clearTimeout(this._spriteRetryTimer);
 
+        // Check cache first
+        if (this._spriteCache.has(mediaId)) {
+            const cached = this._spriteCache.get(mediaId);
+            if (cached) {
+                this._sprite = cached;
+                // Pre-load the sprite image
+                const img = new Image();
+                img.src = cached.url;
+            }
+            return;
+        }
+
         let attempts = 0;
         const maxAttempts = 8;
         const delays = [2000, 4000, 8000, 12000, 16000, 20000, 30000, 40000];
@@ -1468,22 +1545,28 @@ export class PlayerManager {
                 if (res.status === 200) {
                     const data = await res.json();
                     this._sprite = data;
+                    this._spriteCache.set(mediaId, data);
 
                     // Pre-load the sprite image so first hover is instant
                     const img = new Image();
                     img.src = data.url;
                     return;
                 }
+                if (res.status === 404) {
+                    // Cache the 404 as null so we don't retry or request again
+                    this._spriteCache.set(mediaId, null);
+                    return;
+                }
                 // 202 = still generating — schedule retry
                 if (res.status === 202 && attempts < maxAttempts) {
                     attempts++;
-                    this._spriteRetryTimer = setTimeout(tryFetch, delays[attempts - 1] ?? 40000);
+                    this._spriteRetryTimer = setTimeout(tryFetch, delays.at(attempts - 1) ?? 40000);
                 }
             } catch (_) {
                 // Network error: retry silently
                 if (attempts < maxAttempts) {
                     attempts++;
-                    this._spriteRetryTimer = setTimeout(tryFetch, delays[attempts - 1] ?? 40000);
+                    this._spriteRetryTimer = setTimeout(tryFetch, delays.at(attempts - 1) ?? 40000);
                 }
             }
         };
@@ -1503,7 +1586,7 @@ export class PlayerManager {
             return;
         }
         const currentTitle = this.currentMedia.title || 'Untitled';
-        
+
         // Dynamically create and show a custom modal for renaming
         const newTitle = await new Promise((resolve) => {
             let dialog = document.getElementById('player-rename-dialog');
@@ -1517,34 +1600,34 @@ export class PlayerManager {
                 dialog.style.background = 'transparent';
                 document.body.appendChild(dialog);
             }
-            
+
             dialog.innerHTML = `
                 <div class="dialog-card text-center" style="padding: 24px; background: rgba(18, 18, 18, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);">
                     <h3 style="margin-bottom: 12px; color: #fff; font-size: 1.2rem;">Rename Media</h3>
                     <p class="text-muted text-sm" style="margin-bottom: 16px;">Modify the media display title below:</p>
-                    <input type="text" id="rename-input" class="form-control" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;" value="${currentTitle.replace(/"/g, '&quot;')}">
+                    <input type="text" id="rename-input" class="form-control" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;" value="${escapeHtml(currentTitle)}">
                     <div class="dialog-actions" style="display: flex; gap: 12px;">
                         <button class="btn btn-ghost w-100" id="rename-cancel" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; cursor: pointer;">Cancel</button>
                         <button class="btn btn-accent w-100" id="rename-save" style="padding: 10px; border-radius: 8px; border: none; background: var(--player-accent, #00aaff); color: #000; font-weight: 600; cursor: pointer; box-shadow: 0 0 10px var(--player-accent-glow);">Save</button>
                     </div>
                 </div>
             `;
-            
+
             const input = dialog.querySelector('#rename-input');
             const cancelBtn = dialog.querySelector('#rename-cancel');
             const saveBtn = dialog.querySelector('#rename-save');
-            
+
             const close = (val) => {
                 dialog.close();
                 resolve(val);
             };
-            
+
             cancelBtn.addEventListener('click', () => close(null));
             saveBtn.addEventListener('click', () => {
                 const val = input.value.trim();
                 if (val) close(val);
             });
-            
+
             // Handle enter key
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
@@ -1552,7 +1635,7 @@ export class PlayerManager {
                     if (val) close(val);
                 }
             });
-            
+
             dialog.showModal();
             input.focus();
             input.select();
@@ -1567,17 +1650,17 @@ export class PlayerManager {
             const appModule = await import('./app.js');
             const activeApi = appModule.api || appModule.default?.api;
             await activeApi.renameMedia(this.currentMedia.id, newTitle);
-            
+
             // Instantly mutate displayed titles without reloading
             this.currentMedia.title = newTitle;
             if (this.tapeTitle) this.tapeTitle.textContent = newTitle;
             const sideTitle = document.getElementById('tape-title');
             if (sideTitle) sideTitle.textContent = newTitle;
-            
+
             // Update queue item dynamically in the playlist queue sheet
             const activeQueueItem = this.queueList?.querySelector('.queue-item.active .queue-item-title');
             if (activeQueueItem) activeQueueItem.textContent = newTitle;
-            
+
             toast('Media renamed successfully', 'success');
         } catch (e) {
             console.error("Failed to rename media", e);
@@ -1591,7 +1674,7 @@ export class PlayerManager {
             console.warn("No active media to delete.");
             return;
         }
-        
+
         const confirmed = await confirm("Delete File", "Are you sure you want to delete this file?");
         if (!confirmed) {
             console.log("Delete cancelled by user.");
@@ -1604,7 +1687,7 @@ export class PlayerManager {
             // First stop the player and release all browser file handles
             console.log("Stopping video and releasing file handles...");
             this.video.pause();
-            this._cleanup(); 
+            this._cleanup();
 
             // Wait a tiny bit (e.g. 200ms) for the server to close socket/file handles
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -1612,30 +1695,30 @@ export class PlayerManager {
             const appModule = await import('./app.js');
             const activeApi = appModule.api || appModule.default?.api;
             await activeApi.deleteMedia(mediaId);
-            
+
             toast('File successfully deleted', 'success');
-            
+
             // Remove the deleted media item from this.queue and this.originalQueue
             this.queue = this.queue.filter(item => item.id !== mediaId);
             this.originalQueue = this.originalQueue.filter(item => item.id !== mediaId);
-            
+
             // If the queue is empty, eject from player
             if (this.queue.length === 0) {
                 this.eject();
                 return;
             }
-            
+
             // If there's a next media item, skip playback to it.
             if (this.queueIndex >= this.queue.length) {
                 this.queueIndex = 0;
             }
-            
+
             // Instantly load the next media item and play
             this._loadCurrent();
         } catch (e) {
             console.error("Failed to delete media", e);
             toast(`Failed to delete: ${e.message}`, 'error');
-            
+
             // If it failed, reload current media to restore state
             this._loadCurrent();
         }
@@ -1647,12 +1730,12 @@ export class PlayerManager {
             await api.toggleFavorite(this.currentMedia.id);
             this.currentMedia.is_favorite = !this.currentMedia.is_favorite;
             this._updateFavoriteButton();
-            
+
             // Dispatch a global event or refresh views if needed
-            document.dispatchEvent(new CustomEvent('favorite-toggled', { 
-                detail: { mediaId: this.currentMedia.id, isFavorite: this.currentMedia.is_favorite } 
+            document.dispatchEvent(new CustomEvent('favorite-toggled', {
+                detail: { mediaId: this.currentMedia.id, isFavorite: this.currentMedia.is_favorite }
             }));
-            
+
             toast(this.currentMedia.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
         } catch (e) {
             console.error("Failed to toggle favorite:", e);
@@ -1665,4 +1748,3 @@ export class PlayerManager {
         this.btnFavorite.classList.toggle('active', !!this.currentMedia.is_favorite);
     }
 }
-

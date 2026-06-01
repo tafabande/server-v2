@@ -1,5 +1,5 @@
 import { ApiClient } from "./api.js";
-import { createElement, replaceChildren } from "./dom.js";
+import { createElement, replaceChildren, escapeHtml } from "./dom.js";
 import { ExplorerManager } from "./explorer-manager.js";
 import { flattenLibrary, summarizeLibrary } from "./formatters.js";
 import { GalleryManager } from "./gallery-manager.js";
@@ -20,7 +20,7 @@ export class MediaHubApp {
       socketState: "disconnected",
     };
     this.elements = this.collectElements();
-    
+
     // Global error boundary for the JS app
     window.addEventListener("unhandledrejection", (event) => {
       console.error("Unhandled promise rejection:", event.reason);
@@ -103,13 +103,20 @@ export class MediaHubApp {
   handleCriticalError(err) {
     const loader = document.querySelector("#boot-loader");
     if (loader) {
-      loader.innerHTML = `
-        <div class="loader-content error">
-          <h3>System Initialization Failed</h3>
-          <p>${err.message || "An unknown error occurred during startup."}</p>
-          <button onclick="window.location.reload()" class="ghost-button" style="margin-top: 1rem">Retry Connection</button>
-        </div>
-      `;
+      const content = createElement("div", {
+        className: "loader-content error",
+        children: [
+          createElement("h3", { text: "System Initialization Failed" }),
+          createElement("p", { text: err.message || "An unknown error occurred during startup." }),
+          createElement("button", {
+            className: "ghost-button",
+            text: "Retry Connection",
+            attrs: { style: "margin-top: 1rem" }
+          })
+        ]
+      });
+      content.querySelector("button").addEventListener("click", () => window.location.reload());
+      replaceChildren(loader, [content]);
     }
   }
 
@@ -253,7 +260,7 @@ export class MediaHubApp {
 
     this.ui.setActivity(`Signed in as ${this.state.user.username}. Ready to browse.`);
     this.ui.setBanner("Library ready.", "success");
-    
+
     // Reveal the app shell
     document.querySelector("#boot-loader").style.display = "none";
     this.elements.appShell.style.opacity = "1";
@@ -300,7 +307,8 @@ export class MediaHubApp {
   }
 
   async refreshLibrary() {
-    const library = await this.api.getLibrary();
+    // mediahub-app uses the legacy grouped format
+    const library = await this.api.request("/api/media/groups");
     this.state.library = library;
     this.galleryManager.setLibrary(library);
     this.renderDashboard();
@@ -517,6 +525,18 @@ export class MediaHubApp {
   async handleRescan() {
     this.ui.setBusy(this.elements.rescanButton, true, "Scanning...");
     this.ui.setBanner("Rescanning the library...", "info");
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await this.api.request('/api/media/scan-status');
+        if (status.scanning) {
+          let msg = `Scanning: ${status.files_scanned} / ${status.files_total} items`;
+          if (status.current_folder) msg += ` [${status.current_folder}]`;
+          this.ui.setBanner(msg, "info");
+        }
+      } catch (e) { }
+    }, 800);
+
     try {
       const result = await this.api.rescan();
       await this.synchronizeWorkspace();
@@ -527,6 +547,7 @@ export class MediaHubApp {
         fallbackMessage: "Rescan failed.",
       });
     } finally {
+      clearInterval(pollInterval);
       this.ui.setBusy(this.elements.rescanButton, false);
     }
   }
@@ -584,13 +605,13 @@ export class MediaHubApp {
       return;
     }
 
-    const activity = {
-      connected: "Live sync connected.",
-      connecting: "Connecting live sync...",
-      reconnecting: "Live sync dropped. Retrying...",
-      disconnected: "Live sync offline.",
-    };
-    this.ui.setActivity(activity[state] || "Live sync offline.");
+    const activityMap = new Map([
+      ["connected", "Live sync connected."],
+      ["connecting", "Connecting live sync..."],
+      ["reconnecting", "Live sync dropped. Retrying..."],
+      ["disconnected", "Live sync offline."],
+    ]);
+    this.ui.setActivity(activityMap.get(state) || "Live sync offline.");
 
     if (state === "reconnecting") {
       this.ui.setBanner("Live sync dropped. Retrying the connection...", "warning");

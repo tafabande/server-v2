@@ -171,7 +171,7 @@ export async function showAdultAccessDialog() {
                     Your previous R18 elevation request was denied by the administrator.
                 </p>
                 <div class="p-xs surface rounded text-xs text-error" style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); padding: 8px; border-radius: var(--radius); margin-bottom: 16px; text-align: left;">
-                    <strong>Admin Comment:</strong> "${latestReq.admin_comment || 'No reason provided.'}"
+                    <strong>Admin Comment:</strong> "${escapeHtml(latestReq.admin_comment || 'No reason provided.')}"
                 </div>
                 <div class="dialog-actions" style="display: flex; flex-direction: column; gap: 8px;">
                     <button class="btn btn-accent w-100 request-elevation-btn">🔞 Re-request Elevation</button>
@@ -246,3 +246,18 @@ export async function showAdultAccessDialog() {
         });
     }
 }
+
+export function escapeHtml(str) {
+    if (typeof str !== 'string') return str;
+    return str.replace(/[&<>"']/g, (m) => {
+        switch (m) {
+            case '&': return '&amp;';
+            case '<': return '&lt;';
+            case '>': return '&gt;';
+            case '"': return '&quot;';
+            case "'": return '&#039;';
+            default: return m;
+        }
+    });
+}
+

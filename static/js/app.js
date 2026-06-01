@@ -88,7 +88,7 @@ class App {
         // Global Shortcuts
         document.addEventListener('keydown', (e) => {
             const isInput = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
-            
+
             // Ctrl+K or '/' → search focus
             if (((e.ctrlKey || e.metaKey) && e.key === 'k') || (e.key === '/' && !isInput)) {
                 e.preventDefault();
@@ -132,7 +132,7 @@ class App {
                 // Allow view to render
                 await new Promise(r => setTimeout(r, 150));
             }
-            
+
             const libSearch = document.getElementById('lib-search');
             if (libSearch) {
                 libSearch.value = val;
@@ -148,12 +148,12 @@ class App {
             const currentTheme = document.documentElement.getAttribute('data-theme') || 'default';
             const nextTheme = currentTheme === 'light' ? 'default' : 'light';
             document.documentElement.setAttribute('data-theme', nextTheme);
-            
+
             if (this.user) {
                 this.user.preferences = this.user.preferences || {};
                 this.user.preferences.theme = nextTheme;
                 localStorage.setItem('mediahub_user', JSON.stringify(this.user));
-                this.api.updateProfile({ preferences: this.user.preferences }).catch(() => {});
+                this.api.updateProfile({ preferences: this.user.preferences }).catch(() => { });
             }
             this._updateThemeIcon(nextTheme);
         });
@@ -166,7 +166,7 @@ class App {
         // Hamburger Menu (Mobile)
         const mobileMenuBtn = document.getElementById('mobile-menu-btn');
         const sidebarOverlay = document.getElementById('sidebar-overlay');
-        
+
         const toggleSidebar = (force) => {
             if (!this.sidebar) return;
             const isOpen = force !== undefined ? force : !this.sidebar.classList.contains('mobile-open');
@@ -197,7 +197,7 @@ class App {
             const msg = e.detail;
             if (msg.type === 'request-updated') {
                 const currentUser = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
-                
+
                 // Alert standard user of status change
                 if (currentUser && currentUser.id === msg.user_id) {
                     if (msg.request_type === 'adult_elevation' && msg.status === 'approved') {
@@ -205,7 +205,7 @@ class App {
                         localStorage.setItem('mediahub_user', JSON.stringify(currentUser));
                         this.updateUI();
                     }
-                    
+
                     import('./utils.js').then(({ toast }) => {
                         let text = '';
                         if (msg.request_type === 'adult_elevation') {
@@ -220,7 +220,7 @@ class App {
                         toast(text, msg.status === 'approved' ? 'success' : msg.status === 'denied' ? 'error' : 'info');
                     });
                 }
-                
+
                 // Alert admins of incoming pending requests
                 if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'super-admin')) {
                     if (msg.status === 'pending') {
@@ -255,9 +255,9 @@ class App {
 
         const currentUrl = window.location.origin;
         urlEl.textContent = currentUrl;
-        
+
         QRGenerator.generate(currentUrl, container);
-        
+
         copyBtn.onclick = () => {
             navigator.clipboard.writeText(currentUrl);
             copyBtn.textContent = 'Copied!';
@@ -294,7 +294,7 @@ class App {
         const showNav = isAuth && !isLoginPage;
 
         if (this.sidebar) this.sidebar.hidden = !showNav;
-        
+
         // Handle mobile top bar too
         const topbar = document.querySelector('.topbar-mobile');
         if (topbar) topbar.style.display = showNav ? 'flex' : 'none';
@@ -318,7 +318,7 @@ class App {
     async handleNavigation() {
         const path = window.location.pathname;
         const route = this.router.routes.find(r => r.path === path) ||
-                      this.router.routes.find(r => r.path === '*');
+            this.router.routes.find(r => r.path === '*');
 
         if (route.requiresAuth && !this.token) {
             this.router.navigate('/login');
@@ -435,7 +435,7 @@ class App {
             dialog.close();
             window.location.reload();
         });
-        
+
         dialog.addEventListener('cancel', (e) => {
             e.preventDefault();
         });
@@ -448,24 +448,31 @@ class App {
             return;
         }
 
+        clearTimeout(this._scanTimer);
+
+        if (document.hidden) {
+            this._scanTimer = setTimeout(() => this.pollScanStatus(), 5000);
+            return;
+        }
+
         try {
             const status = await this.api.getScanStatus();
             const container = document.getElementById('sidebar-scan-status-container');
             const textEl = document.getElementById('sidebar-scan-text');
-            
+
             if (container && textEl) {
                 if (status.scanning) {
                     textEl.textContent = `Scanning: ${status.progress_percent}% (${status.files_scanned}/${status.files_total})`;
                     container.style.display = 'flex';
-                    setTimeout(() => this.pollScanStatus(), 1000);
+                    this._scanTimer = setTimeout(() => this.pollScanStatus(), 1000);
                 } else {
                     container.style.display = 'none';
-                    setTimeout(() => this.pollScanStatus(), 5000);
+                    this._scanTimer = setTimeout(() => this.pollScanStatus(), 5000);
                 }
             }
         } catch (e) {
-            console.error("Failed to poll scan status", e);
-            setTimeout(() => this.pollScanStatus(), 5000);
+            // Silently back off on network/server errors to prevent console spam
+            this._scanTimer = setTimeout(() => this.pollScanStatus(), 10000);
         }
     }
 }
