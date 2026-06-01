@@ -154,13 +154,12 @@ def write_placeholder_thumbnail(destination: Path, title: str) -> None:
     destination.write_text(svg, encoding="utf-8")
 
 
-def build_thumbnail(source_path: Path, relative_path: str, title: str) -> str:
+def build_thumbnail(source_path: Path, relative_path: str, title: str, duration: float | None = None) -> str:
     destination = thumbnail_path_for(relative_path)
     jpg_destination = destination.with_suffix(".jpg")
 
-    if destination.exists():
-        return f"/thumbs/{destination.name}"
     if jpg_destination.exists():
+        # Real JPG thumbnail already exists
         return f"/thumbs/{jpg_destination.name}"
 
     # Cinematic Discovery: Look for local posters/art
@@ -168,18 +167,34 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str) -> str:
         local_art = source_path.parent / art_name
         if local_art.exists():
             shutil.copy2(local_art, jpg_destination)
+            if destination.exists():
+                try:
+                    destination.unlink(missing_ok=True)
+                except Exception:
+                    pass
             return f"/thumbs/{jpg_destination.name}"
             
     if ffmpeg_available():
+        seek_seconds = 10.0
+        if duration is not None:
+            if duration <= 10.0:
+                seek_seconds = max(0.0, duration - 1.0)
+            elif duration <= 20.0:
+                seek_seconds = 5.0
+        else:
+            seek_seconds = 2.0
+
         command = [
             settings.ffmpeg_path,
             "-y",
             "-ss",
-            "00:00:10",
+            f"{seek_seconds:.2f}",
             "-i",
             str(source_path),
             "-vf",
             "scale=480:-1",
+            "-strict",
+            "-2",
             "-frames:v",
             "1",
             "-q:v",
@@ -190,10 +205,18 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str) -> str:
             completed = subprocess.run(command, capture_output=True, text=True)
             if completed.returncode == 0 and jpg_destination.exists():
                 logger.info(f"Generated thumbnail for {relative_path}")
+                if destination.exists():
+                    try:
+                        destination.unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 return f"/thumbs/{jpg_destination.name}"
             logger.error(f"Failed to generate thumbnail for {relative_path}: {completed.stderr}")
         except FileNotFoundError:
             logger.error("FFmpeg executable not found during thumbnail generation.")
+
+    if destination.exists():
+        return f"/thumbs/{destination.name}"
 
     write_placeholder_thumbnail(destination, title)
     return f"/thumbs/{destination.name}"
@@ -372,8 +395,8 @@ async def scan_media_library(session: AsyncSession) -> int:
         stat = target_path.stat()
         title = clean_title(target_path)
         
-        # Performance optimization: if size is unchanged and duration is indexed, bypass heavy probe/thumbnail operations
-        if media and media.file_size == stat.st_size and media.duration_seconds:
+        # Performance optimization: if size is unchanged, duration is indexed, and thumbnail is not a placeholder (SVG), bypass heavy probe/thumbnail operations
+        if media and media.file_size == stat.st_size and media.duration_seconds and media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
             thumbnail = media.thumbnail_path
             probe = {
                 "width": media.width,
@@ -384,8 +407,9 @@ async def scan_media_library(session: AsyncSession) -> int:
                 "duration_seconds": media.duration_seconds
             }
         else:
-            thumbnail = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title)
             probe = await asyncio.to_thread(probe_media, target_path)
+            duration = probe.get("duration_seconds")
+            thumbnail = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title, duration)
 
         if not media:
             media = MediaMetadata(relative_path=virtual_rel, path=str(target_path.resolve()))
