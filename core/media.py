@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import difflib
 import json
 import os
+import re
 import shutil
 import subprocess
 import asyncio
@@ -16,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import BASE_DIR, get_settings
 from core.exceptions import FileOperationError, ResourceNotFoundError
 from core.logging import get_logger
-from core.models import AuditLog, FolderSetting, MediaMetadata, PlayEvent, User
+from core.models import AuditLog, FolderSetting, MediaMetadata, PlayEvent, SeriesGroup, SeriesMember, Tag, User
 from core.storage import is_media_file, is_path_adult, is_path_locked, relative_shared_path, resolve_shared_path
 
 
@@ -157,13 +159,13 @@ def write_placeholder_thumbnail(destination: Path, title: str) -> None:
     destination.write_text(svg, encoding="utf-8")
 
 
-def build_thumbnail(source_path: Path, relative_path: str, title: str, duration: float | None = None) -> str:
+def build_thumbnail(source_path: Path, relative_path: str, title: str, duration: float | None = None) -> tuple[str, bool]:
     destination = thumbnail_path_for(relative_path)
     jpg_destination = destination.with_suffix(".jpg")
 
     if jpg_destination.exists():
         # Real JPG thumbnail already exists
-        return f"/thumbs/{jpg_destination.name}"
+        return f"/thumbs/{jpg_destination.name}", False
 
     # Cinematic Discovery: Look for local posters/art
     for art_name in ["poster.jpg", "folder.jpg", "cover.jpg", "fanart.jpg"]:
@@ -175,8 +177,9 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
                     destination.unlink(missing_ok=True)
                 except Exception:
                     pass
-            return f"/thumbs/{jpg_destination.name}"
+            return f"/thumbs/{jpg_destination.name}", False
             
+    was_repaired = False
     if ffmpeg_available():
         seek_seconds = 10.0
         if duration is not None:
@@ -190,14 +193,16 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
         command = [
             settings.ffmpeg_path,
             "-y",
-            "-ss",
-            f"{seek_seconds:.2f}",
             "-i",
             str(source_path),
+            "-ss",
+            f"{seek_seconds:.2f}",
             "-an",
             "-sn",
             "-vf",
             "scale=480:-2",
+            "-strict",
+            "unofficial",
             "-vframes",
             "1",
             "-q:v",
@@ -209,7 +214,7 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
             if os.name == 'nt':
                 creation_flags = 0x08000000  # CREATE_NO_WINDOW
                 
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=30, creationflags=creation_flags)
+            completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", timeout=30, creationflags=creation_flags)
             if completed.returncode == 0 and jpg_destination.exists():
                 logger.info(f"Generated thumbnail for {relative_path}")
                 if destination.exists():
@@ -217,16 +222,64 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
                         destination.unlink(missing_ok=True)
                     except Exception:
                         pass
-                return f"/thumbs/{jpg_destination.name}"
-            logger.error(f"Failed to generate thumbnail for {relative_path}: {completed.stderr}")
+                return f"/thumbs/{jpg_destination.name}", False
+                
+            # Thumbnail extraction failed. Attempt remux repair once:
+            # ffmpeg -fflags +genpts -i input.mp4 -c copy fixed.mp4
+            # This rewrites the container with a clean moov atom.
+            logger.warning(f"Thumbnail generation failed for {relative_path}. Attempting to remux and repair the container once...")
+            temp_fixed = source_path.parent / f".fixed_{source_path.name}"
+            remux_command = [
+                settings.ffmpeg_path,
+                "-y",
+                "-fflags",
+                "+genpts",
+                "-i",
+                str(source_path),
+                "-c",
+                "copy",
+                str(temp_fixed)
+            ]
+            try:
+                remux_res = subprocess.run(remux_command, capture_output=True, encoding="utf-8", errors="ignore", timeout=60, creationflags=creation_flags)
+                if remux_res.returncode == 0 and temp_fixed.exists() and temp_fixed.stat().st_size > 0:
+                    # Replace original file with fixed one
+                    try:
+                        source_path.unlink(missing_ok=True)
+                        shutil.move(str(temp_fixed), str(source_path))
+                        logger.info(f"Successfully repaired container for {relative_path} via remux.")
+                        was_repaired = True
+                        
+                        # Retry thumbnail generation on the fixed file!
+                        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", timeout=30, creationflags=creation_flags)
+                        if completed.returncode == 0 and jpg_destination.exists():
+                            logger.info(f"Successfully generated thumbnail for {relative_path} after remux repair.")
+                            if destination.exists():
+                                try:
+                                    destination.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            return f"/thumbs/{jpg_destination.name}", True
+                    except Exception as e:
+                        logger.error(f"Failed to replace original file with repaired file for {relative_path}: {e}")
+                else:
+                    logger.warning(f"Remux repair failed for {relative_path}: {remux_res.stderr}")
+            except Exception as e:
+                logger.error(f"Error during remux repair for {relative_path}: {e}")
+            finally:
+                if temp_fixed.exists():
+                    try:
+                        temp_fixed.unlink(missing_ok=True)
+                    except Exception:
+                        pass
         except FileNotFoundError:
             logger.error("FFmpeg executable not found during thumbnail generation.")
 
     if destination.exists():
-        return f"/thumbs/{destination.name}"
+        return f"/thumbs/{destination.name}", was_repaired
 
     write_placeholder_thumbnail(destination, title)
-    return f"/thumbs/{destination.name}"
+    return f"/thumbs/{destination.name}", was_repaired
 
 
 # ── Sprite Sheet (Hover Preview Thumbnails) ────────────────────────────────────
@@ -240,7 +293,7 @@ def sprite_path_for(media_id: int) -> Path:
     return settings.sprites_folder / f"sprite_{media_id}.jpg"
 
 
-def build_sprite_sheet(source_path: Path, media_id: int) -> dict | None:
+def build_sprite_sheet(source_path: Path, media_id: int, duration: float | None = None) -> dict | None:
     """
     Generate a tiled JPEG sprite sheet for hover-preview thumbnails.
     One frame every SPRITE_INTERVAL seconds, SPRITE_COLUMNS wide.
@@ -253,16 +306,40 @@ def build_sprite_sheet(source_path: Path, media_id: int) -> dict | None:
     if not ffmpeg_available():
         return None
 
+    if duration is None:
+        try:
+            probe = probe_media(source_path)
+            duration = probe.get("duration_seconds")
+            if not probe.get("video_codec"):
+                logger.info(f"Skipping sprite sheet for {media_id}: No video stream detected.")
+                return None
+        except Exception:
+            pass
+
+    if not duration or duration <= 0:
+        duration = 300.0  # Fallback to 5 minutes to avoid massive empty grids
+
+    import math
+    if duration < SPRITE_INTERVAL:
+        fps_val = 1.0 / max(0.1, duration)
+    else:
+        fps_val = 1.0 / SPRITE_INTERVAL
+        
+    total_frames = max(1, int(duration * fps_val))
+    rows = math.ceil(total_frames / SPRITE_COLUMNS)
+
     vf = (
-        f"fps=1/{SPRITE_INTERVAL},"
+        f"fps={fps_val:.5f},"
         f"scale={SPRITE_THUMB_W}:{SPRITE_THUMB_H},"
-        f"tile={SPRITE_COLUMNS}x"
+        f"tile={SPRITE_COLUMNS}x{rows}"
     )
     command = [
         settings.ffmpeg_path,
         "-y",
         "-i", str(source_path),
         "-vf", vf,
+        "-strict", "unofficial",
+        "-vframes", "1",
         "-q:v", "5",
         str(destination),
     ]
@@ -275,7 +352,8 @@ def build_sprite_sheet(source_path: Path, media_id: int) -> dict | None:
         result = subprocess.run(
             command,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="ignore",
             timeout=300,
             creationflags=creation_flags
         )
@@ -287,6 +365,8 @@ def build_sprite_sheet(source_path: Path, media_id: int) -> dict | None:
         logger.error(f"Sprite generation timed out for media {media_id}")
     except FileNotFoundError:
         logger.error("FFmpeg not found during sprite sheet generation")
+    except Exception as e:
+        logger.error(f"Unexpected error during sprite sheet generation for media {media_id}: {e}")
     return None
 
 
@@ -322,8 +402,14 @@ def probe_media(path: Path) -> dict:
         "-show_streams",
         str(path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True)
-    if completed.returncode != 0:
+    try:
+        creation_flags = 0
+        if os.name == 'nt':
+            creation_flags = 0x08000000  # CREATE_NO_WINDOW
+        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", creationflags=creation_flags)
+        if completed.returncode != 0:
+            return {}
+    except Exception:
         return {}
 
     try:
@@ -335,8 +421,23 @@ def probe_media(path: Path) -> dict:
     streams = payload.get("streams", [])
     video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    
+    duration_val = format_data.get("duration")
+    if not duration_val and video_stream:
+        duration_val = video_stream.get("duration")
+    if not duration_val and "tags" in video_stream and "DURATION" in video_stream["tags"]:
+        import re
+        m = re.match(r"(\d+):(\d+):(\d+\.?\d*)", video_stream["tags"]["DURATION"])
+        if m:
+            duration_val = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+            
+    try:
+        duration_seconds = float(duration_val) if duration_val else None
+    except (ValueError, TypeError):
+        duration_seconds = None
+
     return {
-        "duration_seconds": float(format_data["duration"]) if format_data.get("duration") else None,
+        "duration_seconds": duration_seconds,
         "bitrate": int(format_data["bit_rate"]) if format_data.get("bit_rate") else None,
         "width": video_stream.get("width"),
         "height": video_stream.get("height"),
@@ -352,7 +453,7 @@ def resolve_shortcut(lnk_path: Path) -> Path | None:
         $target = $sh.CreateShortcut('{lnk_path}').TargetPath;
         Write-Output $target
         """
-        completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True)
+        completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, encoding="utf-8", errors="ignore")
         target = completed.stdout.strip()
         if target and Path(target).exists():
             return Path(target)
@@ -533,6 +634,27 @@ def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = T
     return items
 
 
+def validate_media(path: Path) -> bool:
+    if not ffprobe_available():
+        return False
+    command = [
+        settings.ffprobe_path,
+        "-v",
+        "error",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    try:
+        creation_flags = 0
+        if os.name == 'nt':
+            creation_flags = 0x08000000  # CREATE_NO_WINDOW
+        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", timeout=15, creationflags=creation_flags)
+        return completed.returncode == 0
+    except Exception:
+        return False
+
+
 async def scan_media_library(session: AsyncSession, use_cache: bool = True, force_thumbs: bool = False) -> int:
     logger.info("Starting media library discovery and indexing...")
     _scan_state["scanning"] = True
@@ -558,12 +680,14 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
         media = existing_map.get(virtual_rel)
         try:
             stat = target_path.stat()
+        except FileNotFoundError as e:
+            logger.debug(f"Media file {target_path} not found or offline during scan, skipping: {e}")
+            continue
         except OSError as e:
             logger.warning(f"Failed to access file {target_path} during scan, skipping: {e}")
             continue
         seen_paths.add(virtual_rel)
         title = clean_title(target_path)
-        
         # Performance optimization: if size is unchanged, duration is indexed, and thumbnail is not a placeholder (SVG), bypass heavy probe/thumbnail operations
         if not force_thumbs and media and media.file_size == stat.st_size and media.duration_seconds and media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
             thumbnail = media.thumbnail_path
@@ -575,10 +699,178 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                 "audio_codec": media.audio_codec,
                 "duration_seconds": media.duration_seconds
             }
+        # If size is unchanged, and already marked corrupted, bypass heavy validation/repair
+        elif media and media.hls_status == "corrupted" and media.file_size == stat.st_size:
+            logger.debug(f"Media '{title}' is already marked as corrupted and unchanged, skipping.")
+            thumbnail = f"/thumbs/{thumbnail_path_for(virtual_rel).name}"
+            probe = {
+                "width": None, "height": None, "bitrate": None,
+                "video_codec": None, "audio_codec": None, "duration_seconds": None
+            }
+            media_values = {
+                "relative_path": virtual_rel,
+                "path": str(target_path.resolve()),
+                "title": title,
+                "category": virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added",
+                "file_size": stat.st_size,
+                "container": target_path.suffix.lower().lstrip("."),
+                "thumbnail_path": thumbnail,
+                "stream_mode": "direct",
+                "hls_status": "corrupted",
+                "requires_pin": False,
+                "adult_only": False,
+                "last_scanned_at": datetime.now(UTC),
+                "width": None,
+                "height": None,
+                "bitrate": None,
+                "video_codec": None,
+                "audio_codec": None,
+                "duration_seconds": None,
+                "file_exists": True,
+                "last_verified_at": datetime.now(UTC),
+            }
+            stmt = insert(MediaMetadata).values(**media_values)
+            upsert_stmt = stmt.on_conflict_do_update(
+                index_elements=["path"],
+                set_={k: v for k, v in media_values.items() if k not in ["path"]}
+            )
+            await session.execute(upsert_stmt)
+            indexed += 1
+            _scan_state["files_scanned"] = indexed
+            if indexed % 50 == 0:
+                await session.commit()
+                await asyncio.sleep(0.01)
+            continue
         else:
+            # 1. Validate file with ffprobe
+            is_valid = validate_media(target_path)
+            
+            if not is_valid:
+                logger.warning(f"Validation failed for {virtual_rel}. Attempting to remux and repair the container once...")
+                temp_fixed = target_path.parent / f".fixed_{target_path.name}"
+                remux_command = [
+                    settings.ffmpeg_path,
+                    "-y",
+                    "-fflags",
+                    "+genpts",
+                    "-i",
+                    str(target_path),
+                    "-c",
+                    "copy",
+                    str(temp_fixed)
+                ]
+                try:
+                    creation_flags = 0
+                    if os.name == 'nt':
+                        creation_flags = 0x08000000
+                    remux_res = subprocess.run(remux_command, capture_output=True, encoding="utf-8", errors="ignore", timeout=60, creationflags=creation_flags)
+                    if remux_res.returncode == 0 and temp_fixed.exists() and temp_fixed.stat().st_size > 0:
+                        try:
+                            target_path.unlink(missing_ok=True)
+                            shutil.move(str(temp_fixed), str(target_path))
+                            logger.info(f"Successfully repaired container for {virtual_rel} via remux.")
+                            # Re-stat the file
+                            stat = target_path.stat()
+                            # Re-validate
+                            is_valid = validate_media(target_path)
+                        except Exception as e:
+                            logger.error(f"Failed to replace original file with repaired file for {virtual_rel}: {e}")
+                    else:
+                        logger.warning(f"Remux repair failed for {virtual_rel}: {remux_res.stderr}")
+                except Exception as e:
+                    logger.error(f"Error during remux repair for {virtual_rel}: {e}")
+                finally:
+                    if temp_fixed.exists():
+                        try:
+                            temp_fixed.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+            
+            # 2. If still invalid, mark status as corrupted in DB and skip heavy processing
+            if not is_valid:
+                logger.error(f"File {virtual_rel} is corrupted and could not be repaired. Marking as corrupted.")
+                media_values = {
+                    "relative_path": virtual_rel,
+                    "path": str(target_path.resolve()),
+                    "title": title,
+                    "category": virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added",
+                    "file_size": stat.st_size,
+                    "container": target_path.suffix.lower().lstrip("."),
+                    "thumbnail_path": f"/thumbs/{thumbnail_path_for(virtual_rel).name}",
+                    "stream_mode": "direct",
+                    "hls_status": "corrupted",
+                    "requires_pin": False,
+                    "adult_only": False,
+                    "last_scanned_at": datetime.now(UTC),
+                    "width": None,
+                    "height": None,
+                    "bitrate": None,
+                    "video_codec": None,
+                    "audio_codec": None,
+                    "duration_seconds": None,
+                    "file_exists": True,
+                    "last_verified_at": datetime.now(UTC),
+                }
+                stmt = insert(MediaMetadata).values(**media_values)
+                upsert_stmt = stmt.on_conflict_do_update(
+                    index_elements=["path"],
+                    set_={k: v for k, v in media_values.items() if k not in ["path"]}
+                )
+                await session.execute(upsert_stmt)
+                indexed += 1
+                _scan_state["files_scanned"] = indexed
+                if indexed % 50 == 0:
+                    await session.commit()
+                    await asyncio.sleep(0.01)
+                continue
+
+            # 3. Healthy file: do normal metadata probing and thumbnail generation
             probe = await asyncio.to_thread(probe_media, target_path)
             duration = probe.get("duration_seconds")
-            thumbnail = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title, duration)
+            thumbnail, was_repaired = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title, duration)
+            if was_repaired:
+                logger.info(f"Re-probing repaired file: {target_path}")
+                probe = await asyncio.to_thread(probe_media, target_path)
+                try:
+                    stat = target_path.stat()
+                except OSError:
+                    pass
+            elif thumbnail.endswith(".svg"):
+                logger.error(f"Thumbnail generation failed completely for {virtual_rel}. Marking as corrupted.")
+                media_values = {
+                    "relative_path": virtual_rel,
+                    "path": str(target_path.resolve()),
+                    "title": title,
+                    "category": virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added",
+                    "file_size": stat.st_size,
+                    "container": target_path.suffix.lower().lstrip("."),
+                    "thumbnail_path": thumbnail,
+                    "stream_mode": "direct",
+                    "hls_status": "corrupted",
+                    "requires_pin": False,
+                    "adult_only": False,
+                    "last_scanned_at": datetime.now(UTC),
+                    "width": None,
+                    "height": None,
+                    "bitrate": None,
+                    "video_codec": None,
+                    "audio_codec": None,
+                    "duration_seconds": None,
+                    "file_exists": True,
+                    "last_verified_at": datetime.now(UTC),
+                }
+                stmt = insert(MediaMetadata).values(**media_values)
+                upsert_stmt = stmt.on_conflict_do_update(
+                    index_elements=["path"],
+                    set_={k: v for k, v in media_values.items() if k not in ["path"]}
+                )
+                await session.execute(upsert_stmt)
+                indexed += 1
+                _scan_state["files_scanned"] = indexed
+                if indexed % 50 == 0:
+                    await session.commit()
+                    await asyncio.sleep(0.01)
+                continue
 
         virtual_parts = [""]
         current = ""
@@ -661,6 +953,13 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                         logger.info(f"Scan cleanup: Stale media '{media.title}' (ID {media.id}) deleted.")
 
     await session.commit()
+
+    # Run classification & series detection after indexing
+    try:
+        await run_classification_pipeline(session)
+    except Exception:
+        logger.exception("Classification pipeline failed (non-fatal).")
+
     _scan_state["scanning"] = False
     _scan_state["last_scan_at"] = datetime.now(UTC).isoformat()
     logger.info(f"Scan complete. Indexed {indexed} items.")
@@ -669,6 +968,226 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
     from core.webhooks import trigger_webhook
     await trigger_webhook("library.updated", {"indexed_count": indexed})
     return indexed
+
+
+# ── Classification & Series Detection Pipeline ─────────────────────────────────
+
+# Regex patterns for episode detection
+_EPISODE_RE = re.compile(
+    r"(?:ep(?:isode)?|s(?:eason)?|e|part|pt)\.?\s*(\d+)",
+    re.IGNORECASE,
+)
+_TRAILING_NUM_RE = re.compile(r"\b(\d+)\s*$")
+
+
+def _normalize_title(title: str) -> str:
+    """Lowercase, strip extensions, replace punctuation with spaces, collapse whitespace."""
+    t = title.lower()
+    # Strip common video extensions
+    t = re.sub(r"\.(mp4|mkv|avi|webm|mov|wmv|flv|m4v|ts)$", "", t)
+    # Replace punctuation with spaces
+    t = re.sub(r"[^\w\s]", " ", t)
+    return " ".join(t.split())
+
+
+def jaro_winkler(s1: str, s2: str, p: float = 0.1, max_l: int = 4) -> float:
+    if s1 == s2:
+        return 1.0
+    len1, len2 = len(s1), len(s2)
+    if len1 == 0 or len2 == 0:
+        return 0.0
+    
+    max_dist = max(len1, len2) // 2 - 1
+    match = 0
+    hash_s1 = [0] * len1
+    hash_s2 = [0] * len2
+    
+    for i in range(len1):
+        for j in range(max(0, i - max_dist), min(len2, i + max_dist + 1)):
+            if s1[i] == s2[j] and hash_s2[j] == 0:
+                hash_s1[i] = 1
+                hash_s2[j] = 1
+                match += 1
+                break
+                
+    if match == 0:
+        return 0.0
+    
+    t = 0
+    point = 0
+    for i in range(len1):
+        if hash_s1[i]:
+            while hash_s2[point] == 0:
+                point += 1
+            if s1[i] != s2[point]:
+                t += 1
+            point += 1
+    t /= 2.0
+    
+    jaro = (match / len1 + match / len2 + (match - t) / match) / 3.0
+    
+    prefix = 0
+    for i in range(min(len1, len2)):
+        if s1[i] == s2[i]:
+            prefix += 1
+        else:
+            break
+        if prefix == max_l:
+            break
+            
+    return jaro + prefix * p * (1 - jaro)
+
+
+def _extract_episode_info(title: str) -> tuple[str, int | None]:
+    """
+    Extract the base name and episode number from a title.
+    Returns (base_name, episode_number) — episode_number may be None.
+    """
+    normalized = _normalize_title(title)
+    match = _EPISODE_RE.search(normalized)
+    if match:
+        ep_num = int(match.group(1))
+        # Base name is everything before the episode marker
+        base = normalized[: match.start()].strip()
+        return base if base else normalized, ep_num
+
+    # Fallback: trailing number
+    trail = _TRAILING_NUM_RE.search(normalized)
+    if trail:
+        ep_num = int(trail.group(1))
+        base = normalized[: trail.start()].strip()
+        return base if base else normalized, ep_num
+
+    return normalized, None
+
+
+async def run_classification_pipeline(session: AsyncSession) -> None:
+    """
+    Classify all indexed media into tags and detect series groupings.
+    Runs post-scan. All state is DB-only — no filesystem changes.
+    """
+    logger.info("Running classification pipeline...")
+
+    result = await session.execute(
+        select(MediaMetadata).where(MediaMetadata.file_exists == True)  # noqa: E712
+    )
+    all_media = list(result.scalars())
+
+    if not all_media:
+        logger.info("Classification pipeline: No media to classify.")
+        return
+
+    # ── Step A: Duration & Aspect Ratio Tagging ────────────────────────────────
+    # Clear existing auto-tags to rebuild cleanly
+    await session.execute(delete(Tag))
+    await session.flush()
+
+    tag_rows: list[dict] = []
+    for m in all_media:
+        dur = m.duration_seconds or 0.0
+        w = m.width or 0
+        h = m.height or 1  # avoid div/0
+        aspect = w / h if h > 0 else 0.0
+
+        tags_for: list[str] = []
+
+        # Short-form (Vertical H > W and <= 3 mins)
+        if aspect > 0 and aspect < 1.0 and dur <= 180:
+            tags_for.append("short_form")
+        
+        # Horizontal (W > H) or fallback when aspect is unknown
+        elif aspect == 0.0 or aspect >= 1.0:
+            if dur > 5400:
+                tags_for.append("feature_length")
+            elif dur > 2700:
+                tags_for.append("long_form_episodes")
+            elif dur > 180:
+                tags_for.append("standard_video")
+            else:
+                # If it's <= 3 mins but horizontal, classify it as standard video
+                tags_for.append("standard_video")
+
+        for t in tags_for:
+            tag_rows.append({"video_id": m.id, "tag": t})
+
+    if tag_rows:
+        await session.execute(insert(Tag).values(tag_rows).on_conflict_do_nothing())
+        await session.flush()
+        logger.info(f"Classification: Applied {len(tag_rows)} tags across {len(all_media)} media.")
+
+    # ── Step B & C: Series Detection ───────────────────────────────────────────
+    # Clear old series data to rebuild
+    await session.execute(delete(SeriesMember))
+    await session.execute(delete(SeriesGroup))
+    await session.flush()
+
+    # Build candidate list: (media, base_name, episode_number)
+    candidates: list[tuple[MediaMetadata, str, int | None]] = []
+    for m in all_media:
+        base, ep = _extract_episode_info(m.title or "")
+        if base:
+            candidates.append((m, base, ep))
+
+    # Group by exact base name first
+    from collections import defaultdict
+    base_groups: dict[str, list[tuple[MediaMetadata, int | None]]] = defaultdict(list)
+    for m, base, ep in candidates:
+        base_groups[base].append((m, ep))
+
+    # Merge similar base names using SequenceMatcher
+    merged_keys = list(base_groups.keys())
+    union_map: dict[str, str] = {k: k for k in merged_keys}  # union-find root
+
+    def find(x: str) -> str:
+        while union_map[x] != x:
+            union_map[x] = union_map[union_map[x]]
+            x = union_map[x]
+        return x
+
+    for i in range(len(merged_keys)):
+        for j in range(i + 1, len(merged_keys)):
+            a, b = merged_keys[i], merged_keys[j]
+            if find(a) == find(b):
+                continue
+            ratio = jaro_winkler(a, b)
+            if ratio >= 0.85:
+                union_map[find(b)] = find(a)
+
+    # Collect merged groups
+    final_groups: dict[str, list[tuple[MediaMetadata, int | None]]] = defaultdict(list)
+    for key, members in base_groups.items():
+        root = find(key)
+        final_groups[root].extend(members)
+
+    # Create series groups for clusters with >= 2 members
+    series_count = 0
+    for canonical, members in final_groups.items():
+        if len(members) < 2:
+            continue
+
+        # Determine display name (title-cased canonical)
+        display_name = canonical.title() if canonical else "Unknown Series"
+
+        group = SeriesGroup(name=display_name, canonical_title=canonical)
+        session.add(group)
+        await session.flush()  # get group.id
+
+        for m, ep in members:
+            session.add(SeriesMember(
+                video_id=m.id,
+                series_id=group.id,
+                episode_number=ep,
+            ))
+            # Tag this video as part of a series
+            tag_rows_series = {"video_id": m.id, "tag": "series"}
+            await session.execute(
+                insert(Tag).values(**tag_rows_series).on_conflict_do_nothing()
+            )
+
+        series_count += 1
+
+    await session.commit()
+    logger.info(f"Classification pipeline complete. Detected {series_count} series groups.")
 
 
 async def library_groups(session: AsyncSession, current_user: User) -> list[dict]:
@@ -707,6 +1226,10 @@ async def detect_intro_for_media(media_path: Path) -> tuple[float, float]:
     import subprocess
     import re
     
+    if not ffmpeg_available():
+        logger.warning(f"FFmpeg not available. Skipping intro detection for {media_path}. Using default fallback (30.0, 90.0).")
+        return 30.0, 90.0
+
     settings = get_settings()
     cmd = [
         settings.ffmpeg_path,
@@ -750,7 +1273,7 @@ def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict],
     has_nvenc = False
     has_qsv = False
     try:
-        check = subprocess.run([settings.ffmpeg_path, "-encoders"], capture_output=True, text=True)
+        check = subprocess.run([settings.ffmpeg_path, "-encoders"], capture_output=True, encoding="utf-8", errors="ignore")
         has_nvenc = "h264_nvenc" in check.stdout
         has_qsv = "h264_qsv" in check.stdout
     except Exception:
@@ -1381,7 +1904,7 @@ async def run_orphan_cleanup_job() -> None:
                     for media in missing_sprites:
                         source = media_source_path(media)
                         logger.info(f"Orphan worker: Generating sprite sheet for '{media.title}' (ID {media.id})")
-                        await asyncio.to_thread(build_sprite_sheet, source, media.id)
+                        await asyncio.to_thread(build_sprite_sheet, source, media.id, media.duration_seconds)
                         await asyncio.sleep(2)  # Pause to yield to event loop and prevent CPU spikes
                 else:
                     logger.info("Orphan worker: All active media items have sprite sheets.")

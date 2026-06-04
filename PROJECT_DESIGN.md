@@ -5,7 +5,6 @@
 - **Type**: Minimalist LAN media server
 - **Aesthetic**: Clean dark monochrome UI, single accent color (indigo), VHS/synthwave video player
 - **Stack**: FastAPI + SQLAlchemy (async) + SQLite + Vanilla JS/CSS
-
 ---
 
 ## Design Principles

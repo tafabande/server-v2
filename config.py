@@ -7,6 +7,32 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 
+def _resolve_binary_path(env_key: str, default_name: str) -> str:
+    env_val = os.getenv(env_key, default_name)
+    env_path = Path(env_val)
+    if env_path.is_absolute():
+        return str(env_path)
+        
+    # Check directly under BASE_DIR
+    candidate = BASE_DIR / env_path
+    if candidate.exists():
+        return str(candidate)
+        
+    # Check in bin/ under BASE_DIR
+    for name in (env_val, f"{env_val}.exe"):
+        bin_candidate = BASE_DIR / "bin" / name
+        if bin_candidate.exists():
+            return str(bin_candidate)
+            
+    # Fallback default names in bin/
+    for name in (default_name, f"{default_name}.exe"):
+        bin_candidate = BASE_DIR / "bin" / name
+        if bin_candidate.exists():
+            return str(bin_candidate)
+            
+    return env_val
+
+
 def _load_env_file(env_path: Path) -> None:
     if not env_path.exists():
         return
@@ -108,8 +134,8 @@ class Settings:
             redis_url=os.getenv("REDIS_URL", ""),
             host=os.getenv("HOST", "0.0.0.0"),
             port=_env_int("PORT", 51733),
-            ffmpeg_path=str(BASE_DIR / os.getenv("FFMPEG_PATH", "ffmpeg")) if not Path(os.getenv("FFMPEG_PATH", "ffmpeg")).is_absolute() and (BASE_DIR / os.getenv("FFMPEG_PATH", "ffmpeg")).exists() else os.getenv("FFMPEG_PATH", "ffmpeg"),
-            ffprobe_path=str(BASE_DIR / os.getenv("FFPROBE_PATH", "ffprobe")) if not Path(os.getenv("FFPROBE_PATH", "ffprobe")).is_absolute() and (BASE_DIR / os.getenv("FFPROBE_PATH", "ffprobe")).exists() else os.getenv("FFPROBE_PATH", "ffprobe"),
+            ffmpeg_path=_resolve_binary_path("FFMPEG_PATH", "ffmpeg"),
+            ffprobe_path=_resolve_binary_path("FFPROBE_PATH", "ffprobe"),
             cors_origins=_env_list("CORS_ORIGINS", ["*"]),
             session_cookie_name=os.getenv("SESSION_COOKIE_NAME", "mediahub_session"),
             session_cookie_secure=_env_bool("SESSION_COOKIE_SECURE", False),

@@ -117,7 +117,7 @@ if /i "!force_choice!"=="Y" (
     echo [93m[INFO] Force overwrite ENABLED. This will take a long time.[0m
 ) else (
     set "FORCE_THUMBS=False"
-    echo [92m[INFO] Force overwrite DISABLED (Skipping existing).[0m
+    echo [92m[INFO] Force overwrite DISABLED [Skipping existing].[0m
 )
 
 call :check_env
@@ -300,6 +300,7 @@ echo.
 echo [95m[1/5] Halting local server processes...[0m
 taskkill /F /IM python.exe /T 2>nul
 taskkill /F /IM python3.exe /T 2>nul
+taskkill /F /IM ffmpeg.exe /T 2>nul
 timeout /t 1 /nobreak >nul
 
 echo [95m[2/5] Halting and cleaning Docker volumes...[0m

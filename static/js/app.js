@@ -9,6 +9,7 @@ import { ApiClient } from './api.js';
 import { SocketClient } from './socket-client.js';
 import { PlayerManager } from './player-manager.js';
 import { Router } from './router.js';
+import { themeManager } from './theme-manager.js';
 
 import { HomeView } from './views/home.js';
 import { LibraryView } from './views/library.js';
@@ -18,6 +19,23 @@ import { HistoryView } from './views/history.js';
 import { ProfileView } from './views/profile.js';
 import { LoginView } from './views/login.js';
 import { FavoritesView } from './views/favorites.js';
+import { ShortiesView } from './views/shorties.js';
+
+class ObservableState {
+    constructor(initialState = {}) {
+        this.state = initialState;
+        this.listeners = new Set();
+    }
+    get() { return this.state; }
+    set(newState) {
+        this.state = { ...this.state, ...newState };
+        this.listeners.forEach(l => l(this.state));
+    }
+    subscribe(listener) {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+}
 
 class App {
     constructor() {
@@ -27,28 +45,62 @@ class App {
         this.user = JSON.parse(localStorage.getItem('mediahub_user') || 'null');
         this.token = localStorage.getItem('mediahub_token');
 
+        this.store = new ObservableState({
+            user: JSON.parse(localStorage.getItem('mediahub_user') || 'null'),
+            token: localStorage.getItem('mediahub_token'),
+            r18Enabled: sessionStorage.getItem('r18_enabled') === 'true'
+        });
+
+        this.user = this.store.get().user;
+        this.token = this.store.get().token;
+
+        this.store.subscribe(state => {
+            this.user = state.user;
+            this.token = state.token;
+        });
+
         if (this.token) {
             this.api.setToken(this.token);
         }
 
-        // Apply theme preference on load
-        if (this.user) {
-            const theme = this.user.preferences?.theme || 'default';
-            document.documentElement.setAttribute('data-theme', theme);
-            this._updateThemeIcon(theme);
-        } else {
-            document.documentElement.setAttribute('data-theme', 'default');
-            this._updateThemeIcon('default');
+        // Default to disabled while the prompt is open to secure the background view
+        if (this.token && this.user) {
+            if (sessionStorage.getItem('r18_enabled') === null) {
+                sessionStorage.setItem('r18_enabled', 'false');
+                this.store.set({ r18Enabled: false });
+            }
         }
+
+        themeManager.init(this.user, this.api);
+
+        // Setup Document Environment Safely for new design schema
+        const fontLink = document.createElement('link');
+        fontLink.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap';
+        fontLink.rel = 'stylesheet';
+        document.head.appendChild(fontLink);
 
         window.addEventListener('mediahub-unauthorized', () => {
             this.logout();
         });
 
+        const makeLibView = (fmt) => class extends LibraryView {
+            constructor(c) { super(c); this._fixedFormat = fmt; }
+            async _loadMedia() { return this._loadByFormat(this._fixedFormat); }
+            _renderTabs() {
+                super._renderTabs();
+                const t = document.getElementById('lib-format-tabs');
+                if (t) t.style.display = 'none';
+            }
+        };
+
         const routes = [
             { path: '/', view: async () => HomeView, requiresAuth: true },
             { path: '/library', view: async () => LibraryView, requiresAuth: true },
             { path: '/favorites', view: async () => FavoritesView, requiresAuth: true },
+            { path: '/shorties', view: async () => ShortiesView, requiresAuth: true },
+            { path: '/movies', view: async () => makeLibView('movies'), requiresAuth: true },
+            { path: '/series', view: async () => makeLibView('series'), requiresAuth: true },
+            { path: '/videos', view: async () => makeLibView('normal'), requiresAuth: true },
             { path: '/explorer', view: async () => ExplorerView, requiresAuth: true },
             { path: '/history', view: async () => HistoryView, requiresAuth: true },
             { path: '/admin', view: async () => AdminView, requiresAuth: true },
@@ -62,20 +114,56 @@ class App {
     }
 
     async init() {
-        this.sidebar = document.getElementById('sidebar');
+        this.els = {
+            sidebar: document.getElementById('sidebar'),
+            sidebarOverlay: document.getElementById('sidebar-overlay'),
+            scrollTopBtn: document.getElementById('scroll-top-btn'),
+            globalSearch: document.getElementById('global-search-input'),
+            btnShareQr: document.getElementById('btn-share-qr'),
+            btnShortcutsHelp: document.getElementById('btn-shortcuts-help'),
+            shortcutsDialog: document.getElementById('shortcuts-dialog'),
+            mobileMenuBtn: document.getElementById('mobile-menu-btn'),
+            topbarMobile: document.getElementById('topbar-mobile'),
+            topbarUser: document.getElementById('topbar-user'),
+            pageTitle: document.getElementById('page-title'),
+            adminNotifBadge: document.getElementById('admin-notif-badge'),
+            scanStatusContainer: document.getElementById('scan-status-container'),
+            scanText: document.getElementById('scan-text'),
+        };
+
+        this.sidebar = this.els.sidebar;
         this.viewTarget = document.getElementById('view-target');
 
         // Initialize VHS Player
         this.player = new PlayerManager();
+        const pModal = document.getElementById('player-modal');
+        if (pModal) {
+            pModal.showModal = function () {
+                this.classList.add('active');
+                document.body.classList.add('player-active');
+            };
+            pModal.close = function () {
+                this.classList.remove('active');
+                document.body.classList.remove('player-active');
+            };
+        }
+
+        // Sync Fullscreen with the new PiP Viewport
+        document.getElementById('video-viewport')?.addEventListener('click', () => {
+            this.player?.toggleFullscreen();
+        });
+        document.getElementById('btn-fullscreen')?.addEventListener('click', () => {
+            this.player?.toggleFullscreen();
+        });
 
         // Socket
         if (this.token) this.initSocket();
 
-        // Check for R18 confirmation prompt if logged in
-        this.checkR18SessionPrompt();
-
         // Nav
         await this.handleNavigation();
+
+        // Check for R18 confirmation prompt if logged in (deferred to avoid view transition race conditions)
+        this.checkR18SessionPrompt();
 
         // Hide boot loader
         const loader = document.getElementById('boot-loader');
@@ -113,24 +201,29 @@ class App {
         });
 
         // Scroll to Top Logic
-        const scrollBtn = document.getElementById('scroll-top-btn');
         window.addEventListener('scroll', () => {
-            if (window.scrollY > 500) scrollBtn?.classList.add('visible');
-            else scrollBtn?.classList.remove('visible');
+            if (window.scrollY > 500) this.els.scrollTopBtn?.classList.add('visible');
+            else this.els.scrollTopBtn?.classList.remove('visible');
         }, { passive: true });
 
-        scrollBtn?.addEventListener('click', () => {
+        this.els.scrollTopBtn?.addEventListener('click', () => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
 
         // Global persistent search bar routing
-        const globalSearch = document.getElementById('global-search-input');
-        globalSearch?.addEventListener('input', async (e) => {
+        this.els.globalSearch?.addEventListener('input', async (e) => {
             const val = e.target.value;
             if (window.location.pathname !== '/library') {
                 this.router.navigate('/library');
-                // Allow view to render
-                await new Promise(r => setTimeout(r, 150));
+                await new Promise(resolve => {
+                    const handler = (ev) => {
+                        if (ev.detail.path === '/library') {
+                            window.removeEventListener('route-loaded', handler);
+                            resolve();
+                        }
+                    };
+                    window.addEventListener('route-loaded', handler);
+                });
             }
 
             const libSearch = document.getElementById('lib-search');
@@ -141,41 +234,45 @@ class App {
         });
 
         // Share QR
-        document.getElementById('btn-share-qr')?.addEventListener('click', () => this._showShareQR());
-
-        // Theme Toggle
-        document.getElementById('btn-theme-toggle')?.addEventListener('click', () => {
-            const currentTheme = document.documentElement.getAttribute('data-theme') || 'default';
-            const nextTheme = currentTheme === 'light' ? 'default' : 'light';
-            document.documentElement.setAttribute('data-theme', nextTheme);
-
-            if (this.user) {
-                this.user.preferences = this.user.preferences || {};
-                this.user.preferences.theme = nextTheme;
-                localStorage.setItem('mediahub_user', JSON.stringify(this.user));
-                this.api.updateProfile({ preferences: this.user.preferences }).catch(() => { });
-            }
-            this._updateThemeIcon(nextTheme);
-        });
+        this.els.btnShareQr?.addEventListener('click', () => this._showShareQR());
 
         // Shortcuts Cheatsheet Modal
-        document.getElementById('btn-shortcuts-help')?.addEventListener('click', () => {
-            document.getElementById('shortcuts-dialog')?.showModal();
+        this.els.btnShortcutsHelp?.addEventListener('click', () => {
+            this.els.shortcutsDialog?.showModal();
         });
 
-        // Hamburger Menu (Mobile)
-        const mobileMenuBtn = document.getElementById('mobile-menu-btn');
-        const sidebarOverlay = document.getElementById('sidebar-overlay');
+        // Inject new classification nav links into the sidebar if missing
+        const navContainer = document.querySelector('.sidebar-nav');
+        if (navContainer && !document.querySelector('[href="/movies"]')) {
+            const libLink = navContainer.querySelector('[href="/library"]');
+            const newLinks = `
+                <a href="/movies" class="nav-link" data-link>
+                    <span class="nav-icon">🎥</span>
+                    <span class="nav-label">Movies</span>
+                </a>
+                <a href="/series" class="nav-link" data-link>
+                    <span class="nav-icon">📺</span>
+                    <span class="nav-label">Series</span>
+                </a>
+                <a href="/videos" class="nav-link" data-link>
+                    <span class="nav-icon">📼</span>
+                    <span class="nav-label">Videos</span>
+                </a>
+            `;
+            if (libLink) libLink.insertAdjacentHTML('afterend', newLinks);
+            else navContainer.insertAdjacentHTML('beforeend', newLinks);
+        }
 
+        // Hamburger Menu (Mobile)
         const toggleSidebar = (force) => {
-            if (!this.sidebar) return;
-            const isOpen = force !== undefined ? force : !this.sidebar.classList.contains('mobile-open');
-            this.sidebar.classList.toggle('mobile-open', isOpen);
-            if (sidebarOverlay) sidebarOverlay.classList.toggle('active', isOpen);
+            if (!this.els.sidebar) return;
+            const isOpen = force !== undefined ? force : !this.els.sidebar.classList.contains('mobile-open');
+            this.els.sidebar.classList.toggle('mobile-open', isOpen);
+            if (this.els.sidebarOverlay) this.els.sidebarOverlay.classList.toggle('active', isOpen);
         };
 
-        mobileMenuBtn?.addEventListener('click', () => toggleSidebar());
-        sidebarOverlay?.addEventListener('click', () => toggleSidebar(false));
+        this.els.mobileMenuBtn?.addEventListener('click', () => toggleSidebar());
+        this.els.sidebarOverlay?.addEventListener('click', () => toggleSidebar(false));
 
         // Auto close sidebar on nav link click in mobile
         document.querySelectorAll('.sidebar .nav-link').forEach(link => {
@@ -196,13 +293,14 @@ class App {
         window.addEventListener('mediahub-socket-message', (e) => {
             const msg = e.detail;
             if (msg.type === 'request-updated') {
-                const currentUser = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+                const currentUser = this.store.get().user || {};
 
                 // Alert standard user of status change
                 if (currentUser && currentUser.id === msg.user_id) {
                     if (msg.request_type === 'adult_elevation' && msg.status === 'approved') {
                         currentUser.is_adult = true;
                         localStorage.setItem('mediahub_user', JSON.stringify(currentUser));
+                        this.store.set({ user: currentUser });
                         this.updateUI();
                     }
 
@@ -238,10 +336,11 @@ class App {
 
         // Register PWA Service Worker
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js')
-                    .then(reg => console.log('Service Worker registered successfully:', reg.scope))
-                    .catch(err => console.error('Service Worker registration failed:', err));
+            // Unregister any active service workers to prevent caching issues during development
+            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+                for (let registration of registrations) {
+                    registration.unregister();
+                }
             });
         }
     }
@@ -268,14 +367,15 @@ class App {
     }
 
     async updateAdminBadge() {
-        const badge = document.getElementById('admin-notif-badge');
+        const badge = this.els.adminNotifBadge;
         if (!badge) return;
         if (!this.token || !this.user || !(this.user.role === 'admin' || this.user.role === 'super-admin')) {
             badge.style.display = 'none';
             return;
         }
         try {
-            const requests = await this.api.getRequests();
+            const res = await this.api.getRequests();
+            const requests = Array.isArray(res) ? res : (res?.items || []);
             const pendingCount = requests.filter(r => r.status === 'pending').length;
             if (pendingCount > 0) {
                 badge.textContent = pendingCount;
@@ -293,19 +393,19 @@ class App {
         const isAuth = !!(this.token && this.user);
         const showNav = isAuth && !isLoginPage;
 
-        if (this.sidebar) this.sidebar.hidden = !showNav;
+        if (this.els.sidebar) this.els.sidebar.hidden = !showNav;
 
         // Handle mobile top bar too
-        const topbar = document.querySelector('.topbar-mobile');
-        if (topbar) topbar.style.display = showNav ? 'flex' : 'none';
+        if (this.els.topbarMobile) this.els.topbarMobile.style.display = showNav ? 'flex' : 'none';
 
         if (showNav) {
             const isAdmin = this.user.role === 'admin' || this.user.role === 'super-admin';
             document.querySelectorAll('.admin-only').forEach(el => el.hidden = !isAdmin);
-            const topUser = document.getElementById('topbar-user');
-            if (topUser) topUser.textContent = this.user.username;
+            if (this.els.topbarUser) this.els.topbarUser.textContent = this.user.username;
             this.updateAdminBadge();
         }
+
+        this.updateNavActive();
     }
 
     updateNavActive() {
@@ -313,6 +413,15 @@ class App {
         document.querySelectorAll('.nav-link[data-link]').forEach(link => {
             link.classList.toggle('active', link.getAttribute('href') === path);
         });
+
+        // Update Dynamic Title
+        const titleMap = {
+            '/': 'Watch', '/library': 'Library', '/explorer': 'Uploads', '/admin': 'Insights', '/history': 'History', '/profile': 'Profile',
+            '/movies': 'Movies', '/series': 'Series', '/videos': 'Videos', '/shorties': 'Shorties'
+        };
+        if (this.els.pageTitle) {
+            this.els.pageTitle.textContent = titleMap[path] || 'Watch';
+        }
     }
 
     async handleNavigation() {
@@ -353,20 +462,8 @@ class App {
         localStorage.removeItem('mediahub_user');
         sessionStorage.removeItem('r18_enabled');
         sessionStorage.removeItem('r18_prompted');
+        this.store.set({ user: null, token: null, r18Enabled: false });
         window.location.href = '/login';
-    }
-
-    _updateThemeIcon(theme) {
-        const iconEl = document.getElementById('theme-toggle-icon');
-        const labelEl = document.querySelector('#btn-theme-toggle .nav-label');
-        if (!iconEl) return;
-        if (theme === 'light') {
-            iconEl.textContent = '🌙';
-            if (labelEl) labelEl.textContent = 'Dark Mode';
-        } else {
-            iconEl.textContent = '☀';
-            if (labelEl) labelEl.textContent = 'Light Mode';
-        }
     }
 
     checkR18SessionPrompt() {
@@ -420,21 +517,25 @@ class App {
             </div>
         `;
 
-        dialog.showModal();
+        if (!dialog.open) {
+            dialog.showModal();
+        }
 
-        dialog.querySelector('#r18-no-btn').addEventListener('click', () => {
+        dialog.querySelector('#r18-no-btn').onclick = () => {
             sessionStorage.setItem('r18_enabled', 'false');
             sessionStorage.setItem('r18_prompted', 'true');
+            this.store.set({ r18Enabled: false });
             dialog.close();
-            window.location.reload();
-        });
+            this.handleNavigation();
+        };
 
-        dialog.querySelector('#r18-yes-btn').addEventListener('click', () => {
+        dialog.querySelector('#r18-yes-btn').onclick = () => {
             sessionStorage.setItem('r18_enabled', 'true');
             sessionStorage.setItem('r18_prompted', 'true');
+            this.store.set({ r18Enabled: true });
             dialog.close();
-            window.location.reload();
-        });
+            this.handleNavigation();
+        };
 
         dialog.addEventListener('cancel', (e) => {
             e.preventDefault();
@@ -443,8 +544,7 @@ class App {
 
     async pollScanStatus() {
         if (!this.token) {
-            const container = document.getElementById('sidebar-scan-status-container');
-            if (container) container.style.display = 'none';
+            if (this.els.scanStatusContainer) this.els.scanStatusContainer.style.display = 'none';
             return;
         }
 
@@ -457,8 +557,8 @@ class App {
 
         try {
             const status = await this.api.getScanStatus();
-            const container = document.getElementById('sidebar-scan-status-container');
-            const textEl = document.getElementById('sidebar-scan-text');
+            const container = this.els.scanStatusContainer;
+            const textEl = this.els.scanText;
 
             if (container && textEl) {
                 if (status.scanning) {

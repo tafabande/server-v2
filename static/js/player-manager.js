@@ -3,6 +3,7 @@
  */
 import { api } from './app.js';
 import { isAdultApproved, toast, confirm, escapeHtml } from './utils.js';
+import { themeManager } from './theme-manager.js';
 
 export class PlayerManager {
     constructor() {
@@ -85,9 +86,9 @@ export class PlayerManager {
                 fetch(url, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${api.token}`
+                        'Content-Type': 'application/json'
                     },
+                    credentials: 'same-origin',
                     body: payload,
                     keepalive: true
                 }).catch(() => { });
@@ -1326,17 +1327,11 @@ export class PlayerManager {
         this.seekPreview?.classList.remove('visible');
 
         if (this.hls) { this.hls.destroy(); this.hls = null; }
-        if (this.previewHls) { this.previewHls.destroy(); this.previewHls = null; }
 
         this._stopThemeAnalysis();
 
         this.video.src = '';
         this.video.load();
-
-        if (this.previewVideo) {
-            this.previewVideo.src = '';
-            this.previewVideo.load();
-        }
 
         if (this.transportFill) this.transportFill.style.width = '0%';
         if (this.transportBuffer) this.transportBuffer.style.width = '0%';
@@ -1423,6 +1418,10 @@ export class PlayerManager {
                 if (playerInfo) {
                     playerInfo.style.background = `rgba(${bgRgb}, 0.8)`;
                 }
+                themeManager.applyDynamicPlayerTheme(this.modal, {
+                    r: avgR, g: avgG, b: avgB,
+                    h: hsl.h, s: hsl.s, l: hsl.l
+                });
             }
         } catch (e) {
             console.warn("Theme analysis failed:", e);
@@ -1573,12 +1572,6 @@ export class PlayerManager {
         tryFetch();
     }
 
-    /** No-op: replaced by sprite sheet. Kept so existing call sites don't throw. */
-    _initPreviewStream(_url) {
-        // Previously spun up a second HLS stream for live seek previews.
-        // Now handled by the sprite sheet via _loadSprite().
-    }
-
     async _onRenameClick() {
         console.log("Starting rename flow...");
         if (!this.currentMedia) {
@@ -1647,9 +1640,7 @@ export class PlayerManager {
         }
 
         try {
-            const appModule = await import('./app.js');
-            const activeApi = appModule.api || appModule.default?.api;
-            await activeApi.renameMedia(this.currentMedia.id, newTitle);
+            await api.renameMedia(this.currentMedia.id, newTitle);
 
             // Instantly mutate displayed titles without reloading
             this.currentMedia.title = newTitle;
@@ -1692,9 +1683,7 @@ export class PlayerManager {
             // Wait a tiny bit (e.g. 200ms) for the server to close socket/file handles
             await new Promise(resolve => setTimeout(resolve, 200));
 
-            const appModule = await import('./app.js');
-            const activeApi = appModule.api || appModule.default?.api;
-            await activeApi.deleteMedia(mediaId);
+            await api.deleteMedia(mediaId);
 
             toast('File successfully deleted', 'success');
 

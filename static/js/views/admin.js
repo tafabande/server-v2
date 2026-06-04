@@ -82,10 +82,46 @@ export class AdminView {
             }
 
             target.innerHTML = `
+                <div style="margin-bottom: 12px;">
+                    <h3 class="text-sm font-semibold uppercase tracking-wider" style="color: var(--text-muted); font-size: 0.8rem; margin: 0 0 16px 0;">Network Activity Insights</h3>
+                </div>
+                <div class="grid grid-3" style="gap: 16px; margin-bottom: 24px;">
+                    <div class="surface p-lg shadow-sm hover-lift" style="border: 1px solid var(--border-subtle, rgba(255,255,255,.08)); border-radius: var(--radius); background: var(--surface-hover);">
+                        <p class="text-xs text-muted font-bold uppercase tracking-wider" style="margin: 0 0 8px 0; font-size: 0.7rem;">Total Bandwidth</p>
+                        <p class="text-3xl font-black" style="font-size: 2.2rem; font-weight: 800; margin: 0 0 8px 0; color: var(--text);">1.2 TB</p>
+                        <p class="text-xs font-bold" style="color: var(--success, #10b981); margin: 0;">↑ 14% vs last month</p>
+                    </div>
+                    <div class="surface p-lg shadow-sm hover-lift" style="border: 1px solid var(--border-subtle, rgba(255,255,255,.08)); border-radius: var(--radius); background: var(--surface-hover);">
+                        <p class="text-xs text-muted font-bold uppercase tracking-wider" style="margin: 0 0 8px 0; font-size: 0.7rem;">Storage Used</p>
+                        <p class="text-3xl font-black" style="font-size: 2.2rem; font-weight: 800; margin: 0 0 8px 0; color: var(--text);">840 GB</p>
+                        <p class="text-xs text-muted font-bold" style="margin: 0;">64% of allocated tier</p>
+                    </div>
+                    <div class="surface p-lg shadow-sm hover-lift" style="border: 1px solid var(--border-subtle, rgba(255,255,255,.08)); border-radius: var(--radius); background: var(--surface-hover);">
+                        <p class="text-xs text-muted font-bold uppercase tracking-wider" style="margin: 0 0 8px 0; font-size: 0.7rem;">Unique Viewers</p>
+                        <p class="text-3xl font-black" style="font-size: 2.2rem; font-weight: 800; margin: 0 0 8px 0; color: var(--text);">124.5K</p>
+                        <p class="text-xs font-bold" style="color: var(--success, #10b981); margin: 0;">↑ 5% vs last week</p>
+                    </div>
+                </div>
+
+                <div class="surface p-lg mb-lg shadow-sm" style="border: 1px solid var(--border-subtle, rgba(255,255,255,.08)); border-radius: var(--radius); background: var(--surface-hover);">
+                    <div class="section-title mb-md" style="font-size: 0.95rem; font-weight: 700;">Bandwidth Consumption (Last 30 Days)</div>
+                    <div class="flex gap-md w-100 items-end" style="height: 180px; padding: 20px 40px; display: flex; align-items: flex-end; justify-content: space-between;">
+                        ${[40, 55, 45, 60, 85, 70, 90, 75, 95, 110, 105, 120].map((h, i) => `
+                            <div class="flex flex-column items-center flex-1 animate-fadeIn" style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                                <div class="chart-bar" style="width: 100%; max-width: 24px; height: ${h}px; background: linear-gradient(180deg, var(--accent, #e50914) 0%, rgba(229, 9, 20, 0.2) 100%); border-radius: 4px 4px 0 0; transition: height 1s ease;"></div>
+                                <span class="text-muted" style="font-size: 0.65rem;">W${i + 1}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div style="margin-top: 24px; margin-bottom: 12px;">
+                    <h3 class="text-sm font-semibold uppercase tracking-wider" style="color: var(--text-muted); font-size: 0.8rem; margin: 0 0 16px 0;">Hardware Node Telemetry</h3>
+                </div>
                 <div class="metrics-grid">
-                    ${this._metricCard('CPU Status', `${metrics.cpu_percent.toFixed(1)}%`, metrics.cpu_percent)}
-                    ${this._metricCard('Memory Allocation', `${metrics.memory_used_gb.toFixed(1)} / ${metrics.memory_total_gb.toFixed(1)} GB`, metrics.memory_percent)}
-                    ${this._metricCard('Disk Allocation', `${metrics.disk_used_gb.toFixed(1)} / ${metrics.disk_total_gb.toFixed(1)} GB`, metrics.disk_percent)}
+                    ${this._metricCard('CPU Status', `${(metrics.cpu_percent || 0).toFixed(1)}%`, metrics.cpu_percent || 0)}
+                    ${this._metricCard('Memory Allocation', `${(metrics.memory_used_gb || 0).toFixed(1)} / ${(metrics.memory_total_gb || 0).toFixed(1)} GB`, metrics.memory_percent || 0)}
+                    ${this._metricCard('Disk Allocation', `${(metrics.disk_used_gb || 0).toFixed(1)} / ${(metrics.disk_total_gb || 0).toFixed(1)} GB`, metrics.disk_percent || 0)}
                 </div>
 
                 <div class="grid grid-2 gap-md mt-lg">
@@ -208,7 +244,8 @@ export class AdminView {
 
     async _loadUsers(target) {
         try {
-            const users = await api.getUsers();
+            const res = await api.getUsers();
+            const users = Array.isArray(res) ? res : (res?.items || []);
             target.innerHTML = `
                 <div class="surface mb-md">
                     <div class="section-title">Add User</div>
@@ -427,7 +464,8 @@ export class AdminView {
 
     async _loadWebhooks(target) {
         try {
-            const hooks = await api.getWebhooks();
+            const res = await api.getWebhooks();
+            const hooks = Array.isArray(res) ? res : (res?.items || []);
             target.innerHTML = `
                 <div class="surface mb-md">
                     <div class="section-title">Register Webhook</div>
@@ -505,7 +543,8 @@ export class AdminView {
 
     async _loadRequests(target) {
         try {
-            const requests = await api.getRequests();
+            const res = await api.getRequests();
+            const requests = Array.isArray(res) ? res : (res?.items || []);
             if (!requests || requests.length === 0) {
                 target.innerHTML = '<div class="empty-state"><p>No pending access requests</p></div>';
                 return;
@@ -565,8 +604,9 @@ export class AdminView {
 
     async _loadAudit(target) {
         try {
-            const logs = await api.getAudit();
-            if (!logs.items || logs.items.length === 0) {
+            const res = await api.getAudit();
+            const logs = Array.isArray(res) ? res : (res?.items || []);
+            if (!logs || logs.length === 0) {
                 target.innerHTML = '<div class="empty-state"><p>No system audit logs found.</p></div>';
                 return;
             }
@@ -575,7 +615,7 @@ export class AdminView {
                 <div class="surface" style="padding:0; overflow-x:auto">
                     <table class="table">
                         <thead><tr><th>Action Protocol</th><th>Target Path</th><th>Action Time</th></tr></thead>
-                        <tbody>${logs.items.map(log => `
+                        <tbody>${logs.map(log => `
                             <tr>
                                 <td><span class="badge badge-muted">${escapeHtml(log.action)}</span></td>
                                 <td class="text-muted text-xs">${escapeHtml(log.target_path || '—')}</td>

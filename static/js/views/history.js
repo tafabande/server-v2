@@ -27,7 +27,8 @@ export class HistoryView {
 
     async _loadHistory() {
         try {
-            const items = await api.getHistory();
+            const res = await api.getHistory();
+            const items = Array.isArray(res) ? res : (res?.items || []);
             const target = document.getElementById('history-list');
 
             if (!items || items.length === 0) {
@@ -40,9 +41,9 @@ export class HistoryView {
                     <table class="table">
                         <thead><tr><th>Title</th><th>Progress</th><th>Last Watched</th><th>Status</th></tr></thead>
                         <tbody>${items.map(item => {
-                            const pct = item.media.duration_seconds ?
-                                Math.round((item.last_position_seconds / item.media.duration_seconds) * 100) : 0;
-                            return `
+                const pct = item.media.duration_seconds ?
+                    Math.round((item.last_position_seconds / item.media.duration_seconds) * 100) : 0;
+                return `
                                 <tr class="history-row" data-media='${JSON.stringify(item.media).replace(/'/g, "&#39;")}' style="cursor:pointer">
                                     <td><strong>${item.media.title}</strong></td>
                                     <td>
@@ -55,12 +56,12 @@ export class HistoryView {
                                     </td>
                                     <td class="text-muted">${formatDateTime(item.updated_at)}</td>
                                     <td>${item.completed ?
-                                        '<span class="badge badge-success">Completed</span>' :
-                                        `<span class="badge badge-accent">${formatDuration(item.last_position_seconds)}</span>`
-                                    }</td>
+                        '<span class="badge badge-success">Completed</span>' :
+                        `<span class="badge badge-accent">${formatDuration(item.last_position_seconds)}</span>`
+                    }</td>
                                 </tr>
                             `;
-                        }).join('')}</tbody>
+            }).join('')}</tbody>
                     </table>
                 </div>
             `;
@@ -90,5 +91,5 @@ export class HistoryView {
         }
     }
 
-    destroy() {}
+    destroy() { }
 }

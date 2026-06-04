@@ -521,3 +521,23 @@ class HomeRowResponse(BaseModel):
     items: list[HomeItemRead]
     type: str
 
+
+# --- Series / Classification ---
+
+class SeriesGroupRead(BaseModel):
+    id: int
+    name: str
+    canonical_title: str
+    episode_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SeriesGroupDetailRead(BaseModel):
+    id: int
+    name: str
+    canonical_title: str
+    episodes: list[MediaRead] = []
+
+    model_config = ConfigDict(from_attributes=True)
+

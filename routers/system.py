@@ -34,7 +34,7 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
     time_sync_status = "unknown"
     try:
         import subprocess
-        res = subprocess.run(["w32tm", "/query", "/status"], capture_output=True, text=True)
+        res = subprocess.run(["w32tm", "/query", "/status"], capture_output=True, encoding="utf-8", errors="ignore")
         if "Source:" in res.stdout:
             time_sync_status = "synchronized" if "Local CMOS Clock" not in res.stdout else "using local clock"
     except Exception:
@@ -44,7 +44,7 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
     ecc_status = "unsupported/unknown"
     try:
         import subprocess
-        res = subprocess.run(["wmic", "memphysical", "get", "memoryerrorcorrection"], capture_output=True, text=True)
+        res = subprocess.run(["wmic", "memphysical", "get", "memoryerrorcorrection"], capture_output=True, encoding="utf-8", errors="ignore")
         # 3 = None, 5 = Single-bit ECC, 6 = Multi-bit ECC
         if "3" in res.stdout: ecc_status = "none"
         elif "5" in res.stdout: ecc_status = "single-bit ecc"

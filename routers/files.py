@@ -7,7 +7,7 @@ from core.events import broadcast_library_updated
 from core.media import log_audit, scan_media_library
 from core.models import FolderSetting, User
 from core.schemas import DeleteRequest, DirectoryListing, FolderSettingRead, FolderSettingUpdate, MessageResponse, MkdirRequest, RenameRequest
-from core.security import get_current_user, require_roles
+from core.security import get_current_user, get_optional_user, require_roles
 from core.storage import delete_path, ensure_pin_for_path, is_path_adult, list_directory, relative_shared_path, rename_path, resolve_shared_path, save_upload, settings
 
 
@@ -24,7 +24,7 @@ async def refresh_library_view(session: AsyncSession) -> int:
 async def browse(
     path: str | None = Query(default=None),
     pin: str | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> DirectoryListing:
     target = resolve_shared_path(path)
@@ -58,6 +58,11 @@ async def upload(
     if not current_user.is_adult and await is_path_adult(session, target_dir):
         from core.exceptions import AccessDeniedError
         raise AccessDeniedError("Access to 18+ content denied for this account.")
+        
+    filename = upload_file.filename or ""
+    if filename.lower() in {"thumbs.db", "desktop.ini", ".ds_store"} or filename.startswith("._"):
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System files are not allowed.")
         
     destination = await save_upload(path, upload_file)
     await refresh_library_view(session)
@@ -142,7 +147,7 @@ async def mkdir(
     return MessageResponse(message=f"Folder '{payload.name}' created.")
 
 
-@router.get("/settings", response_model=FolderSettingRead, dependencies=[Depends(get_current_user)])
+@router.get("/settings", response_model=FolderSettingRead, dependencies=[Depends(get_optional_user)])
 async def get_folder_settings(
     path: str,
     session: AsyncSession = Depends(get_db),

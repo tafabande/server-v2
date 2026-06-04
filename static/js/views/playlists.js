@@ -41,7 +41,8 @@ export class PlaylistsView {
 
     async _loadPlaylists() {
         try {
-            const playlists = await api.getPlaylists();
+            const res = await api.getPlaylists();
+            const playlists = Array.isArray(res) ? res : (res?.items || []);
             const list = document.getElementById('playlists-list');
 
             if (!playlists || playlists.length === 0) {
@@ -87,8 +88,8 @@ export class PlaylistsView {
                         </div>
                     </div>
                     ${pl.items.length === 0 ?
-                        '<div class="empty-state"><p>Empty playlist — add media from the library</p></div>' :
-                        `<div class="gallery-grid">${pl.items.map(m => `
+                    '<div class="empty-state"><p>Empty playlist — add media from the library</p></div>' :
+                    `<div class="gallery-grid">${pl.items.map(m => `
                             <div class="media-card" data-media='${JSON.stringify(m).replace(/'/g, "&#39;")}'>
                                 <img class="media-card-thumb" src="${thumbUrl(m)}" alt="" loading="lazy" onerror="this.style.display='none'">
                                 <div class="media-card-body">
@@ -97,7 +98,7 @@ export class PlaylistsView {
                                 </div>
                             </div>
                         `).join('')}</div>`
-                    }
+                }
                 </div>
             `;
 
@@ -143,5 +144,5 @@ export class PlaylistsView {
         }
     }
 
-    destroy() {}
+    destroy() { }
 }

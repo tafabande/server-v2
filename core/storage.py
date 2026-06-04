@@ -39,7 +39,7 @@ def resolve_shortcut(lnk_path: Path) -> Path | None:
         $target = $sh.CreateShortcut('{lnk_path}').TargetPath;
         Write-Output $target
         """
-        completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True)
+        completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, encoding="utf-8", errors="ignore")
         target = completed.stdout.strip()
         if target and Path(target).exists():
             return Path(target).resolve()

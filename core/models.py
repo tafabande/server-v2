@@ -297,4 +297,42 @@ class FolderPermission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+from sqlalchemy import UniqueConstraint
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), nullable=False, index=True)
+    tag: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+
+    media: Mapped["MediaMetadata"] = relationship(backref="tags")
+
+    __table_args__ = (
+        UniqueConstraint("video_id", "tag", name="uq_video_tag"),
+    )
+
+
+class SeriesGroup(Base):
+    __tablename__ = "series_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    canonical_title: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    members: Mapped[list["SeriesMember"]] = relationship(back_populates="series", cascade="all, delete-orphan")
+
+
+class SeriesMember(Base):
+    __tablename__ = "series_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("media_metadata.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    series_id: Mapped[int] = mapped_column(ForeignKey("series_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    episode_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    media: Mapped["MediaMetadata"] = relationship(backref="series_membership")
+    series: Mapped[SeriesGroup] = relationship(back_populates="members")
+
+
 

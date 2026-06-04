@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse
-from sqlalchemy import select, func, and_, delete
+from sqlalchemy import select, func, and_, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -34,6 +34,8 @@ from core.schemas import (
     PaginatedMediaResponse,
     PlayEventCreate,
     ScanStatusResponse,
+    SeriesGroupDetailRead,
+    SeriesGroupRead,
     SmartHomeResponse,
     StreamResponse,
     WatchHistoryItem,
@@ -42,7 +44,7 @@ from core.schemas import (
     HomeRowResponse,
     RatingCreate,
 )
-from core.security import get_current_user, require_roles
+from core.security import get_current_user, get_optional_user, require_roles
 from core.storage import ensure_pin_for_path
 
 logger = get_logger("media_router")
@@ -62,14 +64,46 @@ async def library(
     type: str | None = Query(default=None, description="Filter by container type (mp4, mkv, avi, etc.)"),
     category: str | None = Query(default=None, description="Filter by category/folder name"),
     q: str | None = Query(default=None, description="Search title"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> PaginatedMediaResponse:
     """Paginated media library with filters and sorting."""
     stmt = select(MediaMetadata)
     stmt = await apply_media_security_filters(session, stmt, current_user)
     if type:
-        stmt = stmt.where(MediaMetadata.container == type.lower())
+        t = type.lower()
+        if t == "shorties":
+            # Vertical (H > W) and <= 3 mins
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds <= 180,
+                MediaMetadata.height.isnot(None),
+                MediaMetadata.width.isnot(None),
+                MediaMetadata.height > MediaMetadata.width
+            ))
+        elif t == "movies":
+            # Horizontal (W >= H) and > 90 mins
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds > 5400,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
+        elif t == "series":
+            # Horizontal (W >= H) and 45 to 90 mins
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds > 2700,
+                MediaMetadata.duration_seconds <= 5400,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
+        elif t == "normal":
+            # Horizontal (W >= H) and 3 to 45 mins
+            # OR any video <= 3 mins that is NOT vertical
+            stmt = stmt.where(
+                or_(
+                    and_(MediaMetadata.duration_seconds > 180, MediaMetadata.duration_seconds <= 2700, or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))),
+                    and_(MediaMetadata.duration_seconds <= 180, or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None)))
+                )
+            )
+        else:
+            stmt = stmt.where(MediaMetadata.container == t)
     if category:
         stmt = stmt.where(MediaMetadata.category.ilike(f"%{category}%"))
     if q:
@@ -103,7 +137,7 @@ async def library(
 
 @router.get("/groups", response_model=list[MediaGroup])
 async def library_grouped(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaGroup]:
     groups = await library_groups(session, current_user=current_user)
@@ -114,7 +148,7 @@ async def library_grouped(
 
 @router.get("/smart/home", response_model=SmartHomeResponse)
 async def smart_home(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> SmartHomeResponse:
     """Get personalized home feed data."""
@@ -127,7 +161,7 @@ async def smart_home(
 @router.get("/recent", response_model=list[MediaRead])
 async def recent_media(
     limit: int = Query(default=30, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaRead]:
     """Get recently added media (last 30 days by default)."""
@@ -148,7 +182,7 @@ async def recent_media(
 
 @router.get("/scan-status")
 async def scan_status(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
 ) -> dict:
     """Get current media scan progress."""
     return get_scan_status()
@@ -158,7 +192,7 @@ async def scan_status(
 
 @router.get("/continue", response_model=list[ContinueWatchingItem])
 async def get_continue_watching(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_optional_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[ContinueWatchingItem]:
     """Get media the user started but didn't finish."""
@@ -207,7 +241,7 @@ async def get_continue_watching(
 
 @router.get("/history", response_model=list[WatchHistoryItem])
 async def get_watch_history(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_optional_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[WatchHistoryItem]:
     """Get user's watch history, most recent first."""
@@ -285,7 +319,7 @@ async def delete_history_item(
 @router.get("/search", response_model=list[MediaRead])
 async def search_media(
     q: str = Query(..., min_length=1),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaRead]:
     """Search for media items, respecting security filters."""
@@ -308,7 +342,7 @@ async def search_media(
 
 @router.get("/favorites", response_model=list[MediaRead])
 async def get_favorites(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaRead]:
     """Get all favorite media for the current user."""
@@ -334,7 +368,7 @@ async def get_favorites(
 
 @router.get("/home/hero", response_model=HeroResponse | None)
 async def home_hero(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> HeroResponse | None:
     """Return a single featured item for the hero banner."""
@@ -391,7 +425,7 @@ async def home_hero(
 @router.get("/home/rows", response_model=list[HomeRowResponse])
 async def home_rows(
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[HomeRowResponse]:
     """Return paginated home feed rows for infinite scroll."""
@@ -453,7 +487,7 @@ async def home_rows(
 @router.get("/{media_id}", response_model=MediaRead)
 async def get_media_detail(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> MediaRead:
     """Get single media item metadata."""
@@ -488,7 +522,7 @@ async def stream(
     media_id: int,
     pin: str | None = Query(default=None),
     priority: bool = Query(default=True),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> StreamResponse:
     from pathlib import Path
@@ -514,7 +548,7 @@ async def stream(
 async def stream_file(
     media_id: int,
     pin: str | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     try:
@@ -547,7 +581,7 @@ async def stream_file(
 @router.get("/{media_id}/thumbnail")
 async def get_thumbnail(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """Get the poster/thumbnail image for a media item."""
@@ -571,10 +605,24 @@ async def get_thumbnail(
         from core.media import build_thumbnail, clean_title
         source = media_source_path(media)
         if source.is_file():
-            new_thumb_path = await asyncio.to_thread(
+            new_thumb_path, was_repaired = await asyncio.to_thread(
                 build_thumbnail, source, media.relative_path, clean_title(source), media.duration_seconds
             )
             media.thumbnail_path = new_thumb_path
+            if was_repaired:
+                from core.media import probe_media
+                probe = await asyncio.to_thread(probe_media, source)
+                if probe:
+                    media.width = probe.get("width")
+                    media.height = probe.get("height")
+                    media.bitrate = probe.get("bitrate")
+                    media.video_codec = probe.get("video_codec")
+                    media.audio_codec = probe.get("audio_codec")
+                    media.duration_seconds = probe.get("duration_seconds")
+                    try:
+                        media.file_size = source.stat().st_size
+                    except OSError:
+                        pass
             await session.commit()
             
             thumb_file = settings.thumbs_folder / Path(new_thumb_path.replace(chr(92), "/")).name
@@ -588,7 +636,7 @@ async def get_thumbnail(
 @router.get("/{media_id}/preview")
 async def get_media_preview(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """
@@ -757,7 +805,7 @@ async def delete_media(
 @router.get("/{media_id}/sprites")
 async def get_sprites(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     """
@@ -780,7 +828,7 @@ async def get_sprites(
         raise HTTPException(status_code=404, detail="Media file not found on disk.")
         
     asyncio.create_task(
-        asyncio.to_thread(build_sprite_sheet, source, media_id)
+        asyncio.to_thread(build_sprite_sheet, source, media_id, media.duration_seconds)
     )
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=202, content={"status": "generating"})
@@ -825,7 +873,7 @@ async def rate_media(
 @router.get("/{media_id}/rating")
 async def get_media_rating(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     """Get average rating and user's personal rating for a media item."""
@@ -863,7 +911,7 @@ async def get_media_rating(
 @router.get("/{media_id}/subtitles")
 async def list_subtitles(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     """List all subtitles for a media item."""
@@ -994,7 +1042,7 @@ async def delete_subtitle(
 async def download_media(
     media_id: int,
     pin: str | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """Download the raw media file for offline viewing."""
@@ -1076,7 +1124,7 @@ def extract_synopsis_from_nfo(media_path: Path) -> str | None:
 @router.get("/{media_id}/backdrop")
 async def get_media_backdrop(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """Get or extract a cinematic backdrop image for a media item."""
@@ -1093,6 +1141,11 @@ async def get_media_backdrop(
 
     backdrop_path = settings.temp_folder / "backdrops" / f"{media_id}.jpg"
     if not backdrop_path.exists():
+        from core.media import ffmpeg_available
+        if not ffmpeg_available():
+            logger.warning(f"FFmpeg not available. Skipping backdrop generation for media ID {media_id}.")
+            return await get_thumbnail(media_id, current_user, session)
+
         settings.temp_folder.mkdir(parents=True, exist_ok=True)
         (settings.temp_folder / "backdrops").mkdir(parents=True, exist_ok=True)
         
@@ -1114,8 +1167,9 @@ async def get_media_backdrop(
         cmd = [
             settings.ffmpeg_path,
             "-y",
-            "-ss", str(ss_time),
+            "-ss", f"{ss_time:.3f}",
             "-i", str(media_source_path(media)),
+            "-strict", "unofficial",
             "-vframes", "1",
             "-q:v", "4",
             str(backdrop_path)
@@ -1143,7 +1197,7 @@ async def get_media_backdrop(
 async def serve_hls_file(
     media_id: int,
     filename: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1175,7 +1229,7 @@ async def serve_hls_file(
 @router.get("/sprites-secure/{media_id}")
 async def serve_sprites_file(
     media_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1194,3 +1248,70 @@ async def serve_sprites_file(
         
     headers = {"Cache-Control": "public, max-age=3600"}
     return FileResponse(file_path, headers=headers)
+
+
+@router.get("/curator-index")
+async def curator_index(
+    current_user: User = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Returns the indexed JSON schema required by the Lexical Clustering architecture.
+    """
+    from core.models import SeriesMember, SeriesGroup, Tag
+
+    # Fetch all media with their tags and series membership
+    query = select(MediaMetadata, Tag.tag, SeriesGroup.name).outerjoin(
+        Tag, MediaMetadata.id == Tag.video_id
+    ).outerjoin(
+        SeriesMember, MediaMetadata.id == SeriesMember.video_id
+    ).outerjoin(
+        SeriesGroup, SeriesMember.series_id == SeriesGroup.id
+    ).where(MediaMetadata.file_exists == True)
+    
+    query = await apply_media_security_filters(session, query, current_user)
+    result = await session.execute(query)
+
+    schema = {
+        "short_form": {},
+        "standard_video": {},
+        "long_form_episodes": {},
+        "feature_length": {},
+        "failed": []
+    }
+
+    for row in result:
+        media, tag, series_name = row
+        if not tag or tag not in schema:
+            continue
+            
+        group_name = series_name if series_name else media.category
+        
+        if group_name not in schema[tag]:
+            schema[tag][group_name] = []
+            
+        res_str = f"{media.width}x{media.height}" if media.width and media.height else "Unknown"
+            
+        schema[tag][group_name].append({
+            "path": media.relative_path,
+            "resolution": res_str,
+            "duration": media.duration_seconds or 0
+        })
+
+    # Format the dictionaries into arrays of {group_name, files}
+    final_schema = {
+        "short_form": [],
+        "standard_video": [],
+        "long_form_episodes": [],
+        "feature_length": [],
+        "failed": []
+    }
+
+    for tag in ["short_form", "standard_video", "long_form_episodes", "feature_length"]:
+        for group_name, files in schema[tag].items():
+            final_schema[tag].append({
+                "group_name": group_name,
+                "files": files
+            })
+
+    return final_schema

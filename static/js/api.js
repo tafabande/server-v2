@@ -10,6 +10,7 @@ export class ApiClient {
   constructor() {
     this.token = "";
     this.inFlight = new Map();
+    this.cache = new Map();
   }
 
   setToken(token) { this.token = token || ""; }
@@ -24,24 +25,32 @@ export class ApiClient {
   }
 
   async request(path, options = {}) {
-    const { headers: rawHeaders, json, query, ...requestOptions } = options;
+    const { headers: rawHeaders, json, query, signal, ttl = 0, ...requestOptions } = options;
     const method = (options.method || "GET").toUpperCase();
-    const isMutation = method !== "GET" && method !== "HEAD";
-    const cacheKey = isMutation ? `${method}:${path}:${JSON.stringify(json || "")}:${JSON.stringify(query || "")}` : null;
+    const isGET = method === "GET";
+    const isMutation = !isGET && method !== "HEAD";
+    const cacheKey = `${method}:${path}:${JSON.stringify(json || "")}:${JSON.stringify(query || "")}`;
 
-    if (isMutation && this.inFlight.has(cacheKey)) {
+    if (isGET && ttl > 0) {
+      const cached = this.cache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < ttl) {
+        return cached.data;
+      }
+    }
+
+    if (this.inFlight.has(cacheKey)) {
       return this.inFlight.get(cacheKey);
     }
 
     const promise = (async () => {
       const headers = new Headers(rawHeaders || {});
-      if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+      // We are now using cookie-based auth natively via credentials: 'same-origin'
       if (json !== undefined) headers.set("Content-Type", "application/json");
       if (sessionStorage.getItem('r18_enabled') === 'false') {
         headers.set("X-Disable-R18", "true");
       }
 
-      if (isMutation) {
+      if (!isGET && method !== "HEAD") {
         if (!headers.has("Idempotency-Key") && !headers.has("X-Idempotency-Key")) {
           const idKey = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36);
           headers.set("Idempotency-Key", idKey);
@@ -52,6 +61,8 @@ export class ApiClient {
         const response = await fetch(this.buildPath(path, query), {
           ...requestOptions,
           headers,
+          signal,
+          credentials: "same-origin",
           body: json !== undefined ? JSON.stringify(json) : requestOptions.body,
         });
 
@@ -100,6 +111,7 @@ export class ApiClient {
 
   // === Media ===
   getLibrary(params = {}) { return this.request("/api/media/library", { query: params }); }
+  getVideosByType(params = {}) { return this.request("/api/media/library", { query: params }); }
   getSmartHome() { return this.request("/api/media/smart/home"); }
   getHeroContent() { return this.request("/api/media/home/hero"); }
   getHomeRows(offset = 0) { return this.request("/api/media/home/rows", { query: { offset } }); }

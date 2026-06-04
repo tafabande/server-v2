@@ -18,7 +18,8 @@ export class ProfileView {
 
         let requests = [];
         try {
-            requests = await api.getRequests();
+            const res = await api.getRequests();
+            requests = Array.isArray(res) ? res : (res?.items || []);
         } catch (e) {
             console.error("Could not fetch requests", e);
         }
@@ -165,20 +166,20 @@ export class ProfileView {
                         ` : `
                             <div class="flex flex-column gap-sm" style="max-height: 250px; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px;">
                                 ${requests.map(r => {
-                                    let statusBadge = '';
-                                    if (r.status === 'approved') statusBadge = '<span class="badge badge-success">Approved</span>';
-                                    else if (r.status === 'denied') statusBadge = '<span class="badge badge-error">Denied</span>';
-                                    else statusBadge = '<span class="badge badge-warning">Pending</span>';
+            let statusBadge = '';
+            if (r.status === 'approved') statusBadge = '<span class="badge badge-success">Approved</span>';
+            else if (r.status === 'denied') statusBadge = '<span class="badge badge-error">Denied</span>';
+            else statusBadge = '<span class="badge badge-warning">Pending</span>';
 
-                                    let title = '';
-                                    if (r.request_type === 'adult_elevation') {
-                                        title = '🔞 18+ Access';
-                                    } else {
-                                        const folderName = r.target_path ? r.target_path.split('/').pop() : 'Folder';
-                                        title = `📁 Access: ${folderName}`;
-                                    }
+            let title = '';
+            if (r.request_type === 'adult_elevation') {
+                title = '🔞 18+ Access';
+            } else {
+                const folderName = r.target_path ? r.target_path.split('/').pop() : 'Folder';
+                title = `📁 Access: ${folderName}`;
+            }
 
-                                    return `
+            return `
                                         <div class="surface rounded text-xs" style="border: 1px solid var(--border); padding: 8px; background: rgba(255,255,255,0.01);">
                                             <div class="flex-between mb-xs" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                                                 <strong>${title}</strong>
@@ -192,7 +193,7 @@ export class ProfileView {
                                             ` : ''}
                                         </div>
                                     `;
-                                }).join('')}
+        }).join('')}
                             </div>
                         `}
                     </div>
@@ -211,12 +212,12 @@ export class ProfileView {
 
         document.getElementById('profile-form').addEventListener('submit', (e) => this._updateProfile(e));
         document.getElementById('password-form').addEventListener('submit', (e) => this._changePassword(e));
-        
+
         const pinForm = document.getElementById('pin-form');
         if (pinForm) {
             pinForm.addEventListener('submit', (e) => this._updatePin(e));
         }
-        
+
         const clearPinBtn = document.getElementById('clear-pin-btn');
         if (clearPinBtn) {
             clearPinBtn.addEventListener('click', () => this._clearPin());
@@ -234,13 +235,13 @@ export class ProfileView {
                 const selectedTheme = themeSelect.value;
                 try {
                     await api.updateProfile({ theme: selectedTheme });
-                    
+
                     // Update user in local storage
                     const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
                     user.preferences = user.preferences || {};
                     user.preferences.theme = selectedTheme;
                     localStorage.setItem('mediahub_user', JSON.stringify(user));
-                    
+
                     // Apply theme immediately
                     document.documentElement.setAttribute('data-theme', selectedTheme);
                     toast('Theme updated', 'success');
@@ -305,17 +306,17 @@ export class ProfileView {
         e.preventDefault();
         const pinInput = document.getElementById('pin-value');
         const pin = pinInput.value.trim();
-        
+
         if (!pin) {
             toast('Please enter a valid numeric PIN.', 'error');
             return;
         }
-        
+
         if (!/^\d{4,12}$/.test(pin)) {
             toast('PIN must be 4 to 12 digits numeric.', 'error');
             return;
         }
-        
+
         try {
             await api.updateProfile({ pin });
             toast('Custom security PIN updated successfully.', 'success');
@@ -330,7 +331,7 @@ export class ProfileView {
         const { confirm } = await import('../utils.js');
         const yes = await confirm('Remove PIN Lock', 'Are you sure you want to delete your custom unlock PIN? You will need the master admin PIN to access locked paths.');
         if (!yes) return;
-        
+
         try {
             await api.updateProfile({ pin: "" });
             toast('Custom PIN removed.', 'success');
@@ -340,5 +341,5 @@ export class ProfileView {
         }
     }
 
-    destroy() {}
+    destroy() { }
 }

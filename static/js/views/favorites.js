@@ -6,8 +6,8 @@ import { api, player, router } from '../app.js';
 import { toast, formatDuration, thumbUrl, isAdultApproved, showAdultAccessDialog } from '../utils.js';
 
 export class FavoritesView {
-    constructor(container) { 
-        this.container = container; 
+    constructor(container) {
+        this.container = container;
         this._items = [];
         this._categories = [];
         this._activeCategory = null;
@@ -50,10 +50,10 @@ export class FavoritesView {
             toast('No favorites to play.', 'warning');
             return;
         }
-        
+
         const adultItems = this._items.filter(m => m.adult_only);
         if (adultItems.length > 0 && !isAdultApproved()) {
-             toast('Adult content hidden. Verify age to play all.', 'error', {
+            toast('Adult content hidden. Verify age to play all.', 'error', {
                 label: 'Verify',
                 onClick: () => showAdultAccessDialog()
             });
@@ -76,9 +76,10 @@ export class FavoritesView {
 
     async _loadFavorites() {
         try {
-            const items = await api.getFavorites();
+            const res = await api.getFavorites();
+            const items = Array.isArray(res) ? res : (res?.items || []);
             this._items = items;
-            
+
             const categories = [...new Set(items.map(m => m.category).filter(c => c))];
             this._categories = categories;
             if (!this._activeCategory || !categories.includes(this._activeCategory)) {
@@ -163,7 +164,7 @@ export class FavoritesView {
             const subfolderItems = groups[subfolderName];
             const isCollapsed = this._collapsedSubfolders.has(subfolderName);
             const collapsedClass = isCollapsed ? 'collapsed' : '';
-            
+
             html += `
                 <div class="subfolder-section" data-subfolder="${subfolderName}">
                     <div class="subfolder-header ${collapsedClass}">
@@ -173,9 +174,9 @@ export class FavoritesView {
                     </div>
                     <div class="subfolder-content ${collapsedClass} gallery-grid">
                         ${subfolderItems.map(m => {
-                            const originalIdx = this._items.indexOf(m);
-                            return this._renderCard(m, originalIdx);
-                        }).join('')}
+                const originalIdx = this._items.indexOf(m);
+                return this._renderCard(m, originalIdx);
+            }).join('')}
                     </div>
                 </div>
             `;
@@ -188,7 +189,7 @@ export class FavoritesView {
                 const section = header.closest('.subfolder-section');
                 const subfolderName = section.dataset.subfolder;
                 const content = section.querySelector('.subfolder-content');
-                
+
                 if (this._collapsedSubfolders.has(subfolderName)) {
                     this._collapsedSubfolders.delete(subfolderName);
                     header.classList.remove('collapsed');
@@ -266,5 +267,5 @@ export class FavoritesView {
         });
     }
 
-    destroy() {}
+    destroy() { }
 }

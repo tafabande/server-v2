@@ -10,7 +10,9 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         this._allMedia = [];
         this._filteredItems = [];
         this._viewMode = localStorage.getItem('lib_view_mode') || 'grid';
+        this._folderViewMode = localStorage.getItem('lib_folder_view_mode') || 'folders';
         this._collapsedSubfolders = new Set();
+        this._activeFormat = null; // null = all, 'movie', 'series', 'short_form'
         this.hoverTimeout = null;
         this.previewVideo = null;
     }
@@ -40,7 +42,13 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             </div>
             
             <div class="library-controls surface mb-md">
+                <div id="lib-format-tabs" class="tabs" style="margin-bottom:8px; border-bottom:1px solid var(--border-subtle, rgba(255,255,255,.08));"></div>
                 <div id="lib-filter-tabs" class="tabs" style="margin-bottom:0; border-bottom:none"></div>
+            </div>
+
+            <div class="flex gap-xs mb-md border-b pb-sm" style="border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,.08));">
+                <button id="lib-folder-view-folders" class="btn btn-sm ${this._folderViewMode === 'folders' ? 'btn-accent' : 'btn-ghost'}" style="border-radius: 99px; padding: 6px 16px;">Folders</button>
+                <button id="lib-folder-view-all" class="btn btn-sm ${this._folderViewMode === 'all' ? 'btn-accent' : 'btn-ghost'}" style="border-radius: 99px; padding: 6px 16px;">All Media</button>
             </div>
 
             <div id="lib-content" class="fade-in">
@@ -64,6 +72,25 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
         document.getElementById('lib-sort')?.addEventListener('change', () => this._applyFilters());
         document.getElementById('lib-toggle')?.addEventListener('click', () => this._toggleView());
         document.getElementById('lib-play-all')?.addEventListener('click', () => this._playAll());
+
+        const btnFolders = document.getElementById('lib-folder-view-folders');
+        const btnAll = document.getElementById('lib-folder-view-all');
+
+        btnFolders?.addEventListener('click', () => {
+            this._folderViewMode = 'folders';
+            localStorage.setItem('lib_folder_view_mode', 'folders');
+            btnFolders.classList.replace('btn-ghost', 'btn-accent');
+            btnAll?.classList.replace('btn-accent', 'btn-ghost');
+            this._applyFilters();
+        });
+
+        btnAll?.addEventListener('click', () => {
+            this._folderViewMode = 'all';
+            localStorage.setItem('lib_folder_view_mode', 'all');
+            btnAll.classList.replace('btn-ghost', 'btn-accent');
+            btnFolders?.classList.replace('btn-accent', 'btn-ghost');
+            this._applyFilters();
+        });
 
         await this._loadMedia();
     }
@@ -121,6 +148,38 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
     }
 
     _renderTabs() {
+        // --- Format filter tabs (Movies / Series / Short-form) ---
+        const formatTabs = document.getElementById('lib-format-tabs');
+        if (formatTabs) {
+            const formats = [
+                { key: null, label: '🎬 All Formats' },
+                { key: 'movies', label: '🎥 Movies' },
+                { key: 'series', label: '📺 Series' },
+                { key: 'normal', label: '📼 Normal Length' },
+                { key: 'shorties', label: '📱 Shorties' },
+            ];
+            formatTabs.innerHTML = formats.map(f => {
+                const isActive = this._activeFormat === f.key ? 'active' : '';
+                return `<button class="tab ${isActive}" data-format="${f.key || ''}">${f.label}</button>`;
+            }).join('');
+
+            formatTabs.addEventListener('click', (e) => {
+                const tab = e.target.closest('.tab');
+                if (!tab) return;
+                formatTabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const fmt = tab.dataset.format || null;
+                this._activeFormat = fmt;
+                this._activeCategory = null;
+                if (fmt) {
+                    this._loadByFormat(fmt);
+                } else {
+                    this._loadMedia();
+                }
+            });
+        }
+
+        // --- Category (folder) tabs ---
         const tabs = document.getElementById('lib-filter-tabs');
         if (!tabs) return;
 
@@ -141,6 +200,59 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             this._activeCategory = tab.dataset.cat || null;
             this._applyFilters();
         });
+    }
+
+    async _loadByFormat(type) {
+        try {
+            let allItems = [];
+            let currentPage = 1;
+            let totalPages = 1;
+
+            while (currentPage <= totalPages) {
+                const response = await api.getVideosByType({ type: type, page: currentPage, per_page: 200 });
+                const rawItems = response?.items ?? [];
+                allItems.push(...rawItems);
+
+                totalPages = response?.pages || 1;
+                currentPage++;
+            }
+
+            this._allMedia = allItems.map(m => ({ ...m, _category: m.category || 'Uncategorised' }));
+            this._categories = [...new Set(this._allMedia.map(m => m._category))].sort();
+
+            // Re-render category tabs and grid with new data
+            const tabs = document.getElementById('lib-filter-tabs');
+            if (tabs) {
+                tabs.innerHTML = `
+                    <button class="tab active" data-cat="">All Collections <span class="tab-count">${this._allMedia.length}</span></button>
+                    ${this._categories.map(c => {
+                    const count = this._allMedia.filter(m => m._category === c).length;
+                    return `<button class="tab" data-cat="${c}">${c} <span class="tab-count">${count}</span></button>`;
+                }).join('')}
+                `;
+                tabs.addEventListener('click', (e) => {
+                    const tab = e.target.closest('.tab');
+                    if (!tab) return;
+                    tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    this._activeCategory = tab.dataset.cat || null;
+                    this._applyFilters();
+                });
+            }
+
+            this._activeCategory = null;
+            this._applyFilters();
+        } catch (err) {
+            const target = document.getElementById('lib-content');
+            if (target) {
+                target.innerHTML =
+                    `<div class="empty-state">
+                        <div class="empty-icon">📁</div>
+                        <h3>Connection Error</h3>
+                        <p>${err.message}</p>
+                    </div>`;
+            }
+        }
     }
 
     _applyFilters() {
@@ -182,82 +294,116 @@ import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved
             return;
         }
 
-        const groups = {};
-        items.forEach(m => {
-            const sub = this._getSubfolder(m) || 'Main Folder';
-            if (!groups[sub]) groups[sub] = [];
-            groups[sub].push(m);
-        });
-
-        const sortedSubfolders = Object.keys(groups).sort((a, b) => {
-            if (a === 'Main Folder') return -1;
-            if (b === 'Main Folder') return 1;
-            return a.localeCompare(b);
-        });
-
         let html = '';
-        sortedSubfolders.forEach(subfolderName => {
-            const subfolderItems = groups[subfolderName];
-            const isCollapsed = this._collapsedSubfolders.has(subfolderName);
-            const collapsedClass = isCollapsed ? 'collapsed' : '';
+        if (this._folderViewMode === 'all') {
+            if (this._viewMode === 'grid') {
+                html = `
+                    <div class="gallery-grid animate-fadeIn">
+                        ${items.map(m => this._renderCardHtml(m)).join('')}
+                    </div>
+                `;
+            } else {
+                html = `
+                    <div class="surface animate-fadeIn" style="padding:0; overflow-x:auto;">
+                        <div class="table-wrap">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 48px"></th>
+                                        <th>Title</th>
+                                        <th>Category</th>
+                                        <th>Duration</th>
+                                        <th>Size</th>
+                                        <th>Codec</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${items.map(m => this._renderTableRowHtml(m)).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            const groups = {};
+            items.forEach(m => {
+                const sub = this._getSubfolder(m) || 'Main Folder';
+                if (!groups[sub]) groups[sub] = [];
+                groups[sub].push(m);
+            });
 
-            html += `
-                <div class="subfolder-section" data-subfolder="${subfolderName}">
-                    <div class="subfolder-header ${collapsedClass}">
-                        <span class="subfolder-toggle-icon">▼</span>
-                        <span class="subfolder-name">📁 ${subfolderName}</span>
-                        <span class="subfolder-count">${subfolderItems.length} items</span>
-                    </div>
-                    <div class="subfolder-content ${collapsedClass}">
-                        ${this._viewMode === 'grid' ? `
-                            <div class="gallery-grid">
-                                ${subfolderItems.map(m => this._renderCardHtml(m)).join('')}
-                            </div>
-                        ` : `
-                            <div class="surface" style="padding:0; overflow-x:auto;">
-                                <div class="table-wrap">
-                                    <table class="table">
-                                        <thead>
-                                            <tr>
-                                                <th style="width: 48px"></th>
-                                                <th>Title</th>
-                                                <th>Category</th>
-                                                <th>Duration</th>
-                                                <th>Size</th>
-                                                <th>Codec</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            ${subfolderItems.map(m => this._renderTableRowHtml(m)).join('')}
-                                        </tbody>
-                                    </table>
+            const sortedSubfolders = Object.keys(groups).sort((a, b) => {
+                if (a === 'Main Folder') return -1;
+                if (b === 'Main Folder') return 1;
+                return a.localeCompare(b);
+            });
+
+            sortedSubfolders.forEach(subfolderName => {
+                const subfolderItems = groups[subfolderName];
+                const isCollapsed = this._collapsedSubfolders.has(subfolderName);
+                const collapsedClass = isCollapsed ? 'collapsed' : '';
+
+                html += `
+                    <div class="subfolder-section animate-fadeIn" data-subfolder="${subfolderName}">
+                        <div class="subfolder-header ${collapsedClass}">
+                            <span class="subfolder-toggle-icon">▼</span>
+                            <span class="subfolder-name">📁 ${subfolderName}</span>
+                            <span class="subfolder-count">${subfolderItems.length} items</span>
+                        </div>
+                        <div class="subfolder-content ${collapsedClass}">
+                            ${this._viewMode === 'grid' ? `
+                                <div class="gallery-grid">
+                                    ${subfolderItems.map(m => this._renderCardHtml(m)).join('')}
                                 </div>
-                            </div>
-                        `}
+                            ` : `
+                                <div class="surface" style="padding:0; overflow-x:auto;">
+                                    <div class="table-wrap">
+                                        <table class="table">
+                                            <thead>
+                                                <tr>
+                                                    <th style="width: 48px"></th>
+                                                    <th>Title</th>
+                                                    <th>Category</th>
+                                                    <th>Duration</th>
+                                                    <th>Size</th>
+                                                    <th>Codec</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                ${subfolderItems.map(m => this._renderTableRowHtml(m)).join('')}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            `}
+                        </div>
                     </div>
-                </div>
-            `;
-        });
+                `;
+            });
+        }
 
         target.innerHTML = html;
 
-        target.querySelectorAll('.subfolder-header').forEach(header => {
-            header.addEventListener('click', () => {
-                const section = header.closest('.subfolder-section');
-                const subfolderName = section.dataset.subfolder;
-                const content = section.querySelector('.subfolder-content');
+        if (this._folderViewMode !== 'all') {
+            target.querySelectorAll('.subfolder-header').forEach(header => {
+                header.addEventListener('click', () => {
+                    const section = header.closest('.subfolder-section');
+                    const subfolderName = section.dataset.subfolder;
+                    const content = section.querySelector('.subfolder-content');
 
-                if (this._collapsedSubfolders.has(subfolderName)) {
-                    this._collapsedSubfolders.delete(subfolderName);
-                    header.classList.remove('collapsed');
-                    content.classList.remove('collapsed');
-                } else {
-                    this._collapsedSubfolders.add(subfolderName);
-                    header.classList.add('collapsed');
-                    content.classList.add('collapsed');
-                }
+                    if (this._collapsedSubfolders.has(subfolderName)) {
+                        this._collapsedSubfolders.delete(subfolderName);
+                        header.classList.remove('collapsed');
+                        content.classList.remove('collapsed');
+                    } else {
+                        this._collapsedSubfolders.add(subfolderName);
+                        header.classList.add('collapsed');
+                        content.classList.add('collapsed');
+                    }
+                });
             });
-        });
+        }
 
         this._bindItemActions(target);
         this._setupHoverPreviews();
