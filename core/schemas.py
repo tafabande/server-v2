@@ -78,6 +78,20 @@ class MediaGroup(BaseModel):
     items: list[MediaRead]
 
 
+class FolderItem(BaseModel):
+    name: str
+    path: str
+    item_count: int = 0
+    is_locked: bool = False
+    is_adult: bool = False
+    cover_media_id: int | None = None
+
+class LibraryFolderResponse(BaseModel):
+    folders: list[FolderItem]
+    items: list[MediaRead]
+    current_path: str
+
+
 class StreamResponse(BaseModel):
     mode: str
     url: str
@@ -149,6 +163,7 @@ class ProfileUpdateRequest(BaseModel):
     language: str = Field(default="en", max_length=20)
     theme: str = Field(default="default", max_length=40)
     pin: str | None = Field(default=None, max_length=12)
+    preferences: dict | None = None
 
 
 class PasswordChangeRequest(BaseModel):

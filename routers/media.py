@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse
-from sqlalchemy import select, func, and_, or_, delete
+from sqlalchemy import select, func, and_, or_, delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -58,7 +58,7 @@ router = APIRouter()
 @router.get("/library", response_model=PaginatedMediaResponse)
 async def library(
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=50, ge=1, le=500),
+    per_page: int = Query(default=50, ge=1, le=1000),
     sort: str = Query(default="title", pattern="^(title|created_at|duration_seconds|file_size)$"),
     order: str = Query(default="asc", pattern="^(asc|desc)$"),
     type: str | None = Query(default=None, description="Filter by container type (mp4, mkv, avi, etc.)"),
@@ -81,56 +81,246 @@ async def library(
                 MediaMetadata.height > MediaMetadata.width
             ))
         elif t == "movies":
-            # Horizontal (W >= H) and > 90 mins
             stmt = stmt.where(and_(
-                MediaMetadata.duration_seconds > 5400,
+                MediaMetadata.duration_seconds > 2400,
                 or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
             ))
         elif t == "series":
-            # Horizontal (W >= H) and 45 to 90 mins
             stmt = stmt.where(and_(
-                MediaMetadata.duration_seconds > 2700,
-                MediaMetadata.duration_seconds <= 5400,
+                MediaMetadata.duration_seconds > 900,
+                MediaMetadata.duration_seconds <= 2400,
                 or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
             ))
-        elif t == "normal":
-            # Horizontal (W >= H) and 3 to 45 mins
-            # OR any video <= 3 mins that is NOT vertical
-            stmt = stmt.where(
-                or_(
-                    and_(MediaMetadata.duration_seconds > 180, MediaMetadata.duration_seconds <= 2700, or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))),
-                    and_(MediaMetadata.duration_seconds <= 180, or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None)))
-                )
-            )
+        elif t == "videos" or t == "normal":
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds >= 60,
+                MediaMetadata.duration_seconds <= 900,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
         else:
             stmt = stmt.where(MediaMetadata.container == t)
     if category:
-        stmt = stmt.where(MediaMetadata.category.ilike(f"%{category}%"))
+        stmt = stmt.where(MediaMetadata.category == category)
     if q:
         stmt = stmt.where(MediaMetadata.title.ilike(f"%{q}%"))
 
-    # Count total before pagination
     count_stmt = select(func.count()).select_from(stmt.subquery())
-    total = (await session.execute(count_stmt)).scalar() or 0
+    total_items = await session.scalar(count_stmt) or 0
+    total_pages = math.ceil(total_items / per_page)
 
-    # Sorting
-    sort_col = getattr(MediaMetadata, sort, MediaMetadata.title)
-    stmt = stmt.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
-
-    # Pagination
-    offset = (page - 1) * per_page
-    stmt = stmt.offset(offset).limit(per_page)
+    order_col = getattr(MediaMetadata, sort)
+    if order == "desc":
+        order_col = order_col.desc()
+    stmt = stmt.order_by(order_col).offset((page - 1) * per_page).limit(per_page)
 
     result = await session.execute(stmt)
-    items = [MediaRead.model_validate(m) for m in result.scalars()]
+    items = result.scalars().all()
 
     return PaginatedMediaResponse(
         items=items,
-        total=total,
+        total=total_items,
         page=page,
         per_page=per_page,
-        pages=max(1, math.ceil(total / per_page)),
+        pages=max(1, total_pages),
     )
+
+
+from core.schemas import LibraryFolderResponse, FolderItem
+from pydantic import BaseModel
+
+class FolderActionRequest(BaseModel):
+    path: str
+    value: bool
+
+@router.get("/folders", response_model=LibraryFolderResponse)
+async def get_folders(
+    path: str = Query(default=""),
+    type: str | None = Query(default=None),
+    current_user: User = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Get folders and files at the specified virtual path."""
+    stmt = select(MediaMetadata).where(MediaMetadata.file_exists == True)
+    
+    # 1. R18 / Adult Filter - Adults only!
+    from core.models import FolderSetting
+    nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
+    if not current_user or not current_user.is_adult or not nsfw_enabled:
+        adult_folder_exists = exists().where(
+            and_(
+                FolderSetting.is_adult == True,
+                or_(
+                    func.lower(MediaMetadata.relative_path) == func.lower(FolderSetting.path),
+                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderSetting.path) + "/%")
+                )
+            )
+        )
+        stmt = stmt.where(and_(
+            MediaMetadata.adult_only == False,
+            ~adult_folder_exists
+        ))
+        
+    if path:
+        stmt = stmt.where(MediaMetadata.relative_path.like(f"{path}/%"))
+        
+    if type:
+        t = type.lower()
+        if t == "shorties":
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds <= 180,
+                MediaMetadata.height.isnot(None),
+                MediaMetadata.width.isnot(None),
+                MediaMetadata.height > MediaMetadata.width
+            ))
+        elif t == "movies":
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds > 2400,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
+        elif t == "series":
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds > 900,
+                MediaMetadata.duration_seconds <= 2400,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
+        elif t == "videos" or t == "normal":
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds >= 60,
+                MediaMetadata.duration_seconds <= 900,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
+        else:
+            stmt = stmt.where(MediaMetadata.container == t)
+        
+    result = await session.execute(stmt)
+    all_media = result.scalars().all()
+    
+    folders_dict = {}
+    raw_items = []
+    
+    for media in all_media:
+        rel_path = media.relative_path
+        if path == "":
+            parts = rel_path.split("/")
+        else:
+            if not rel_path.startswith(path + "/"):
+                continue
+            remainder = rel_path[len(path)+1:]
+            parts = remainder.split("/")
+            
+        if len(parts) == 1:
+            raw_items.append(media)
+        else:
+            folder_name = parts[0]
+            folder_full_path = f"{path}/{folder_name}" if path else folder_name
+            if folder_name not in folders_dict:
+                folders_dict[folder_name] = {
+                    "path": folder_full_path,
+                    "count": 0,
+                    "cover_media_id": media.id
+                }
+            folders_dict[folder_name]["count"] += 1
+            
+    folder_items = []
+    locked_paths = set()
+    
+    if folders_dict:
+        paths = [info["path"] for info in folders_dict.values()]
+        fs_stmt = select(FolderSetting).where(FolderSetting.path.in_(paths))
+        fs_result = await session.execute(fs_stmt)
+        folder_settings = {fs.path: fs for fs in fs_result.scalars().all()}
+        
+        for name, info in folders_dict.items():
+            f_path = info["path"]
+            f_set = folder_settings.get(f_path)
+            
+            is_locked = f_set.is_locked if f_set else False
+            is_adult = f_set.is_adult if f_set else False
+            
+            if is_locked:
+                locked_paths.add(f_path)
+            
+            folder_items.append(FolderItem(
+                name=name,
+                path=f_path,
+                item_count=info["count"],
+                is_locked=is_locked,
+                is_adult=is_adult,
+                cover_media_id=info["cover_media_id"]
+            ))
+            
+    folder_items.sort(key=lambda x: x.name.lower())
+    
+    # Filter raw_items for locks if not admin
+    items = []
+    is_admin = current_user and current_user.role in ("admin", "super-admin")
+    
+    current_path_locked = False
+    if path and not is_admin:
+        path_parts = path.split("/")
+        check_paths = []
+        for i in range(len(path_parts)):
+            check_paths.append("/".join(path_parts[:i+1]))
+        if check_paths:
+            fs_stmt = select(FolderSetting).where(FolderSetting.path.in_(check_paths))
+            fs_result = await session.execute(fs_stmt)
+            for fs in fs_result.scalars().all():
+                if fs.is_locked:
+                    current_path_locked = True
+                    break
+
+    for item in raw_items:
+        if not is_admin and (current_path_locked or item.requires_pin):
+            continue
+        items.append(MediaRead.model_validate(item))
+        
+    items.sort(key=lambda x: x.title.lower() if x.title else x.filename.lower())
+            
+    return LibraryFolderResponse(
+        folders=folder_items,
+        items=items,
+        current_path=path
+    )
+
+@router.post("/folders/lock", dependencies=[Depends(require_roles("admin", "super-admin"))])
+async def toggle_folder_lock(
+    req: FolderActionRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db)
+):
+    from core.models import FolderSetting
+    stmt = select(FolderSetting).where(FolderSetting.path == req.path)
+    result = await session.execute(stmt)
+    setting = result.scalar_one_or_none()
+    
+    if not setting:
+        setting = FolderSetting(path=req.path, is_locked=req.value)
+        session.add(setting)
+    else:
+        setting.is_locked = req.value
+        
+    await session.commit()
+    return {"message": "Success"}
+
+@router.post("/folders/r18", dependencies=[Depends(require_roles("admin", "super-admin"))])
+async def toggle_folder_r18(
+    req: FolderActionRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db)
+):
+    from core.models import FolderSetting
+    stmt = select(FolderSetting).where(FolderSetting.path == req.path)
+    result = await session.execute(stmt)
+    setting = result.scalar_one_or_none()
+    
+    if not setting:
+        setting = FolderSetting(path=req.path, is_adult=req.value)
+        session.add(setting)
+    else:
+        setting.is_adult = req.value
+        
+    await session.commit()
+    return {"message": "Success"}
 
 
 # ── Library Groups (legacy) ───────────────────────────────────────────────────
@@ -186,6 +376,17 @@ async def scan_status(
 ) -> dict:
     """Get current media scan progress."""
     return get_scan_status()
+
+# ── Rescan ───────────────────────────────────────────────────────────────────────
+
+@router.post("/rescan", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
+async def rescan(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    total = await scan_media_library(session, use_cache=False)
+    await broadcast_library_updated(total)
+    return MessageResponse(message=f"Indexed {total} media item(s).")
 
 
 # ── Continue Watching ─────────────────────────────────────────────────────────
@@ -482,6 +683,106 @@ async def home_rows(
     return all_rows[offset: offset + 10]
 
 
+# ── Series Groups & Curator Index ─────────────────────────────────────────────
+
+@router.get("/series-groups", response_model=list[SeriesGroupDetailRead])
+async def get_series_groups(
+    current_user: User = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_db),
+):
+    from core.models import SeriesGroup, SeriesMember
+    from core.schemas import SeriesGroupDetailRead
+    from sqlalchemy.orm import selectinload
+    
+    # We load the SeriesGroup and their associated MediaMetadata via SeriesMember
+    stmt = select(SeriesGroup).order_by(SeriesGroup.name)
+    result = await session.execute(stmt)
+    groups = result.scalars().all()
+    
+    # Now we need to populate episodes manually to apply security filters
+    out = []
+    for g in groups:
+        # Get members
+        m_stmt = select(MediaMetadata).join(SeriesMember).where(SeriesMember.series_id == g.id).order_by(MediaMetadata.title)
+        m_stmt = await apply_media_security_filters(session, m_stmt, current_user)
+        m_res = await session.execute(m_stmt)
+        episodes = m_res.scalars().all()
+        if episodes:
+            out.append({
+                "id": g.id,
+                "name": g.name,
+                "canonical_title": g.canonical_title,
+                "episodes": episodes
+            })
+    return out
+
+
+@router.get("/curator-index")
+async def curator_index(
+    current_user: User = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    Returns the indexed JSON schema required by the Lexical Clustering architecture.
+    """
+    from core.models import SeriesMember, SeriesGroup, Tag
+
+    # Fetch all media with their tags and series membership
+    query = select(MediaMetadata, Tag.tag, SeriesGroup.name).outerjoin(
+        Tag, MediaMetadata.id == Tag.video_id
+    ).outerjoin(
+        SeriesMember, MediaMetadata.id == SeriesMember.video_id
+    ).outerjoin(
+        SeriesGroup, SeriesMember.series_id == SeriesGroup.id
+    ).where(MediaMetadata.file_exists == True)
+    
+    query = await apply_media_security_filters(session, query, current_user)
+    result = await session.execute(query)
+
+    schema = {
+        "short_form": {},
+        "standard_video": {},
+        "long_form_episodes": {},
+        "feature_length": {},
+        "failed": []
+    }
+
+    for row in result:
+        media, tag, series_name = row
+        if not tag or tag not in schema:
+            continue
+            
+        group_name = series_name if series_name else media.category
+        
+        if group_name not in schema[tag]:
+            schema[tag][group_name] = []
+            
+        res_str = f"{media.width}x{media.height}" if media.width and media.height else "Unknown"
+            
+        schema[tag][group_name].append({
+            "path": media.relative_path,
+            "resolution": res_str,
+            "duration": media.duration_seconds or 0
+        })
+
+    # Format the dictionaries into arrays of {group_name, files}
+    final_schema = {
+        "short_form": [],
+        "standard_video": [],
+        "long_form_episodes": [],
+        "feature_length": [],
+        "failed": []
+    }
+
+    for tag in ["short_form", "standard_video", "long_form_episodes", "feature_length"]:
+        for group_name, files in schema[tag].items():
+            final_schema[tag].append({
+                "group_name": group_name,
+                "files": files
+            })
+
+    return final_schema
+
 # ── Single Media Detail ───────────────────────────────────────────────────────
 
 @router.get("/{media_id}", response_model=MediaRead)
@@ -741,6 +1042,24 @@ async def toggle_favorite(
 
 
 # (GET /favorites moved above /{media_id} to fix FastAPI route-order matching)
+
+@router.post("/{media_id}/lock", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "family"))])
+async def toggle_pg_lock(
+    media_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Toggle PG Lock (is_locked) status for a media item."""
+    media = await get_media(session, media_id)
+    if not media:
+        raise ResourceNotFoundError("Media not found")
+        
+    media.is_locked = not media.is_locked
+    media.requires_pin = media.is_locked
+    await session.commit()
+    
+    status_str = "locked" if media.is_locked else "unlocked"
+    return MessageResponse(message=f"Media {status_str} successfully.")
 
 
 # ── Rename / Delete Media ────────────────────────────────────────────────────
@@ -1248,70 +1567,3 @@ async def serve_sprites_file(
         
     headers = {"Cache-Control": "public, max-age=3600"}
     return FileResponse(file_path, headers=headers)
-
-
-@router.get("/curator-index")
-async def curator_index(
-    current_user: User = Depends(get_optional_user),
-    session: AsyncSession = Depends(get_db),
-):
-    """
-    Returns the indexed JSON schema required by the Lexical Clustering architecture.
-    """
-    from core.models import SeriesMember, SeriesGroup, Tag
-
-    # Fetch all media with their tags and series membership
-    query = select(MediaMetadata, Tag.tag, SeriesGroup.name).outerjoin(
-        Tag, MediaMetadata.id == Tag.video_id
-    ).outerjoin(
-        SeriesMember, MediaMetadata.id == SeriesMember.video_id
-    ).outerjoin(
-        SeriesGroup, SeriesMember.series_id == SeriesGroup.id
-    ).where(MediaMetadata.file_exists == True)
-    
-    query = await apply_media_security_filters(session, query, current_user)
-    result = await session.execute(query)
-
-    schema = {
-        "short_form": {},
-        "standard_video": {},
-        "long_form_episodes": {},
-        "feature_length": {},
-        "failed": []
-    }
-
-    for row in result:
-        media, tag, series_name = row
-        if not tag or tag not in schema:
-            continue
-            
-        group_name = series_name if series_name else media.category
-        
-        if group_name not in schema[tag]:
-            schema[tag][group_name] = []
-            
-        res_str = f"{media.width}x{media.height}" if media.width and media.height else "Unknown"
-            
-        schema[tag][group_name].append({
-            "path": media.relative_path,
-            "resolution": res_str,
-            "duration": media.duration_seconds or 0
-        })
-
-    # Format the dictionaries into arrays of {group_name, files}
-    final_schema = {
-        "short_form": [],
-        "standard_video": [],
-        "long_form_episodes": [],
-        "feature_length": [],
-        "failed": []
-    }
-
-    for tag in ["short_form", "standard_video", "long_form_episodes", "feature_length"]:
-        for group_name, files in schema[tag].items():
-            final_schema[tag].append({
-                "group_name": group_name,
-                "files": files
-            })
-
-    return final_schema

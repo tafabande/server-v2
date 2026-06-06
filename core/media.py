@@ -718,7 +718,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                 "stream_mode": "direct",
                 "hls_status": "corrupted",
                 "requires_pin": False,
-                "adult_only": False,
+                "adult_only": not ("myalbums" in virtual_rel.lower() or "nyalbums" in virtual_rel.lower()),
                 "last_scanned_at": datetime.now(UTC),
                 "width": None,
                 "height": None,
@@ -800,7 +800,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                     "stream_mode": "direct",
                     "hls_status": "corrupted",
                     "requires_pin": False,
-                    "adult_only": False,
+                    "adult_only": not ("myalbums" in virtual_rel.lower() or "nyalbums" in virtual_rel.lower()),
                     "last_scanned_at": datetime.now(UTC),
                     "width": None,
                     "height": None,
@@ -848,7 +848,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                     "stream_mode": "direct",
                     "hls_status": "corrupted",
                     "requires_pin": False,
-                    "adult_only": False,
+                    "adult_only": not ("myalbums" in virtual_rel.lower() or "nyalbums" in virtual_rel.lower()),
                     "last_scanned_at": datetime.now(UTC),
                     "width": None,
                     "height": None,
@@ -887,7 +887,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
 
         keyword_parts = {piece for piece in virtual_rel.lower().split("/") if piece}
         requires_pin = db_locked or bool(keyword_parts & settings.pin_keyword_set)
-        adult_only = db_adult or bool(keyword_parts & settings.adult_keyword_set)
+        adult_only = not ("myalbums" in virtual_rel.lower() or "nyalbums" in virtual_rel.lower())
         stream_mode = detect_stream_mode(target_path)
         
         # Use an UPSERT instead of a plain INSERT to prevent duplicate path constraint crashes
@@ -1097,14 +1097,11 @@ async def run_classification_pipeline(session: AsyncSession) -> None:
         
         # Horizontal (W > H) or fallback when aspect is unknown
         elif aspect == 0.0 or aspect >= 1.0:
-            if dur > 5400:
+            if dur > 2400:
                 tags_for.append("feature_length")
-            elif dur > 2700:
+            elif dur > 900:
                 tags_for.append("long_form_episodes")
-            elif dur > 180:
-                tags_for.append("standard_video")
-            else:
-                # If it's <= 3 mins but horizontal, classify it as standard video
+            elif dur >= 60 and dur <= 900:
                 tags_for.append("standard_video")
 
         for t in tags_for:
@@ -1642,14 +1639,37 @@ async def apply_media_security_filters(
     # Filter out files that do not physically exist on disk
     stmt = stmt.where(MediaMetadata.file_exists == True)
 
+    from sqlalchemy import exists, and_, or_, func
+    from core.models import FolderPermission, FolderSetting
+
     # 1. R18 / Adult Filter
-    if not current_user.is_adult:
-        stmt = stmt.where(MediaMetadata.adult_only == False)
+    nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
+    if (not current_user.is_adult) or (not nsfw_enabled):
+        adult_folder_exists = exists().where(
+            and_(
+                FolderSetting.is_adult == True,
+                or_(
+                    func.lower(MediaMetadata.relative_path) == func.lower(FolderSetting.path),
+                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderSetting.path) + "/%")
+                )
+            )
+        )
+        stmt = stmt.where(and_(
+            MediaMetadata.adult_only == False,
+            ~adult_folder_exists
+        ))
         
     # 2. Locked Content Filter
     if current_user.role not in ("admin", "super-admin"):
-        from sqlalchemy import exists, and_, or_
-        from core.models import FolderPermission
+        locked_folder_exists = exists().where(
+            and_(
+                FolderSetting.is_locked == True,
+                or_(
+                    func.lower(MediaMetadata.relative_path) == func.lower(FolderSetting.path),
+                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderSetting.path) + "/%")
+                )
+            )
+        )
         
         perm_exists = exists().where(
             and_(
@@ -1664,7 +1684,10 @@ async def apply_media_security_filters(
         
         stmt = stmt.where(
             or_(
-                MediaMetadata.requires_pin == False,
+                and_(
+                    MediaMetadata.requires_pin == False,
+                    ~locked_folder_exists
+                ),
                 perm_exists
             )
         )
@@ -1678,7 +1701,8 @@ async def is_media_accessible(
     current_user: User,
 ) -> bool:
     # 1. R18 / Adult check
-    if media.adult_only and not current_user.is_adult:
+    nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
+    if media.adult_only and ((not current_user.is_adult) or (not nsfw_enabled)):
         return False
         
     # 2. Locked Content check
@@ -1705,6 +1729,8 @@ async def is_media_accessible(
 
 
 async def get_smart_home_data(session: AsyncSession, current_user: User) -> dict:
+    seen_ids = set()
+
     # 1. Continue Watching
     subq = (
         select(PlayEvent.media_id, func.max(PlayEvent.created_at).label("latest"))
@@ -1723,49 +1749,66 @@ async def get_smart_home_data(session: AsyncSession, current_user: User) -> dict
     cw_query = await apply_media_security_filters(session, cw_query, current_user)
 
     cw_res = await session.execute(cw_query)
-    continue_watching = [
-        {
-            "media": m,
-            "last_position_seconds": pos,
-            "updated_at": ts
-        } for m, pos, ts in cw_res.all()
-    ]
+    continue_watching = []
+    for m, pos, ts in cw_res.all():
+        if m.id not in seen_ids:
+            continue_watching.append({
+                "media": m,
+                "last_position_seconds": pos,
+                "updated_at": ts
+            })
+            seen_ids.add(m.id)
 
     # 2. Recently Added
-    ra_query = select(MediaMetadata).order_by(MediaMetadata.created_at.desc(), MediaMetadata.id.desc()).limit(12)
+    ra_query = select(MediaMetadata).order_by(MediaMetadata.created_at.desc(), MediaMetadata.id.desc()).limit(30)
     ra_query = await apply_media_security_filters(session, ra_query, current_user)
     
     ra_res = await session.execute(ra_query)
-    recently_added = list(ra_res.scalars().all())
+    recently_added = []
+    for m in ra_res.scalars().all():
+        if m.id not in seen_ids and len(recently_added) < 12:
+            recently_added.append(m)
+            seen_ids.add(m.id)
 
     # 3. Trending (Most played in total)
     t_subq = (
         select(PlayEvent.media_id, func.count(PlayEvent.id).label("play_count"))
         .group_by(PlayEvent.media_id)
         .order_by(text("play_count DESC"))
-        .limit(12)
+        .limit(30)
         .subquery()
     )
     t_query = select(MediaMetadata).join(t_subq, MediaMetadata.id == t_subq.c.media_id)
     t_query = await apply_media_security_filters(session, t_query, current_user)
         
     t_res = await session.execute(t_query)
-    trending = list(t_res.scalars().all())
+    trending = []
+    for m in t_res.scalars().all():
+        if m.id not in seen_ids and len(trending) < 12:
+            trending.append(m)
+            seen_ids.add(m.id)
 
     # 4. Recommendations (Random unwatched/unseen)
-    rec_query = select(MediaMetadata).order_by(func.random()).limit(12)
+    rec_query = select(MediaMetadata).order_by(func.random()).limit(30)
     rec_query = await apply_media_security_filters(session, rec_query, current_user)
         
     rec_res = await session.execute(rec_query)
-    recommendations = list(rec_res.scalars().all())
+    recommendations = []
+    for m in rec_res.scalars().all():
+        if m.id not in seen_ids and len(recommendations) < 12:
+            recommendations.append(m)
+            seen_ids.add(m.id)
 
     # Fallback: if recently_added is empty but database has items, 
     # fetch some items without strict ordering to ensure Home is not empty.
     if not recently_added:
-        fallback_query = select(MediaMetadata).limit(24)
+        fallback_query = select(MediaMetadata).limit(30)
         fallback_query = await apply_media_security_filters(session, fallback_query, current_user)
         fallback_res = await session.execute(fallback_query)
-        recently_added = list(fallback_res.scalars().all())
+        for m in fallback_res.scalars().all():
+            if m.id not in seen_ids and len(recently_added) < 12:
+                recently_added.append(m)
+                seen_ids.add(m.id)
 
     return {
         "continue_watching": continue_watching,

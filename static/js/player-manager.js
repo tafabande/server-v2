@@ -19,18 +19,12 @@ export class PlayerManager {
         this.controlsTimer = null;
         this.lastTap = 0;
         this.isLoading = false;
+        this.isOpen = false;
 
         // Dynamic Theming State
         this.themeTimer = null;
         this.analyzerCanvas = document.createElement('canvas');
         this.analyzerCtx = this.analyzerCanvas.getContext('2d', { willReadFrequently: true });
-
-        // Preview State
-        // Zero-Latency Preload State
-        this.preloadHls = null;
-        this.preloadedMediaId = null;
-        this.preloadVideo = document.createElement('video');
-        this.preloadVideo.muted = true;
 
         this._lastProgressSecond = -1;
 
@@ -69,14 +63,14 @@ export class PlayerManager {
 
         // Auto re-acquire wake lock when returning to foreground while playing
         document.addEventListener('visibilitychange', async () => {
-            if (this.modal && this.modal.open && this.video && !this.video.paused && document.visibilityState === 'visible') {
+            if (this.isOpen && this.video && !this.video.paused && document.visibilityState === 'visible') {
                 await this.requestWakeLock();
             }
         });
 
         // Flush smart state progress immediately on tab/window unload via keepalive fetch
         window.addEventListener('pagehide', () => {
-            if (this.modal && this.modal.open && this.currentMedia && this.video && this.video.currentTime > 5) {
+            if (this.isOpen && this.currentMedia && this.video && this.video.currentTime > 5) {
                 const url = `/api/media/${this.currentMedia.id}/events`;
                 const payload = JSON.stringify({
                     position_seconds: this.video.currentTime,
@@ -97,6 +91,7 @@ export class PlayerManager {
     }
 
     _bindElements() {
+        this.container = document.getElementById('player-container');
         this.overlay = this.modal.querySelector('.player-overlay');
         this.gestureOverlay = document.getElementById('gesture-overlay');
         this.transportTrack = document.getElementById('transport-track');
@@ -113,6 +108,7 @@ export class PlayerManager {
         this.btnBack = document.getElementById('btn-back');
         this.btnSettings = document.getElementById('btn-settings');
         this.btnFavorite = document.getElementById('btn-favorite');
+        this.btnFullscreen = document.getElementById('btn-fullscreen');
 
         // Queue Sheet & Toast
         this.queueSheet = document.getElementById('queue-sheet');
@@ -152,6 +148,7 @@ export class PlayerManager {
         this.btnBack?.addEventListener('click', (e) => { e.stopPropagation(); this.eject(); });
         this.btnSettings?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleDrawer(); });
         this.btnFavorite?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFavorite(); });
+        this.btnFullscreen?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFullscreen(); });
 
         this._boundPlay = () => {
             this._onPlayState(true);
@@ -370,7 +367,7 @@ export class PlayerManager {
 
     _bindKeyboard() {
         document.addEventListener('keydown', (e) => {
-            if (!this.modal.open) return;
+            if (!this.isOpen) return;
 
             // Ignore keystrokes if the user is typing in an input or textarea
             const targetTag = e.target.tagName;
@@ -615,11 +612,12 @@ export class PlayerManager {
             this.queueIndex = 0;
         }
 
-        if (!this.modal.open) {
+        if (!this.isOpen) {
             this.modal.showModal();
             document.body.classList.add('player-active');
         }
 
+        this.isOpen = true;
         this._loadCurrent();
     }
 
@@ -627,7 +625,9 @@ export class PlayerManager {
         const media = this.queue.at(this.queueIndex);
         if (!media) return;
 
-        if (media.adult_only && !isAdultApproved()) {
+        const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+        const nsfwEnabled = user.preferences?.nsfw === true;
+        if (media.adult_only && (!isAdultApproved() || !nsfwEnabled)) {
             toast('18+ Content: Access denied.', 'error');
             this.eject();
             return;
@@ -646,7 +646,8 @@ export class PlayerManager {
         this._updateFavoriteButton();
 
         // Begin async sprite-sheet fetch for hover-preview thumbnails
-        this._loadSprite(media.id);
+        // Deferred to prevent UI stutter during video load
+        this._spriteRetryTimer = setTimeout(() => this._loadSprite(media.id), 2500);
 
         // Integrate with OS Media Session API (Button Bar)
         if ('mediaSession' in navigator) {
@@ -685,19 +686,6 @@ export class PlayerManager {
             const cachedValidity = this._mediaValidityCache.get(media.id);
             if (cachedValidity && !cachedValidity.valid && (Date.now() - cachedValidity.ts < 60000)) {
                 throw new Error("Media is cached as invalid (recently returned 404)");
-            }
-
-            // Adaptive Error Failover: Check if we can swap from preload
-            if (this.preloadedMediaId === this.currentMedia.id && this.preloadHls) {
-                console.log("Zero-Latency: Swapping to preloaded stream");
-                this.hls = this.preloadHls;
-                this.hls.detachMedia();
-                this.hls.attachMedia(this.video);
-                this.preloadHls = null;
-                this.preloadedMediaId = null;
-                this._playbackState = 'HLS';
-                this._startPlayback();
-                return;
             }
 
             const fetchStreamWithRetry = async () => {
@@ -797,56 +785,17 @@ export class PlayerManager {
         }
     }
 
-    /**
-     * Proactively trigger transcoding for the next item in the queue
-     */
-    async _prefetchNext() {
-        if (this._prefetchedNext) return;
-        if (this.queueIndex < this.queue.length - 1) {
-            const nextMedia = this.queue.at(this.queueIndex + 1);
-            if (nextMedia && nextMedia.stream_mode !== 'direct') {
-                console.log("Adaptive Buffer: Pre-initializing background transcode for:", nextMedia.title);
-                this._prefetchedNext = true;
-                try {
-                    const res = await api.stream(nextMedia.id, null, false);
-
-                    // Zero-Latency: Preload the next stream in a background HLS instance
-                    if (res.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                        this._preloadNext(res.url, nextMedia.id);
-                    }
-                } catch (e) {
-                    this._prefetchedNext = false; // allow retry
-                }
-            }
-        }
-    }
-
-    _preloadNext(url, mediaId) {
-        if (this.preloadHls) {
-            this.preloadHls.destroy();
-        }
-
-        console.log("Zero-Latency: Pre-buffering next item...");
-        this.preloadHls = new Hls({
-            startLevel: 0, // lowest for background pre-buffer
-            maxBufferLength: 15,
-            autoStartLoad: true
-        });
-
-        this.preloadedMediaId = mediaId;
-        this.preloadHls.loadSource(url);
-        this.preloadHls.attachMedia(this.preloadVideo);
-    }
-
-    _startPlayback() {
+    async _startPlayback() {
         this.isLoading = false;
         this.modal.classList.remove('is-loading');
         if (this.currentMedia && this.currentMedia.last_position_seconds) {
             this.video.currentTime = this.currentMedia.last_position_seconds;
         }
-        this.video.play().catch(() => {
+        try {
+            await this.video.play();
+        } catch (err) {
             if (this.btnPlay) this.btnPlay.classList.add('pulse');
-        });
+        }
     }
 
     previous() {
@@ -921,11 +870,20 @@ export class PlayerManager {
             const item = document.createElement('div');
             item.className = `queue-item ${index === this.queueIndex ? 'active' : ''}`;
 
-            item.innerHTML = `
-                <span class="queue-item-index">${String(index + 1).padStart(2, '0')}</span>
-                <span class="queue-item-title">${escapeHtml(media.title || 'Untitled')}</span>
-                ${index === this.queueIndex ? '<i class="v-icon icon-play" style="width:16px; height:16px;"></i>' : ''}
-            `;
+            const indexSpan = document.createElement('span');
+            indexSpan.className = 'queue-item-index';
+            indexSpan.textContent = String(index + 1).padStart(2, '0');
+
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'queue-item-title';
+            titleSpan.textContent = media.title || 'Untitled';
+
+            item.appendChild(indexSpan);
+            item.appendChild(titleSpan);
+
+            if (index === this.queueIndex) {
+                item.insertAdjacentHTML('beforeend', '<i class="v-icon icon-play" style="width:16px; height:16px;"></i>');
+            }
 
             item.addEventListener('click', () => {
                 this.jumpToQueueIndex(index);
@@ -953,7 +911,7 @@ export class PlayerManager {
             return;
         }
         if (this.queueIndex < this.queue.length - 1) {
-            this._showUpNextOverlay();
+            this.next();
         } else {
             this.showToast('Playlist Finished');
             setTimeout(() => this.eject(), 3000);
@@ -1004,6 +962,7 @@ export class PlayerManager {
     }
 
     eject() {
+        this.isOpen = false;
         if (this.currentMedia && this.video.currentTime > 5) {
             api.recordPlayback(this.currentMedia.id, {
                 position_seconds: this.video.currentTime,
@@ -1011,12 +970,14 @@ export class PlayerManager {
                 event_type: 'stop',
             }).catch(() => { });
         }
+        this.video.pause();
+        this.video.src = '';
         this.modal.close();
     }
 
     toggleFullscreen() {
         if (document.fullscreenElement) document.exitFullscreen();
-        else this.modal.requestFullscreen?.();
+        else this.container?.requestFullscreen?.();
     }
 
     toggleDrawer(show) {
@@ -1241,18 +1202,7 @@ export class PlayerManager {
             }
         }
 
-        // Intelligent Auto-Next Trigger
-        if (duration > 30 && duration - currentTime < 10) {
-            if (!this._upNextShown && this.queueIndex < this.queue.length - 1) {
-                this._upNextShown = true;
-                this._showUpNextOverlay();
-            }
-        }
-
-        // Adaptive Buffer: Prefetch next item when 70% done
-        if (duration > 0 && (currentTime / duration) > 0.7) {
-            this._prefetchNext();
-        }
+        // Intelligent Auto-Next Trigger (Disabled for instant auto-next)
     }
 
     _onLoaded() {
@@ -1594,17 +1544,33 @@ export class PlayerManager {
                 document.body.appendChild(dialog);
             }
 
-            dialog.innerHTML = `
-                <div class="dialog-card text-center" style="padding: 24px; background: rgba(18, 18, 18, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);">
-                    <h3 style="margin-bottom: 12px; color: #fff; font-size: 1.2rem;">Rename Media</h3>
-                    <p class="text-muted text-sm" style="margin-bottom: 16px;">Modify the media display title below:</p>
-                    <input type="text" id="rename-input" class="form-control" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;" value="${escapeHtml(currentTitle)}">
-                    <div class="dialog-actions" style="display: flex; gap: 12px;">
-                        <button class="btn btn-ghost w-100" id="rename-cancel" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; cursor: pointer;">Cancel</button>
-                        <button class="btn btn-accent w-100" id="rename-save" style="padding: 10px; border-radius: 8px; border: none; background: var(--player-accent, #00aaff); color: #000; font-weight: 600; cursor: pointer; box-shadow: 0 0 10px var(--player-accent-glow);">Save</button>
-                    </div>
-                </div>
+            const dialogCard = document.createElement('div');
+            dialogCard.className = 'dialog-card text-center';
+            dialogCard.style.cssText = 'padding: 24px; background: rgba(18, 18, 18, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);';
+
+            const titleHtml = '<h3 style="margin-bottom: 12px; color: #fff; font-size: 1.2rem;">Rename Media</h3><p class="text-muted text-sm" style="margin-bottom: 16px;">Modify the media display title below:</p>';
+
+            const inputField = document.createElement('input');
+            inputField.type = 'text';
+            inputField.id = 'rename-input';
+            inputField.className = 'form-control';
+            inputField.style.cssText = 'width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;';
+            inputField.value = currentTitle;
+
+            const actionDiv = document.createElement('div');
+            actionDiv.className = 'dialog-actions';
+            actionDiv.style.cssText = 'display: flex; gap: 12px;';
+            actionDiv.innerHTML = `
+                <button class="btn btn-ghost w-100" id="rename-cancel" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; cursor: pointer;">Cancel</button>
+                <button class="btn btn-accent w-100" id="rename-save" style="padding: 10px; border-radius: 8px; border: none; background: var(--player-accent, #00aaff); color: #000; font-weight: 600; cursor: pointer; box-shadow: 0 0 10px var(--player-accent-glow);">Save</button>
             `;
+
+            dialogCard.innerHTML = titleHtml;
+            dialogCard.appendChild(inputField);
+            dialogCard.appendChild(actionDiv);
+
+            dialog.innerHTML = '';
+            dialog.appendChild(dialogCard);
 
             const input = dialog.querySelector('#rename-input');
             const cancelBtn = dialog.querySelector('#rename-cancel');

@@ -22,6 +22,11 @@ export class ShortiesView {
                     <h1 class="page-title">Shorties</h1>
                     <p class="page-subtitle">Swipe or scroll vertical micro-entertainment feed</p>
                 </div>
+                <div class="flex gap-sm">
+                    <button id="btn-shuffle-shorties" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 6px;">
+                        🔀 Shuffle
+                    </button>
+                </div>
             </div>
             
             <div class="shorties-viewport">
@@ -32,6 +37,13 @@ export class ShortiesView {
         `;
 
         await this._loadShorts();
+
+        const shuffleBtn = document.getElementById('btn-shuffle-shorties');
+        if (shuffleBtn) {
+            shuffleBtn.addEventListener('click', () => {
+                this._shuffleVideos();
+            });
+        }
     }
 
     async _loadShorts() {
@@ -50,8 +62,10 @@ export class ShortiesView {
                 items = allItems.filter(v => v.duration_seconds > 0 && v.duration_seconds < 300);
             }
 
-            // Filter out adult content if not approved
-            if (!isAdultApproved()) {
+            // Filter out adult content if not approved or nsfw preference is off
+            const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+            const nsfwEnabled = user.preferences?.nsfw === true;
+            if (!isAdultApproved() || !nsfwEnabled) {
                 items = items.filter(v => !v.adult_only);
             }
 
@@ -98,11 +112,10 @@ export class ShortiesView {
                 <div class="shorty-video-wrapper">
                     <video class="shorty-video" 
                            id="shorty-video-${v.id}" 
-                           src="${videoSrc}"
+                           data-src="${videoSrc}"
                            poster="${posterUrl}"
-                           loop 
                            playsinline 
-                           preload="auto" 
+                           preload="none" 
                            ${this._isMuted ? 'muted' : ''}>
                     </video>
                     
@@ -169,6 +182,11 @@ export class ShortiesView {
 
         this._activeVideoEl = video;
         video.muted = this._isMuted;
+        
+        if (!video.src) {
+            video.src = video.dataset.src;
+            video.load();
+        }
 
         video.play().catch(err => {
             console.log('Playback prevented or interrupted:', err.message);
@@ -192,6 +210,12 @@ export class ShortiesView {
             const feedback = card.querySelector('.shorty-play-feedback');
 
             let lastTap = 0;
+
+            if (video) {
+                video.addEventListener('ended', () => {
+                    this._playNextShorty();
+                });
+            }
 
             card.querySelector('.shorty-video-wrapper')?.addEventListener('click', (e) => {
                 if (e.target.closest('.shorty-overlay-right') || e.target.closest('.shorty-overlay-bottom')) {
@@ -306,6 +330,36 @@ export class ShortiesView {
         });
 
         toast(this._isMuted ? 'Shorts Muted' : 'Shorts Unmuted', 'success');
+    }
+
+    _shuffleVideos() {
+        // Fisher-Yates shuffle algorithm
+        for (let i = this._videos.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this._videos[i], this._videos[j]] = [this._videos[j], this._videos[i]];
+        }
+
+        const feed = document.getElementById('shorties-feed');
+        if (feed) {
+            feed.innerHTML = this._videos.map((v, idx) => this._renderShortyCard(v, idx)).join('');
+            this._setupIntersectionObserver();
+            this._bindEvents();
+            feed.scrollTo({ top: 0, behavior: 'instant' });
+        }
+    }
+
+    _playNextShorty() {
+        const activeCard = this._activeVideoEl?.closest('.shorty-card');
+        if (!activeCard) return;
+
+        const currentIndex = parseInt(activeCard.dataset.index);
+        const nextIndex = currentIndex + 1;
+
+        const feed = document.getElementById('shorties-feed');
+        const targetCard = feed?.querySelector(`.shorty-card[data-index="${nextIndex}"]`);
+        if (targetCard) {
+            targetCard.scrollIntoView({ behavior: 'smooth' });
+        }
     }
 
     destroy() {

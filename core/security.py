@@ -137,17 +137,20 @@ async def get_optional_user(
     """
     try:
         token = request.query_params.get("token") or request.cookies.get(settings.session_cookie_name)
-        user = await get_current_user(request, db, token)
-        return user
-    except HTTPException:
-        # Fallback to Guest
-        guest = User(
-            id=0,
-            username="guest",
-            role="guest",
-            is_adult=False
-        )
-        return guest
+        if token:
+            user = await get_current_user(request, db, token)
+            return user
+    except Exception:
+        pass
+        
+    # Fallback to Guest
+    guest = User(
+        id=0,
+        username="guest",
+        role="guest",
+        is_adult=False
+    )
+    return guest
 
 
 def require_roles(*roles: str) -> Callable:

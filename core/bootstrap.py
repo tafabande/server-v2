@@ -183,6 +183,29 @@ async def self_heal_data_integrity() -> None:
             if orphan_folder_perms.rowcount:
                 logger.info(f"Self-healing: Removed {orphan_folder_perms.rowcount} orphaned folder permissions.")
 
+            # 7.6. Sync SFW / NSFW categorization based on path
+            sfw_update_nsfw = await session.execute(text("""
+                UPDATE media_metadata
+                SET adult_only = 1
+                WHERE NOT (lower(relative_path) LIKE 'myalbums%' OR lower(relative_path) LIKE '%nyalbums%')
+            """))
+            sfw_update_sfw = await session.execute(text("""
+                UPDATE media_metadata
+                SET adult_only = 0
+                WHERE lower(relative_path) LIKE 'myalbums%' OR lower(relative_path) LIKE '%nyalbums%'
+            """))
+            if sfw_update_nsfw.rowcount or sfw_update_sfw.rowcount:
+                logger.info(f"Self-healing: Synchronized SFW/NSFW status in database.")
+
+            # Ensure all admins and super-admins are marked as adults
+            admin_adult_update = await session.execute(text("""
+                UPDATE users
+                SET is_adult = 1
+                WHERE role IN ('admin', 'super-admin') AND is_adult = 0
+            """))
+            if admin_adult_update.rowcount:
+                logger.info(f"Self-healing: Elevated {admin_adult_update.rowcount} admin user(s) to adult status.")
+
             await session.commit()
         except Exception as e:
             logger.error(f"Self-healing data integrity failed: {e}")

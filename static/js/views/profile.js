@@ -1,7 +1,7 @@
 /**
  * MediaHub — Profile View
  */
-import { api } from '../app.js';
+import app, { api } from '../app.js';
 import { toast, formatDate } from '../utils.js';
 
 export class ProfileView {
@@ -157,6 +157,14 @@ export class ProfileView {
                                 <option value="light" ${user.preferences?.theme === 'light' ? 'selected' : ''}>Light</option>
                             </select>
                         </div>
+                        ${(user.role === 'admin' || user.role === 'super-admin' || user.is_adult === true) ? `
+                        <div class="form-group mt-md" style="margin-top: 16px;">
+                            <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="pref-nsfw" ${user.preferences?.nsfw === true ? 'checked' : ''}>
+                                <span>Enable NSFW (18+) Content</span>
+                            </label>
+                        </div>
+                        ` : ''}
                     </div>
 
                     <div class="surface mb-md">
@@ -247,6 +255,31 @@ export class ProfileView {
                     toast('Theme updated', 'success');
                 } catch (err) {
                     toast(err.message || 'Failed to update theme', 'error');
+                }
+            });
+        }
+
+        const nsfwCheckbox = document.getElementById('pref-nsfw');
+        if (nsfwCheckbox) {
+            nsfwCheckbox.addEventListener('change', async () => {
+                const isNsfw = nsfwCheckbox.checked;
+                try {
+                    const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+                    user.preferences = user.preferences || {};
+                    user.preferences.nsfw = isNsfw;
+
+                    await api.updateProfile({ preferences: user.preferences });
+                    localStorage.setItem('mediahub_user', JSON.stringify(user));
+
+                    // Keep session storage and app state in sync
+                    sessionStorage.setItem('r18_enabled', isNsfw ? 'true' : 'false');
+                    app.store.set({ r18Enabled: isNsfw, user });
+                    app.updateUI();
+
+                    toast(isNsfw ? 'NSFW Content Enabled' : 'NSFW Content Disabled', 'success');
+                } catch (err) {
+                    toast(err.message || 'Failed to update preferences', 'error');
+                    nsfwCheckbox.checked = !isNsfw;
                 }
             });
         }

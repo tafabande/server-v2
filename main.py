@@ -69,7 +69,7 @@ async def lifespan(_: FastAPI):
     # Start Zeroconf Discovery (Non-blocking)
     try:
         from core.discovery import discovery
-        discovery.start()
+        asyncio.create_task(asyncio.to_thread(discovery.start))
     except Exception as e:
         logger.error(f"Discovery could not start: {e}")
     
@@ -89,7 +89,10 @@ async def lifespan(_: FastAPI):
     logger.info("Application shutting down...")
     from core.media import cleanup_active_processes
     await cleanup_active_processes()
-    discovery.stop()
+    try:
+        await asyncio.to_thread(discovery.stop)
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -233,17 +236,6 @@ async def add_cache_control_header(request: Request, call_next):
             response.headers["Cache-Control"] = "public, max-age=3600"
     return response
 
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(files.router, prefix="/api/files", tags=["files"])
-app.include_router(media.router, prefix="/api/media", tags=["media"])
-app.include_router(system.router, prefix="/api/system", tags=["system"])
-app.include_router(users.router, prefix="/api/users", tags=["users"])
-app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
-app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
-app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
-app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
-app.include_router(collections.router, prefix="/api/collections", tags=["collections"])
-
 @app.get("/sw.js", include_in_schema=False)
 async def serve_sw():
     return FileResponse(Path("static/sw.js"), media_type="application/javascript")
@@ -255,6 +247,17 @@ async def serve_manifest():
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(files.router, prefix="/api/files", tags=["files"])
+app.include_router(media.router, prefix="/api/media", tags=["media"])
+app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(playlists.router, prefix="/api/playlists", tags=["playlists"])
+app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
+app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(collections.router, prefix="/api/collections", tags=["collections"])
 
 
 # Catch-all route to support SPA frontend routing

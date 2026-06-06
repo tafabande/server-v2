@@ -80,6 +80,40 @@ async def login(
     return await login_for_access_token(response, form_data, db)
 
 
+from core.schemas import PinUnlockRequest
+
+@router.post("/unlock")
+async def unlock_session(
+    response: Response,
+    req: PinUnlockRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Unlock a session using a PIN (elevates to an admin session)."""
+    # Find an admin with this PIN
+    result = await db.execute(select(User).where(User.pin == req.pin, User.role.in_(["admin", "super-admin"])))
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid PIN")
+        
+    access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+    access_token = create_access_token(
+        data={"sub": user.username, "role": user.role},
+        expires_delta=access_token_expires,
+    )
+    
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=access_token,
+        httponly=True,
+        max_age=settings.access_token_expire_minutes * 60,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+    )
+    
+    return {"access_token": access_token}
+
+
 @router.get("/me")
 async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
     """Get the current authenticated user's profile."""

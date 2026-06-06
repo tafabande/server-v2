@@ -149,7 +149,7 @@ async def mkdir(
 
 @router.get("/settings", response_model=FolderSettingRead, dependencies=[Depends(get_optional_user)])
 async def get_folder_settings(
-    path: str,
+    path: str = Query(default=""),
     session: AsyncSession = Depends(get_db),
 ) -> FolderSettingRead:
     # Normalize path
@@ -167,8 +167,8 @@ async def get_folder_settings(
 
 @router.post("/settings", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
 async def update_folder_settings(
-    path: str,
     payload: FolderSettingUpdate,
+    path: str = Query(default=""),
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MessageResponse:

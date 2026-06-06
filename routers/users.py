@@ -151,6 +151,8 @@ async def update_own_profile(
         prefs["theme"] = payload.theme
     if payload.language:
         prefs["language"] = payload.language
+    if payload.preferences is not None:
+        prefs.update(payload.preferences)
     current_user.preferences = prefs
 
     if payload.pin is not None:

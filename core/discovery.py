@@ -7,11 +7,12 @@ logger = get_logger("discovery")
 class DiscoveryService:
     def __init__(self, port: int = 51733):
         self.port = port
-        self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
+        self.zeroconf = None
         self.service_info = None
 
     def start(self):
         try:
+            self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
             hostname = socket.gethostname()
             # Robust IP detection that works without internet
             def get_local_ip():
@@ -64,7 +65,8 @@ class DiscoveryService:
             logger.debug(f"Error unregistering service during shutdown: {e}")
         finally:
             try:
-                self.zeroconf.close()
+                if self.zeroconf:
+                    self.zeroconf.close()
             except Exception:
                 pass
 

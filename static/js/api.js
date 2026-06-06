@@ -111,24 +111,60 @@ export class ApiClient {
 
   // === Media ===
   getLibrary(params = {}) { return this.request("/api/media/library", { query: params }); }
+  getFolders(path = "") { return this.request("/api/media/folders", { query: { path: String(path) } }); }
+  toggleFolderLock(path, value) {
+    return this.request("/api/media/folders/lock", { method: "POST", json: { path: String(path), value: value === true || value === 'true' } });
+  }
+  toggleFolderR18(path, value) {
+    return this.request("/api/media/folders/r18", { method: "POST", json: { path: String(path), value: value === true || value === 'true' } });
+  }
   getVideosByType(params = {}) { return this.request("/api/media/library", { query: params }); }
   getSmartHome() { return this.request("/api/media/smart/home"); }
   getHeroContent() { return this.request("/api/media/home/hero"); }
   getHomeRows(offset = 0) { return this.request("/api/media/home/rows", { query: { offset } }); }
   getSearch(q) { return this.request("/api/media/search", { query: { q } }); }
   async stream(mediaId, pin = "", priority = true) {
-    const res = await this.request(`/api/media/${mediaId}/stream`, { query: { pin, priority } });
+    const res = await this.request(`/api/media/${parseInt(mediaId, 10)}/stream`, { query: { pin: String(pin), priority: Boolean(priority) } });
     if (res && res.url && this.token) {
       res.url += (res.url.includes("?") ? "&" : "?") + `token=${encodeURIComponent(this.token)}`;
     }
     return res;
   }
-  recordPlayback(mediaId, payload) { return this.request(`/api/media/${mediaId}/events`, { method: "POST", json: payload }); }
+  recordPlayback(mediaId, payload) {
+    return this.request(`/api/media/${parseInt(mediaId, 10)}/events`, {
+      method: "POST",
+      json: {
+        position_seconds: Number(payload.position_seconds) || 0,
+        completed: Boolean(payload.completed),
+        event_type: String(payload.event_type || 'progress')
+      }
+    });
+  }
   rescan() { return this.request("/api/media/rescan", { method: "POST" }); }
-  toggleFavorite(mediaId) { return this.request(`/api/media/${mediaId}/favorite`, { method: "POST" }); }
+  toggleFavorite(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}/favorite`, { method: "POST" }); }
+  toggleLock(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}/lock`, { method: "POST" }); }
   getFavorites() { return this.request("/api/media/favorites"); }
-  deleteMedia(mediaId) { return this.request(`/api/media/${mediaId}`, { method: "DELETE" }); }
-  renameMedia(mediaId, title) { return this.request(`/api/media/${mediaId}/rename`, { method: "POST", json: { title } }); }
+  getCuratorIndex() { return this.request("/api/media/curator-index"); }
+  getSeriesGroups() { return this.request("/api/media/series-groups"); }
+  async unlockPin(pin) {
+    const res = await fetch('/api/auth/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Invalid PIN');
+    }
+    const data = await res.json();
+    if (data.access_token) {
+      localStorage.setItem('token', data.access_token);
+      window.location.reload();
+    }
+    return data;
+  }
+  deleteMedia(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}`, { method: "DELETE" }); }
+  renameMedia(mediaId, title) { return this.request(`/api/media/${parseInt(mediaId, 10)}/rename`, { method: "POST", json: { title: String(title) } }); }
   getScanStatus() { return this.request("/api/media/scan-status"); }
   optimizeDatabase() { return this.request("/api/system/optimize", { method: "POST" }); }
   clearHLSCache() { return this.request("/api/system/clear-hls", { method: "POST" }); }
@@ -155,28 +191,28 @@ export class ApiClient {
   // === Requests ===
   getRequests() { return this.request("/api/requests"); }
   submitRequest(type, targetPath = null) { return this.request("/api/requests", { method: "POST", json: { request_type: type, target_path: targetPath } }); }
-  processRequest(requestId, status, comment = null) { return this.request(`/api/requests/${requestId}/action`, { method: "POST", json: { status, admin_comment: comment } }); }
+  processRequest(requestId, status, comment = null) { return this.request(`/api/requests/${parseInt(requestId, 10)}/action`, { method: "POST", json: { status: String(status), admin_comment: comment ? String(comment) : null } }); }
 
   // === Playlists ===
   getPlaylists() { return this.request("/api/playlists"); }
   createPlaylist(title, description = "") { return this.request("/api/playlists", { method: "POST", json: { title, description } }); }
-  getPlaylist(id) { return this.request(`/api/playlists/${id}`); }
-  deletePlaylist(id) { return this.request(`/api/playlists/${id}`, { method: "DELETE" }); }
-  addToPlaylist(id, mediaId) { return this.request(`/api/playlists/${id}/items`, { method: "POST", json: { media_id: mediaId } }); }
-  removeFromPlaylist(id, itemId) { return this.request(`/api/playlists/${id}/items/${itemId}`, { method: "DELETE" }); }
+  getPlaylist(id) { return this.request(`/api/playlists/${parseInt(id, 10)}`); }
+  deletePlaylist(id) { return this.request(`/api/playlists/${parseInt(id, 10)}`, { method: "DELETE" }); }
+  addToPlaylist(id, mediaId) { return this.request(`/api/playlists/${parseInt(id, 10)}/items`, { method: "POST", json: { media_id: parseInt(mediaId, 10) } }); }
+  removeFromPlaylist(id, itemId) { return this.request(`/api/playlists/${parseInt(id, 10)}/items/${parseInt(itemId, 10)}`, { method: "DELETE" }); }
 
   // === Users (admin) ===
   getUsers() { return this.request("/api/users"); }
   createUser(data) { return this.request("/api/users", { method: "POST", json: data }); }
-  updateUser(id, data) { return this.request(`/api/users/${id}`, { method: "PUT", json: data }); }
-  deleteUser(id) { return this.request(`/api/users/${id}`, { method: "DELETE" }); }
-  resetUserPassword(id, newPassword) { return this.request(`/api/users/${id}/reset-password`, { method: "POST", json: { new_password: newPassword } }); }
+  updateUser(id, data) { return this.request(`/api/users/${parseInt(id, 10)}`, { method: "PUT", json: data }); }
+  deleteUser(id) { return this.request(`/api/users/${parseInt(id, 10)}`, { method: "DELETE" }); }
+  resetUserPassword(id, newPassword) { return this.request(`/api/users/${parseInt(id, 10)}/reset-password`, { method: "POST", json: { new_password: String(newPassword) } }); }
 
   // === Webhooks ===
   getWebhooks() { return this.request("/api/webhooks"); }
   createWebhook(data) { return this.request("/api/webhooks", { method: "POST", json: data }); }
-  updateWebhook(id, data) { return this.request(`/api/webhooks/${id}`, { method: "PATCH", json: data }); }
-  deleteWebhook(id) { return this.request(`/api/webhooks/${id}`, { method: "DELETE" }); }
+  updateWebhook(id, data) { return this.request(`/api/webhooks/${parseInt(id, 10)}`, { method: "PATCH", json: data }); }
+  deleteWebhook(id) { return this.request(`/api/webhooks/${parseInt(id, 10)}`, { method: "DELETE" }); }
 
   // === Profile ===
   updateProfile(data) { return this.request("/api/users/me/profile", { method: "PUT", json: data }); }

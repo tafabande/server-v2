@@ -84,12 +84,84 @@ class App {
         });
 
         const makeLibView = (fmt) => class extends LibraryView {
-            constructor(c) { super(c); this._fixedFormat = fmt; }
-            async _loadMedia() { return this._loadByFormat(this._fixedFormat); }
+            constructor(c) {
+                super(c);
+                this._fixedFormat = fmt;
+                this._isFolderView = localStorage.getItem(`lib_${this._fixedFormat}_is_folder`) === 'true';
+                this._currentPath = localStorage.getItem(`lib_${this._fixedFormat}_current_path`) || "";
+                
+                if (this._fixedFormat === 'videos') {
+                    this._isFolderView = false;
+                }
+            }
+
+            async _loadFolders() {
+                const path = this._currentPath || '';
+                return api.request("/api/media/folders", { query: { path: String(path), type: this._fixedFormat } });
+            }
+
+            async _loadPath(path) {
+                this._currentPath = path;
+                localStorage.setItem(`lib_${this._fixedFormat}_current_path`, path);
+                this._renderBreadcrumbs();
+                
+                try {
+                    if (this._isFolderView) {
+                        const res = await this._loadFolders();
+                        this._folders = res.folders || [];
+                        this._items = res.items || [];
+                    } else {
+                        const res = await api.getVideosByType({ type: this._fixedFormat, per_page: 1000 });
+                        this._folders = [];
+                        this._items = res.items || [];
+                    }
+                    this._renderContent();
+                } catch (err) {
+                    const target = document.getElementById('lib-content');
+                    if (target) {
+                        target.innerHTML =
+                            `<div class="empty-state">
+                                <div class="empty-icon">Y"?</div>
+                                <h3>Connection Error</h3>
+                                <p>${err.message}</p>
+                            </div>`;
+                    }
+                }
+            }
+
+            _renderBreadcrumbs() {
+                const bc = document.getElementById('lib-breadcrumbs');
+                if (!bc) return;
+                if (!this._isFolderView) {
+                    bc.style.display = 'none';
+                } else {
+                    bc.style.display = 'flex';
+                    super._renderBreadcrumbs();
+                }
+            }
+
             _renderTabs() {
-                super._renderTabs();
                 const t = document.getElementById('lib-format-tabs');
-                if (t) t.style.display = 'none';
+                if (t) {
+                    if (this._fixedFormat === 'movies' || this._fixedFormat === 'series') {
+                        t.style.display = 'flex';
+                        t.innerHTML = `
+                            <button class="tab ${!this._isFolderView ? 'active' : ''}" data-mode="list">List All</button>
+                            <button class="tab ${this._isFolderView ? 'active' : ''}" data-mode="folder">Folder View</button>
+                        `;
+                        t.querySelectorAll('.tab').forEach(btn => {
+                            btn.addEventListener('click', (e) => {
+                                const mode = e.target.dataset.mode;
+                                this._isFolderView = mode === 'folder';
+                                localStorage.setItem(`lib_${this._fixedFormat}_is_folder`, this._isFolderView);
+                                this._currentPath = '';
+                                this.render();
+                            });
+                        });
+                    } else {
+                        t.style.display = 'none';
+                    }
+                }
             }
         };
 
@@ -100,7 +172,7 @@ class App {
             { path: '/shorties', view: async () => ShortiesView, requiresAuth: true },
             { path: '/movies', view: async () => makeLibView('movies'), requiresAuth: true },
             { path: '/series', view: async () => makeLibView('series'), requiresAuth: true },
-            { path: '/videos', view: async () => makeLibView('normal'), requiresAuth: true },
+            { path: '/videos', view: async () => makeLibView('videos'), requiresAuth: true },
             { path: '/explorer', view: async () => ExplorerView, requiresAuth: true },
             { path: '/history', view: async () => HistoryView, requiresAuth: true },
             { path: '/admin', view: async () => AdminView, requiresAuth: true },
@@ -129,6 +201,9 @@ class App {
             adminNotifBadge: document.getElementById('admin-notif-badge'),
             scanStatusContainer: document.getElementById('scan-status-container'),
             scanText: document.getElementById('scan-text'),
+            btnNsfwToggle: document.getElementById('btn-nsfw-toggle'),
+            nsfwToggleIcon: document.getElementById('nsfw-toggle-icon'),
+            nsfwToggleLabel: document.getElementById('nsfw-toggle-label'),
         };
 
         this.sidebar = this.els.sidebar;
@@ -148,10 +223,7 @@ class App {
             };
         }
 
-        // Sync Fullscreen with the new PiP Viewport
-        document.getElementById('video-viewport')?.addEventListener('click', () => {
-            this.player?.toggleFullscreen();
-        });
+        // Sync Fullscreen with the browser fullscreen API
         document.getElementById('btn-fullscreen')?.addEventListener('click', () => {
             this.player?.toggleFullscreen();
         });
@@ -194,7 +266,7 @@ class App {
             }
 
             // F → Fullscreen
-            if (e.key.toLowerCase() === 'f' && !isInput) {
+            if (e.key && e.key.toLowerCase() === 'f' && !isInput) {
                 e.preventDefault();
                 this.player?.toggleFullscreen();
             }
@@ -236,31 +308,102 @@ class App {
         // Share QR
         this.els.btnShareQr?.addEventListener('click', () => this._showShareQR());
 
+        // NSFW Toggle Click Event
+        this.els.btnNsfwToggle?.addEventListener('click', async () => {
+            const currentR18 = sessionStorage.getItem('r18_enabled') === 'true';
+            const nextR18 = !currentR18;
+            try {
+                const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+                user.preferences = user.preferences || {};
+                user.preferences.nsfw = nextR18;
+
+                await this.api.updateProfile({ preferences: user.preferences });
+                localStorage.setItem('mediahub_user', JSON.stringify(user));
+                sessionStorage.setItem('r18_enabled', nextR18 ? 'true' : 'false');
+                this.store.set({ r18Enabled: nextR18, user });
+
+                this.updateUI();
+
+                const { toast } = await import('./utils.js');
+                toast(nextR18 ? 'NSFW Content Enabled' : 'NSFW Content Disabled', 'success');
+
+                await this.handleNavigation();
+            } catch (err) {
+                const { toast } = await import('./utils.js');
+                toast(err.message || 'Failed to toggle NSFW', 'error');
+            }
+        });
+
         // Shortcuts Cheatsheet Modal
         this.els.btnShortcutsHelp?.addEventListener('click', () => {
             this.els.shortcutsDialog?.showModal();
         });
 
-        // Inject new classification nav links into the sidebar if missing
+        // Re-organize nav bar, group by type and use, combine history & analytics
         const navContainer = document.querySelector('.sidebar-nav');
-        if (navContainer && !document.querySelector('[href="/movies"]')) {
-            const libLink = navContainer.querySelector('[href="/library"]');
-            const newLinks = `
-                <a href="/movies" class="nav-link" data-link>
-                    <span class="nav-icon">🎥</span>
-                    <span class="nav-label">Movies</span>
-                </a>
-                <a href="/series" class="nav-link" data-link>
-                    <span class="nav-icon">📺</span>
-                    <span class="nav-label">Series</span>
-                </a>
-                <a href="/videos" class="nav-link" data-link>
-                    <span class="nav-icon">📼</span>
-                    <span class="nav-label">Videos</span>
-                </a>
-            `;
-            if (libLink) libLink.insertAdjacentHTML('afterend', newLinks);
-            else navContainer.insertAdjacentHTML('beforeend', newLinks);
+        if (navContainer && !navContainer.dataset.organized) {
+            navContainer.dataset.organized = 'true';
+
+            const existingLinks = Array.from(navContainer.querySelectorAll('.nav-link'));
+            const linkMap = {};
+            existingLinks.forEach(l => {
+                const href = l.getAttribute('href');
+                linkMap[href] = l;
+            });
+
+            const createLink = (href, icon, label, className = '') => {
+                if (linkMap[href]) {
+                    if (className) linkMap[href].classList.add(...className.split(' '));
+                    return linkMap[href];
+                }
+                const el = document.createElement('a');
+                el.href = href;
+                el.className = `nav-link ${className}`;
+                el.setAttribute('data-link', '');
+                el.innerHTML = `<span class="nav-icon">${icon}</span><span class="nav-label">${label}</span>`;
+                return el;
+            };
+
+            linkMap['/'] = createLink('/', '🏠', 'Home');
+            linkMap['/library'] = createLink('/library', '📚', 'Library');
+            linkMap['/movies'] = createLink('/movies', '🎥', 'Movies');
+            linkMap['/series'] = createLink('/series', '📺', 'Series');
+            linkMap['/videos'] = createLink('/videos', '📼', 'Videos');
+            linkMap['/shorties'] = createLink('/shorties', '📱', 'Shorties');
+            linkMap['/favorites'] = createLink('/favorites', '❤️', 'Favorites');
+            linkMap['/history'] = createLink('/history', '⏱️', 'History');
+            linkMap['/admin'] = createLink('/admin', '📊', 'Analytics', 'admin-only');
+            linkMap['/explorer'] = createLink('/explorer', '📁', 'Explorer');
+            linkMap['/profile'] = createLink('/profile', '👤', 'Profile');
+
+            const renderGroup = (title, hrefs) => {
+                const group = document.createElement('div');
+                group.className = 'nav-group';
+
+                const titleEl = document.createElement('div');
+                titleEl.className = 'nav-group-title text-xs text-muted';
+                titleEl.style.cssText = 'padding: 16px 16px 8px; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; font-size: 0.75rem;';
+                titleEl.textContent = title;
+                group.appendChild(titleEl);
+
+                hrefs.forEach(href => {
+                    if (linkMap[href]) {
+                        group.appendChild(linkMap[href]);
+                    }
+                });
+                return group;
+            };
+
+            navContainer.innerHTML = '';
+
+            navContainer.appendChild(renderGroup('Discover', ['/', '/movies', '/series', '/videos', '/shorties']));
+            navContainer.appendChild(renderGroup('My Media', ['/library', '/favorites', '/explorer']));
+            navContainer.appendChild(renderGroup('Activity & Analytics', ['/history', '/admin']));
+            navContainer.appendChild(renderGroup('Settings', ['/profile']));
+
+            if (this.els.adminNotifBadge && linkMap['/admin']) {
+                linkMap['/admin'].appendChild(this.els.adminNotifBadge);
+            }
         }
 
         // Hamburger Menu (Mobile)
@@ -358,7 +501,16 @@ class App {
         QRGenerator.generate(currentUrl, container);
 
         copyBtn.onclick = () => {
-            navigator.clipboard.writeText(currentUrl);
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(currentUrl);
+            } else {
+                const el = document.createElement('textarea');
+                el.value = currentUrl;
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+            }
             copyBtn.textContent = 'Copied!';
             setTimeout(() => copyBtn.textContent = 'Copy', 2000);
         };
@@ -403,6 +555,21 @@ class App {
             document.querySelectorAll('.admin-only').forEach(el => el.hidden = !isAdmin);
             if (this.els.topbarUser) this.els.topbarUser.textContent = this.user.username;
             this.updateAdminBadge();
+
+            // Handle NSFW sidebar button visibility and text state
+            const isAdult = this.user.is_adult === true || this.user.is_adult === 1 || isAdmin;
+            if (this.els.btnNsfwToggle) {
+                if (isAdult) {
+                    this.els.btnNsfwToggle.style.display = 'flex';
+                    const isNsfwEnabled = sessionStorage.getItem('r18_enabled') === 'true';
+                    if (this.els.nsfwToggleLabel) {
+                        this.els.nsfwToggleLabel.textContent = isNsfwEnabled ? 'NSFW: On' : 'NSFW: Off';
+                    }
+                    this.els.btnNsfwToggle.classList.toggle('active', isNsfwEnabled);
+                } else {
+                    this.els.btnNsfwToggle.style.display = 'none';
+                }
+            }
         }
 
         this.updateNavActive();

@@ -262,6 +262,7 @@ export class HomeView {
                 const parsed = JSON.parse(cachedData);
                 hero = parsed.hero;
                 rows = parsed.rows;
+                this.rowsOffset = rows.length;
                 console.log('Loading home feed from cache');
             } catch (e) {
                 localStorage.removeItem(cacheKey);

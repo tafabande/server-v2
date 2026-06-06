@@ -77,20 +77,21 @@ goto menu
 cls
 echo [96m[INFO] Initiating Local Server Boot Sequence...[0m
 call :check_env
+call :kill_port
 call :sync_deps
 call :detect_ip
 
 echo.
 echo [92m[INFO] Python  : !PYTHON_EXE![0m
-echo [92m[INFO] Address : http://!LOCAL_IP!:51733  ^|  http://localhost:51733[0m
+echo [92m[INFO] Address : http://!LOCAL_IP!:!PORT!  ^|  http://localhost:!PORT![0m
 echo.
 
 :: Background health-poll — opens browser the instant the API answers 200
 start /b powershell -NoProfile -Command ^
-    "$url='http://localhost:51733/api/system/health';" ^
+    "$url='http://localhost:!PORT!/api/system/health';" ^
     "for($i=0;$i -lt 60;$i++){" ^
     "  try{$r=Invoke-WebRequest -Uri $url -TimeoutSec 2 -UseBasicParsing -EA Stop;" ^
-    "  if($r.StatusCode -eq 200){Start-Process 'http://localhost:51733';break}}" ^
+    "  if($r.StatusCode -eq 200){Start-Process 'http://localhost:!PORT!';break}}" ^
     "  catch{} Start-Sleep 2}"
 
 echo [95m[INFO] Launching Uvicorn (single-process async)...[0m
@@ -98,10 +99,10 @@ echo [90m        (Windows requires single worker; concurrency is handled by asyn
 echo.
 
 :: Use explicit python path — NEVER bare 'python' or 'uvicorn'
-"!PYTHON_EXE!" -m uvicorn main:app --host 0.0.0.0 --port 51733 --log-level info
+"!PYTHON_EXE!" -m uvicorn main:app --host 0.0.0.0 --port !PORT! --log-level info
 
 echo.
-echo [91m[!] Server stopped.[0m
+echo [91m[WARN] Server stopped.[0m
 pause
 goto menu
 
@@ -213,14 +214,16 @@ goto menu
 :start_docker
 cls
 echo [96m[INFO] Booting Containerized MediaHub Stack...[0m
+call :check_env
+call :kill_port
 
 :: Ensure Docker is running
 docker info >nul 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [93m[!] Docker Desktop not running — attempting to start it...[0m
+    echo [93m[WARN] Docker Desktop not running — attempting to start it...[0m
     start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    echo [93m[!] Waiting 20 seconds for Docker to initialise...[0m
-    timeout /t 20 /nobreak >nul
+    echo [93m[WARN] Waiting 20 seconds for Docker to initialise...[0m
+    ping 127.0.0.1 -n 21 >nul
     docker info >nul 2>&1
     if %ERRORLEVEL% neq 0 (
         echo [91m[ERROR] Docker is still not responding. Launch Docker Desktop manually then retry.[0m
@@ -238,10 +241,10 @@ if %ERRORLEVEL% neq 0 (
 
 echo [92m[INFO] Docker containers active. Waiting for API to respond...[0m
 start /b powershell -NoProfile -Command ^
-    "$url='http://localhost:51733/api/system/health';" ^
+    "$url='http://localhost:!PORT!/api/system/health';" ^
     "for($i=0;$i -lt 60;$i++){" ^
     "  try{$r=Invoke-WebRequest -Uri $url -TimeoutSec 2 -UseBasicParsing -EA Stop;" ^
-    "  if($r.StatusCode -eq 200){Start-Process 'http://localhost:51733';break}}" ^
+    "  if($r.StatusCode -eq 200){Start-Process 'http://localhost:!PORT!';break}}" ^
     "  catch{} Start-Sleep 2}"
 
 echo [92m[INFO] Stack is up. Browser will open automatically when ready.[0m
@@ -301,7 +304,7 @@ echo [95m[1/5] Halting local server processes...[0m
 taskkill /F /IM python.exe /T 2>nul
 taskkill /F /IM python3.exe /T 2>nul
 taskkill /F /IM ffmpeg.exe /T 2>nul
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul
 
 echo [95m[2/5] Halting and cleaning Docker volumes...[0m
 docker compose down -v 2>nul
@@ -324,7 +327,7 @@ powershell -NoProfile -Command ^
     "| Remove-Item -Recurse -Force"
 
 echo [92m[5/5] Reset complete — booting fresh server...[0m
-timeout /t 2 /nobreak >nul
+ping 127.0.0.1 -n 3 >nul
 goto start_local
 
 :: ============================================================
@@ -336,7 +339,7 @@ if exist data\logs (
 ) else if exist logs (
     start explorer logs
 ) else (
-    echo [93m[!] No logs folder detected yet — start the server first.[0m
+    echo [93m[WARN] No logs folder detected yet — start the server first.[0m
     pause
 )
 goto menu
@@ -355,12 +358,13 @@ if not exist data\sprites mkdir data\sprites
 :: Copy .env from template if missing
 if not exist .env (
     if exist .env.example (
-        echo [93m[!] .env not found. Creating from .env.example...[0m
+        echo [93m[WARN] .env not found. Creating from .env.example...[0m
         copy .env.example .env >nul
     ) else (
-        echo [91m[!] Neither .env nor .env.example found. Some features may not work.[0m
+        echo [91m[WARN] Neither .env nor .env.example found. Some features may not work.[0m
     )
 )
+call :load_env
 exit /b
 
 :sync_deps
@@ -407,17 +411,73 @@ if exist "%~dp0.venv\Scripts\python.exe" (
 where python >nul 2>&1
 if %ERRORLEVEL%==0 (
     set "PYTHON_EXE=python"
-    echo [93m[!] No venv found — using system Python. Run option 2 to create a venv.[0m
+    echo [93m[WARN] No venv found — using system Python. Run option 2 to create a venv.[0m
     goto :resolve_done
 )
 where py >nul 2>&1
 if %ERRORLEVEL%==0 (
     set "PYTHON_EXE=py"
-    echo [93m[!] No venv found — using py launcher. Run option 2 to create a venv.[0m
+    echo [93m[WARN] No venv found — using py launcher. Run option 2 to create a venv.[0m
     goto :resolve_done
 )
 :: Truly no Python found
 echo [91m[FATAL] Cannot locate any Python interpreter.[0m
 echo        Install Python 3.11+ from https://python.org and ensure it is on PATH.
 :resolve_done
+exit /b
+
+:: ============================================================
+::  Load Environment variables from .env
+:: ============================================================
+:load_env
+if exist .env (
+    for /f "usebackq delims=" %%a in (".env") do (
+        set "line=%%a"
+        :: Strip leading whitespace (if any)
+        for /f "tokens=* delims= " %%b in ("!line!") do set "line=%%b"
+        if not "!line!"=="" (
+            set "firstchar=!line:~0,1!"
+            if not "!firstchar!"=="#" (
+                for /f "tokens=1* delims==" %%c in ("!line!") do (
+                    set "key=%%c"
+                    set "val=%%d"
+                    :: Strip spaces around key
+                    for /f "tokens=* delims= " %%e in ("!key!") do set "key=%%e"
+                    :: Strip spaces around val
+                    for /f "tokens=* delims= " %%f in ("!val!") do set "val=%%f"
+                    :: Strip quotes if any
+                    set "val=!val:"=!"
+                    set "val=!val:'=!"
+                    set "!key!=!val!"
+                )
+            )
+        )
+    )
+)
+if not "!PORT!"=="" set "PORT=!PORT: =!"
+if "!PORT!"=="" set "PORT=51733"
+exit /b
+
+:: ============================================================
+::  Kill any active processes on !PORT!
+:: ============================================================
+:kill_port
+echo [95m[INFO] Checking for active processes on port !PORT!...[0m
+set "PORT_PID="
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr LISTENING ^| findstr /C:":!PORT! "') do (
+    set "PORT_PID=%%a"
+    if not "!PORT_PID!"=="" (
+        echo [93m[WARN] Found process !PORT_PID! using port !PORT!. Terminating...[0m
+        taskkill /F /PID !PORT_PID! >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            echo [92m[SUCCESS] Terminated process !PORT_PID!.[0m
+        ) else (
+            echo [91m[WARNING] Failed to terminate process !PORT_PID!.[0m
+        )
+    )
+)
+if not "!PORT_PID!"=="" (
+    :: Give socket a brief moment to release
+    ping 127.0.0.1 -n 2 >nul
+)
 exit /b
