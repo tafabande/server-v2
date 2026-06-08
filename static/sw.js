@@ -37,10 +37,33 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   
-  // CRITICAL: Bypass service worker cache completely for media streaming endpoints and HLS segment tracks!
+  // Handle network-first fallback strategy for /stream and /sprites JSON API endpoints
   if (
     url.pathname.includes('/api/media/') &&
-    (url.pathname.includes('/stream') || url.pathname.includes('/file') || url.pathname.includes('/preview'))
+    (url.pathname.endsWith('/stream') || url.pathname.endsWith('/sprites'))
+  ) {
+    e.respondWith(
+      fetch(e.request)
+        .then((response) => {
+          if (response.status === 200) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(e.request, copy);
+            });
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(e.request);
+        })
+    );
+    return;
+  }
+
+  // CRITICAL: Bypass service worker cache completely for media files and previews (binary streaming data)
+  if (
+    url.pathname.includes('/api/media/') &&
+    (url.pathname.includes('/file') || url.pathname.includes('/preview') || url.pathname.includes('/hls-secure/'))
   ) {
     return; // Let browser load it natively
   }

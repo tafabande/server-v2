@@ -30,6 +30,8 @@ export class GalleryManager {
 
   setLibrary(groups) {
     this.library = Array.isArray(groups) ? groups : [];
+    this._mediaMap = new Map();
+    flattenLibrary(this.library).forEach(item => this._mediaMap.set(item.id, item));
     this.render();
   }
 
@@ -42,6 +44,7 @@ export class GalleryManager {
     this.library = [];
     this.featured = null;
     this.query = "";
+    if (this._mediaMap) this._mediaMap.clear();
     this.render();
   }
 
@@ -71,17 +74,23 @@ export class GalleryManager {
   }
 
   findMedia(mediaId) {
+    if (this._mediaMap) return this._mediaMap.get(mediaId) || null;
     return flattenLibrary(this.library).find((item) => item.id === mediaId) || null;
   }
 
   ensureFeatured(groups) {
+    // Keep the current featured item if it still exists in the library to avoid jarring search switches
+    if (this.featured && this.findMedia(this.featured.id)) {
+      return;
+    }
+
     const items = flattenLibrary(groups);
     if (!items.length) {
       this.featured = null;
       return;
     }
 
-    this.featured = items.find((item) => this.featured && item.id === this.featured.id) || items[0];
+    this.featured = items[0];
   }
 
   render() {
@@ -174,7 +183,31 @@ export class GalleryManager {
       return;
     }
 
-    const sections = groups.map((group) => {
+    const emptyState = this.root.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+
+    // Map existing cards to reuse DOM nodes (diffing approach)
+    const existingCards = new Map();
+    this.root.querySelectorAll('.media-card').forEach(card => {
+      existingCards.set(card.dataset.mediaId, card);
+    });
+
+    const existingSections = Array.from(this.root.children).filter(el => el.classList.contains('gallery-row'));
+    let sectionIdx = 0;
+
+    for (const group of groups) {
+      let section = existingSections[sectionIdx];
+      if (!section) {
+        section = createElement("section", { className: "gallery-row" });
+        this.root.append(section);
+      }
+
+      let header = section.querySelector('.section-header');
+      if (!header) {
+        header = createElement("div", { className: "section-header compact-header" });
+        section.insertBefore(header, section.firstChild);
+      }
+
       const headerCopy = createElement("div", {
         children: [
           createElement("p", { className: "eyebrow", text: "Collection" }),
@@ -186,28 +219,39 @@ export class GalleryManager {
         className: "collection-count",
         text: `${group.items.length} titles`,
       });
+      replaceChildren(header, [headerCopy, headerCount]);
 
-      const header = createElement("div", {
-        className: "section-header compact-header",
-        children: [headerCopy, headerCount],
-      });
-
-      const track = createElement("div", {
-        className: "gallery-track",
-        attrs: { role: "list" },
-      });
-
-      for (const item of group.items) {
-        track.append(this.buildCard(item));
+      let track = section.querySelector('.gallery-track');
+      if (!track) {
+        track = createElement("div", { className: "gallery-track", attrs: { role: "list" } });
+        section.append(track);
       }
 
-      return createElement("section", {
-        className: "gallery-row",
-        children: [header, track],
-      });
-    });
+      const trackCards = [];
+      for (const item of group.items) {
+        const isFeatured = this.featured && item.id === this.featured.id;
+        const expectedClass = `media-card${isFeatured ? " is-featured" : ""}`;
 
-    replaceChildren(this.root, sections);
+        let card = existingCards.get(String(item.id));
+        if (card) {
+          if (card.className !== expectedClass) {
+            card.className = expectedClass;
+          }
+          existingCards.delete(String(item.id));
+        } else {
+          card = this.buildCard(item);
+        }
+        trackCards.push(card);
+      }
+
+      replaceChildren(track, trackCards);
+      sectionIdx++;
+    }
+
+    // Remove excess unneeded sections
+    while (this.root.children.length > sectionIdx) {
+      this.root.lastChild.remove();
+    }
   }
 
   buildCard(item) {

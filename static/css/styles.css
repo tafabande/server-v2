@@ -3505,3 +3505,249 @@ dialog#player-modal:fullscreen::backdrop {
 .explorer-card:hover {
   box-shadow: inset 0 0 0 1px var(--accent), 0 10px 20px rgba(0, 0, 0, 0.3) !important;
 }
+
+/* ============================================================
+   The TikTok-Style Immersive Shorties Feed
+   ============================================================ */
+
+/* The viewport locks the screen */
+.shorties-viewport {
+    height: 100vh;
+    width: 100%;
+    overflow: hidden;
+    background: #000;
+}
+
+/* The container snaps between video cards */
+.shorties-container {
+    height: 100vh;
+    width: 100%;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.shorties-container::-webkit-scrollbar {
+    display: none;
+}
+
+/* Each card takes full height */
+.shorty-card {
+    height: 100vh;
+    width: 100%;
+    scroll-snap-align: start;
+    position: relative;
+    background: #000;
+}
+
+.shorty-video-wrapper {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.shorty-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Floating Right Action Bar */
+.shorty-overlay-right {
+    position: absolute;
+    right: 12px;
+    bottom: 120px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.shorty-action-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 1.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.shorty-action-btn:active { transform: scale(0.9); }
+.shorty-action-btn.active { color: #ff2a85; }
+
+.shorty-action-label {
+    font-size: 0.7rem;
+    color: #fff;
+    margin-top: 4px;
+    text-shadow: 0 1px 2px #000;
+}
+
+/* Like Heart Animation */
+@keyframes heart-beat {
+    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+    30% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(1.0); opacity: 0; }
+}
+
+.heart-animation {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    font-size: 6rem;
+    pointer-events: none;
+    z-index: 25;
+    animation: heart-beat 0.6s ease-out forwards;
+}
+
+/* Bottom Title Overlay */
+.shorty-overlay-bottom {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    padding: 20px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    color: #fff;
+}
+
+/* Progress Bar */
+.shorty-progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.25);
+    z-index: 30;
+    cursor: pointer;
+    transition: height 0.1s ease;
+}
+
+.shorty-progress-bar:hover {
+    height: 8px;
+}
+
+.shorty-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: #ff2a85;
+    transition: width 0.1s linear;
+}
+
+/* ============================================================
+   Minimalist 4-Digit Keypad Dialog
+   ============================================================ */
+#pin-dialog {
+    border: none;
+    background: transparent;
+    padding: 0;
+}
+
+.pin-card {
+    max-width: 320px;
+    margin: 0 auto;
+    text-align: center;
+    background: rgba(26, 26, 31, 0.9);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 16px;
+    padding: 30px 24px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4) !important;
+}
+
+.pin-display {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin: 24px 0 32px 0;
+}
+
+.pin-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: transparent;
+    transition: all 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.pin-dot.filled {
+    background: var(--accent, #6366f1);
+    border-color: var(--accent, #6366f1);
+    box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+    transform: scale(1.15);
+}
+
+.pin-dot.error {
+    background: var(--error, #ef4444);
+    border-color: var(--error, #ef4444);
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+}
+
+.pin-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    justify-items: center;
+}
+
+.pin-key {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--text, #fff);
+    font-size: 1.5rem;
+    font-weight: 600;
+    font-family: var(--font);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.1s ease;
+    user-select: none;
+}
+
+.pin-key:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.1);
+    transform: scale(1.05);
+}
+
+.pin-key:active {
+    background: var(--accent-dim, rgba(99, 102, 241, 0.2));
+    border-color: var(--accent, #6366f1);
+    transform: scale(0.95);
+}
+
+#pin-btn-clear, #pin-btn-cancel {
+    font-size: 1.2rem;
+    background: transparent;
+    border: none;
+}
+
+#pin-btn-clear:hover, #pin-btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* ============================================================
+   Shorties Cozy Minimalism Focus Mode
+   ============================================================ */
+.shorty-overlay-right,
+.shorty-overlay-bottom {
+    transition: opacity 0.5s ease;
+}
+
+.shorties-container.focus-mode .shorty-overlay-right,
+.shorties-container.focus-mode .shorty-overlay-bottom {
+    opacity: 0.2;
+}

@@ -30,7 +30,7 @@ export class Router {
                       this.routes.find(r => r.path === '*');
 
         if (!route) {
-            this.container.innerHTML = '<div class="empty-state"><p>Page not found</p></div>';
+            this.container.innerHTML = '<div class="empty-state"><h2>Hapana chinhu pano! Doko mo nai yo.</h2><p style="font-size: 0.9rem; opacity: 0.6; margin-top: 8px;">Page not found</p></div>';
             this._transitioning = false;
             return;
         }

@@ -322,3 +322,95 @@ export function escapeHtml(str) {
         }
     });
 }
+
+export function showPinDialog(message = "This content is PG-Locked.") {
+    return new Promise((resolve) => {
+        const dialog = document.getElementById('pin-dialog');
+        if (!dialog) {
+            resolve(null);
+            return;
+        }
+
+        const msgEl = document.getElementById('pin-dialog-message');
+        if (msgEl) msgEl.textContent = message;
+
+        const dots = dialog.querySelectorAll('.pin-dot');
+        let currentPin = "";
+
+        const updateDisplay = () => {
+            dots.forEach((dot, idx) => {
+                if (idx < currentPin.length) {
+                    dot.classList.add('filled');
+                } else {
+                    dot.classList.remove('filled');
+                    dot.classList.remove('error');
+                }
+            });
+        };
+
+        const handleKey = (val) => {
+            if (currentPin.length < 4) {
+                currentPin += val;
+                updateDisplay();
+                
+                if (currentPin.length === 4) {
+                    setTimeout(() => {
+                        cleanup();
+                        dialog.close();
+                        resolve(currentPin);
+                    }, 200);
+                }
+            }
+        };
+
+        const handleClear = () => {
+            if (currentPin.length > 0) {
+                currentPin = currentPin.slice(0, -1);
+                updateDisplay();
+            }
+        };
+
+        const handleCancel = () => {
+            cleanup();
+            dialog.close();
+            resolve(null);
+        };
+
+        // Keypad buttons
+        const keyButtons = dialog.querySelectorAll('.pin-key[data-value]');
+        const onKeyClick = (e) => {
+            handleKey(e.target.dataset.value);
+        };
+        keyButtons.forEach(btn => btn.addEventListener('click', onKeyClick));
+
+        const clearBtn = dialog.querySelector('#pin-btn-clear');
+        if (clearBtn) clearBtn.addEventListener('click', handleClear);
+
+        const cancelBtn = dialog.querySelector('#pin-btn-cancel');
+        if (cancelBtn) cancelBtn.addEventListener('click', handleCancel);
+
+        // Keyboard support
+        const onKeyDown = (e) => {
+            if (e.key >= '0' && e.key <= '9') {
+                handleKey(e.key);
+            } else if (e.key === 'Backspace') {
+                handleClear();
+            } else if (e.key === 'Escape') {
+                handleCancel();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+
+        const cleanup = () => {
+            keyButtons.forEach(btn => btn.removeEventListener('click', onKeyClick));
+            if (clearBtn) clearBtn.removeEventListener('click', handleClear);
+            if (cancelBtn) cancelBtn.removeEventListener('click', handleCancel);
+            window.removeEventListener('keydown', onKeyDown);
+        };
+
+        // Initialize state
+        currentPin = "";
+        updateDisplay();
+        dialog.showModal();
+    });
+}

@@ -371,6 +371,15 @@ export class PlayerManager {
             this.toggleMute();
         });
 
+        // Volume icon keyboard accessibility (Enter/Space)
+        this.volumeIcon?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.toggleMute();
+            }
+        });
+
         // Wheel for volume
         this.modal.addEventListener('wheel', (e) => {
             e.preventDefault();
@@ -893,12 +902,14 @@ export class PlayerManager {
         if (this.queueIndex <= 0) return;
         this.queueIndex--;
         this._loadCurrent();
+        this._showControls();
     }
 
     next() {
         if (this.queueIndex >= this.queue.length - 1) return;
         this.queueIndex++;
         this._loadCurrent();
+        this._showControls();
     }
 
     seek(seconds) {
@@ -1338,16 +1349,20 @@ export class PlayerManager {
 
     _showControls() {
         this.modal.classList.add('controls-visible');
+        this.modal.classList.remove('hide-cursor');
         clearTimeout(this.controlsTimer);
         this.controlsTimer = setTimeout(() => {
             if (!this.video.paused && !this.drawer.classList.contains('open') && !this.queueSheet?.classList.contains('open')) {
                 this.hideControls();
             }
-        }, 5000); // 5-second auto-hide
+        }, 3000); // 3-second auto-hide
     }
 
     hideControls() {
         this.modal.classList.remove('controls-visible');
+        if (!this.video.paused) {
+            this.modal.classList.add('hide-cursor');
+        }
     }
 
     _cleanup() {

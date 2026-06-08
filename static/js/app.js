@@ -10,6 +10,7 @@ import { SocketClient } from './socket-client.js';
 import { PlayerManager } from './player-manager.js';
 import { Router } from './router.js';
 import { themeManager } from './theme-manager.js';
+import { toast, persistNsfwPreference } from './utils.js';
 
 import { HomeView } from './views/home.js';
 import { LibraryView } from './views/library.js';
@@ -147,7 +148,11 @@ class App {
                 this._currentPath = '';
                 localStorage.setItem(`lib_${this._modeKey}_current_path`, '');
                 window.scrollTo(0, 0);
-                this.render();
+                this.render().then(() => {
+                    if (typeof this._loadPath === 'function') {
+                        this._loadPath(this._currentPath);
+                    }
+                });
             }
 
             _renderFilterBar() {
@@ -255,6 +260,7 @@ class App {
         if (this.token) this.initSocket();
 
         // Nav
+        this.checkR18SessionPrompt();
         await this.handleNavigation();
 
         // Hide boot loader
@@ -337,13 +343,11 @@ class App {
                 this.store.set({ r18Enabled: nextNsfw, user });
                 this.updateUI();
 
-                const { toast } = await import('./utils.js');
                 toast(sfwOn ? 'SFW mode on — 18+ hidden' : 'SFW mode off — 18+ visible', 'success');
 
                 await this.handleNavigation();
             } catch (err) {
                 this.els.btnNsfwToggle.checked = !sfwOn;
-                const { toast } = await import('./utils.js');
                 toast(err.message || 'Failed to update content filter', 'error');
             }
         });
@@ -706,12 +710,15 @@ class App {
             dialog.showModal();
         }
 
+        dialog.onclose = () => {
+            this.handleNavigation();
+        };
+
         dialog.querySelector('#r18-no-btn').onclick = () => {
             sessionStorage.setItem('r18_enabled', 'false');
             sessionStorage.setItem('r18_prompted', 'true');
             this.store.set({ r18Enabled: false });
             dialog.close();
-            this.handleNavigation();
         };
 
         dialog.querySelector('#r18-yes-btn').onclick = () => {
@@ -719,7 +726,6 @@ class App {
             sessionStorage.setItem('r18_prompted', 'true');
             this.store.set({ r18Enabled: true });
             dialog.close();
-            this.handleNavigation();
         };
 
         dialog.addEventListener('cancel', (e) => {

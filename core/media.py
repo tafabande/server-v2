@@ -31,6 +31,10 @@ _transcode_events: dict[int, asyncio.Event] = {}
 # Active FFmpeg processes registry for leak safeguards
 _active_processes: dict[int, asyncio.subprocess.Process] = {}
 
+# Concurrency limit for heavy FFmpeg sprite sheet generation
+_sprite_semaphore = asyncio.Semaphore(2)
+
+
 # Scan progress tracking
 _scan_state = {
     "scanning": False,
@@ -378,6 +382,16 @@ def _sprite_meta(path: Path, media_id: int) -> dict:
         "columns": SPRITE_COLUMNS,
         "interval": SPRITE_INTERVAL,
     }
+
+
+async def build_sprite_sheet_queued(source_path: Path, media_id: int, duration: float | None = None) -> dict | None:
+    """
+    Generate a tiled JPEG sprite sheet for hover-preview thumbnails,
+    queued using a Semaphore to limit concurrency.
+    """
+    async with _sprite_semaphore:
+        return await asyncio.to_thread(build_sprite_sheet, source_path, media_id, duration)
+
 
 
 def get_sprite_info(media_id: int) -> dict | None:
@@ -1942,7 +1956,7 @@ async def run_orphan_cleanup_job() -> None:
                     for media in missing_sprites:
                         source = media_source_path(media)
                         logger.info(f"Orphan worker: Generating sprite sheet for '{media.title}' (ID {media.id})")
-                        await asyncio.to_thread(build_sprite_sheet, source, media.id, media.duration_seconds)
+                        await build_sprite_sheet_queued(source, media.id, media.duration_seconds)
                         await asyncio.sleep(2)  # Pause to yield to event loop and prevent CPU spikes
                 else:
                     logger.info("Orphan worker: All active media items have sprite sheets.")

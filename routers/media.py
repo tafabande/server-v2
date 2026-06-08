@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from core.events import broadcast_library_updated
 from core.logging import get_logger
-from core.exceptions import ResourceNotFoundError
+from core.exceptions import AccessDeniedError
 from core.media import (
     apply_media_security_filters,
     build_stream_response, 
@@ -21,7 +21,7 @@ from core.media import (
     log_play_event, 
     media_source_path, 
     scan_media_library,
-    build_sprite_sheet,
+    build_sprite_sheet_queued,
     get_sprite_info,
     detect_intro_for_media,
 )
@@ -797,10 +797,7 @@ async def get_media_detail(
     session: AsyncSession = Depends(get_db),
 ) -> MediaRead:
     """Get single media item metadata."""
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     
     if media.adult_only and not current_user.is_adult:
         from core.exceptions import AccessDeniedError
@@ -832,10 +829,7 @@ async def stream(
     session: AsyncSession = Depends(get_db),
 ) -> StreamResponse:
     from pathlib import Path
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
         
     source = media_source_path(media)
     if not source.exists() or not source.is_file():
@@ -857,10 +851,7 @@ async def stream_file(
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     source = media_source_path(media)
     if media.stream_mode != "direct":
         raise HTTPException(status_code=400, detail="This media must be played through HLS.")
@@ -891,10 +882,7 @@ async def get_thumbnail(
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """Get the poster/thumbnail image for a media item."""
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     from core.media import is_media_accessible
     if not await is_media_accessible(session, media, current_user):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
@@ -950,10 +938,7 @@ async def get_media_preview(
     Only works for direct-stream formats (mp4, webm, m4v).
     Returns 404 for HLS-only formats — the browser silently skips the preview.
     """
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     from core.media import is_media_accessible
     if not await is_media_accessible(session, media, current_user):
         raise HTTPException(status_code=403, detail="Access denied.")
@@ -988,11 +973,7 @@ async def play_event(
     if current_user.role == "guest":
         return MessageResponse(message="Guest session — event not recorded.")
 
-    try:
-        await get_media(session, media_id)
-    except ResourceNotFoundError:
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=404, content={"message": "Media not found. Event ignored."})
+    await get_media(session, media_id)
 
     await log_play_event(
         session,
@@ -1056,9 +1037,6 @@ async def toggle_pg_lock(
 ) -> MessageResponse:
     """Toggle PG Lock (is_locked) status for a media item."""
     media = await get_media(session, media_id)
-    if not media:
-        raise ResourceNotFoundError("Media not found")
-        
     media.is_locked = not media.is_locked
     media.requires_pin = media.is_locked
     await session.commit()
@@ -1083,10 +1061,7 @@ async def rename_media(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Rename a media metadata title."""
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     media.title = payload.title
     await session.commit()
     
@@ -1103,10 +1078,7 @@ async def delete_media(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Permanently delete a media item from the database."""
-    try:
-        media = await get_media(session, media_id, allow_missing=True)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id, allow_missing=True)
     
     source = media_source_path(media)
     if source.exists():
@@ -1138,10 +1110,7 @@ async def get_sprites(
     and returns 202 so the client knows to poll/retry.
     """
     import asyncio
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     info = get_sprite_info(media_id)
     if info:
         return info
@@ -1152,7 +1121,7 @@ async def get_sprites(
         raise HTTPException(status_code=404, detail="Media file not found on disk.")
         
     asyncio.create_task(
-        asyncio.to_thread(build_sprite_sheet, source, media_id, media.duration_seconds)
+        build_sprite_sheet_queued(source, media_id, media.duration_seconds)
     )
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=202, content={"status": "generating"})
@@ -1170,10 +1139,7 @@ async def rate_media(
     """Rate a media item (1-5 stars). Updates existing rating if one exists."""
     from core.models import Rating
     
-    try:
-        await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    await get_media(session, media_id)
     
     existing = await session.execute(
         select(Rating).where(
@@ -1204,10 +1170,7 @@ async def get_media_rating(
     from core.models import Rating
     from core.schemas import MediaRatingResponse
     
-    try:
-        await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    await get_media(session, media_id)
     
     # Average
     avg_result = await session.execute(
@@ -1242,10 +1205,7 @@ async def list_subtitles(
     from core.models import Subtitle
     from core.schemas import SubtitleRead
     
-    try:
-        await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    await get_media(session, media_id)
     result = await session.execute(
         select(Subtitle).where(Subtitle.media_id == media_id).order_by(Subtitle.language)
     )
@@ -1264,10 +1224,7 @@ async def upload_subtitle(
     """Upload a .srt subtitle file or trigger auto-match if no file is provided."""
     from core.models import Subtitle
     
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     source_path = media_source_path(media)
     
     if file is not None:
@@ -1370,10 +1327,7 @@ async def download_media(
     session: AsyncSession = Depends(get_db),
 ) -> FileResponse:
     """Download the raw media file for offline viewing."""
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     
     from pathlib import Path
     await ensure_pin_for_path(session, Path(media.path), pin, current_user=current_user)
@@ -1400,10 +1354,7 @@ async def detect_intro(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Run scene change detection on the media file to find the intro start and end."""
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     source_path = media_source_path(media)
     if not source_path.exists() or not source_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found on disk.")
@@ -1455,10 +1406,7 @@ async def get_media_backdrop(
     from config import get_settings
     settings = get_settings()
     
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     from core.media import is_media_accessible
     if not await is_media_accessible(session, media, current_user):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
@@ -1524,10 +1472,7 @@ async def serve_hls_file(
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     from core.media import is_media_accessible
     if not await is_media_accessible(session, media, current_user):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
@@ -1556,10 +1501,7 @@ async def serve_sprites_file(
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
-    try:
-        media = await get_media(session, media_id)
-    except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+    media = await get_media(session, media_id)
     from core.media import is_media_accessible
     if not await is_media_accessible(session, media, current_user):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")

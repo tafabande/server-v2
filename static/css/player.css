@@ -38,6 +38,12 @@
   background: #000;
 }
 
+/* Auto-hide cursor for immersive viewing */
+.player-modal.hide-cursor,
+.player-modal.hide-cursor * {
+  cursor: none !important;
+}
+
 /* === Bottom Scrim Gradient (for legibility over dark video) === */
 .player-controls-scrim {
   position: absolute;
@@ -91,6 +97,7 @@
   background: rgba(255, 255, 255, 0.2);
   border-radius: 2px;
   cursor: pointer;
+  touch-action: none;
   position: relative;
   transition: height 0.15s ease;
 }
@@ -230,7 +237,8 @@
   transform: scale(0.95);
 }
 
-.player-ctrl-time {
+.player-ctrl-time,
+.player-ctrl-time span {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -238,6 +246,7 @@
   color: rgba(255, 255, 255, 0.5);
   font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
   letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums !important;
 }
 
 .player-ctrl-right {
@@ -650,6 +659,7 @@
   color: #ccc;
   min-width: 45px;
   font-family: monospace;
+  font-variant-numeric: tabular-nums !important;
 }
 
 .transport-track {
@@ -752,6 +762,7 @@
   font-size: 0.72rem;
   font-family: monospace;
   font-weight: 700;
+  font-variant-numeric: tabular-nums !important;
   letter-spacing: 0.5px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -1531,4 +1542,83 @@ dialog::backdrop {
 #confirm-accept:active,
 #rename-save:active {
   transform: translateY(0);
+}
+
+/* ============================================================
+   Wizard's Patch: The Soft-Blend Video Player
+   ============================================================ */
+
+/* 1. Soft-en the Scrim: Make the gradient exit even smoother */
+.player-controls-scrim {
+  /* Extending the height and softening the slope */
+  height: 300px;
+  background: linear-gradient(to top,
+      rgba(0, 0, 0, 0.95) 0%,
+      rgba(0, 0, 0, 0.7) 30%,
+      transparent 100%);
+  transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* 2. Soft-en the Overlay Entrance/Exit */
+.player-overlay {
+  /* Adding a slight blur to the overlay controls themselves */
+  backdrop-filter: blur(2px);
+  transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+/* 3. Soften the Drawer Entry */
+.player-drawer {
+  /* Give the drawer a 'fade-in' effect as it slides up */
+  transition: bottom 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease !important;
+  opacity: 0;
+}
+
+.player-drawer.open {
+  opacity: 1;
+}
+
+/* === Playlist Finished Overlay === */
+.playlist-finished-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 60;
+  /* Above regular controls, below drawer/queue */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+  pointer-events: none;
+}
+
+.playlist-finished-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* 4. Remove Hard Borders entirely for that 'Bleed-in' look */
+.player-drawer,
+.seek-preview,
+.up-next-overlay,
+.player-toast {
+  border: none !important;
+  /* Use a very faint border with high transparency instead of a hard line */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* 5. Softer Cursor Hide */
+.player-modal {
+  /* Smooth cursor exit */
+  cursor: auto;
+  transition: cursor 0.5s ease;
+}
+
+.player-modal.hide-cursor {
+  cursor: none !important;
 }
