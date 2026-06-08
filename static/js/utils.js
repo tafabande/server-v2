@@ -8,21 +8,38 @@ export function toast(message, type = 'info', action = null) {
 
     const el = document.createElement('div');
     el.className = `toast ${type} flex-between gap-md`;
-    
+
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    if (type === 'success') icon.textContent = '✅';
+    else if (type === 'error') icon.textContent = '❌';
+    else if (type === 'warning') icon.textContent = '⚠️';
+    else icon.textContent = 'ℹ️';
+
+    const content = document.createElement('div');
+    content.style.display = 'flex';
+    content.style.alignItems = 'center';
+    content.style.gap = '12px';
+
     const text = document.createElement('span');
     text.textContent = message;
-    el.appendChild(text);
+    text.style.fontWeight = '500';
+
+    content.appendChild(icon);
+    content.appendChild(text);
+
+    el.appendChild(content);
 
     if (action) {
         const btn = document.createElement('button');
-        btn.className = 'btn btn-sm btn-ghost';
-        btn.style.color = 'inherit';
-        btn.style.borderColor = 'currentColor';
-        btn.style.opacity = '0.8';
+        btn.className = 'btn btn-sm btn-accent';
+        btn.style.marginLeft = '12px';
         btn.textContent = action.label;
         btn.addEventListener('click', () => {
             action.onClick();
-            el.remove();
+            el.style.opacity = '0';
+            el.style.transform = 'translateY(10px) scale(0.95)';
+            setTimeout(() => el.remove(), 250);
         });
         el.appendChild(btn);
     }
@@ -33,10 +50,10 @@ export function toast(message, type = 'info', action = null) {
         setTimeout(() => {
             if (!el.parentElement) return;
             el.style.opacity = '0';
-            el.style.transform = 'translateY(10px)';
-            el.style.transition = 'all 0.2s ease';
-            setTimeout(() => el.remove(), 250);
-        }, 3000);
+            el.style.transform = 'translateY(10px) scale(0.95)';
+            el.style.transition = 'all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+            setTimeout(() => el.remove(), 300);
+        }, 3500);
     }
 }
 
@@ -68,19 +85,82 @@ export function formatDateTime(dateStr) {
     return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-export function thumbUrl(media) {
-    if (!media || !media.thumbnail_path) return '/static/placeholder.svg';
-    
-    try {
-        // We decode first to handle cases where the path might already be partially encoded,
-        // then we encode each segment properly. This ensures characters like '#' or '?'
-        // are escaped so they don't truncate the URL or get treated as fragments.
-        const decoded = decodeURIComponent(media.thumbnail_path);
-        return decoded.split('/').map(s => s ? encodeURIComponent(s) : '').join('/');
-    } catch (e) {
-        // If decoding fails (e.g. invalid % sequence), just encode the segments as they are.
-        return media.thumbnail_path.split('/').map(s => s ? encodeURIComponent(s) : '').join('/');
+function withR18Param(url) {
+    if (!url || url.startsWith('/static/')) return url;
+    if (isNsfwEnabled() || url.includes('disable_r18=')) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}disable_r18=true`;
+}
+
+export function thumbUrl(mediaOrId) {
+    if (mediaOrId == null) return '/static/placeholder.svg';
+
+    let url = '/static/placeholder.svg';
+
+    if (typeof mediaOrId === 'number' || (typeof mediaOrId === 'string' && /^\d+$/.test(mediaOrId))) {
+        url = `/api/media/${mediaOrId}/thumbnail`;
+    } else if (typeof mediaOrId === 'object') {
+        if (mediaOrId.thumbnail_path) {
+            try {
+                const decoded = decodeURIComponent(mediaOrId.thumbnail_path);
+                url = decoded.split('/').map(s => s ? encodeURIComponent(s) : '').join('/');
+            } catch {
+                url = mediaOrId.thumbnail_path.split('/').map(s => s ? encodeURIComponent(s) : '').join('/');
+            }
+        } else if (mediaOrId.id != null) {
+            url = `/api/media/${mediaOrId.id}/thumbnail`;
+        }
     }
+
+    return withR18Param(url);
+}
+
+export function homeCacheKey() {
+    return `mediahub_home_cache_${sessionStorage.getItem('r18_enabled') || 'false'}`;
+}
+
+export function clearContentCaches() {
+    const r18 = sessionStorage.getItem('r18_enabled') || 'false';
+    ['true', 'false'].forEach((state) => {
+        localStorage.removeItem(`mediahub_home_cache_${state}`);
+    });
+    localStorage.removeItem('mediahub_home_cache');
+    localStorage.removeItem('mediahub_home_cache_time');
+    localStorage.removeItem(`mediahub_home_cache_${r18}_time`);
+}
+
+export function isNsfwEnabled() {
+    return sessionStorage.getItem('r18_enabled') === 'true';
+}
+
+export function syncNsfwFromUser(user) {
+    if (!user) {
+        sessionStorage.setItem('r18_enabled', 'false');
+        return false;
+    }
+    const isAdult = user.role === 'admin' || user.role === 'super-admin' || user.is_adult === true;
+    if (!isAdult) {
+        sessionStorage.setItem('r18_enabled', 'false');
+        return false;
+    }
+    if (sessionStorage.getItem('r18_enabled') === null) {
+        const enabled = user.preferences?.nsfw === true;
+        sessionStorage.setItem('r18_enabled', enabled ? 'true' : 'false');
+    }
+    return sessionStorage.getItem('r18_enabled') === 'true';
+}
+
+export async function persistNsfwPreference(enabled) {
+    const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+    user.preferences = user.preferences || {};
+    user.preferences.nsfw = enabled;
+    sessionStorage.setItem('r18_enabled', enabled ? 'true' : 'false');
+    localStorage.setItem('mediahub_user', JSON.stringify(user));
+    clearContentCaches();
+
+    const { api } = await import('./app.js');
+    await api.updateProfile({ preferences: user.preferences });
+    return user;
 }
 
 export function confirm(title, message) {
@@ -121,8 +201,8 @@ export function isAdultApproved() {
 }
 
 export async function showAdultAccessDialog() {
-    const { api } = await import('./app.js');
-    
+    const { api, router } = await import('./app.js');
+
     let dialog = document.getElementById('adult-access-dialog');
     if (!dialog) {
         dialog = document.createElement('dialog');
@@ -131,15 +211,15 @@ export async function showAdultAccessDialog() {
         dialog.style.maxWidth = '400px';
         document.body.appendChild(dialog);
     }
-    
+
     dialog.innerHTML = `
-        <div class="dialog-card text-center" style="padding: 24px; position: relative;">
+        <div class="dialog-card text-center" style="position: relative;">
             <div class="spinner" style="margin: 20px auto;"></div>
             <p class="text-muted text-sm">Checking access request status...</p>
         </div>
     `;
     dialog.showModal();
-    
+
     let latestReq = null;
     try {
         const requests = await api.getRequests();
@@ -149,7 +229,7 @@ export async function showAdultAccessDialog() {
     } catch (e) {
         console.error("Failed to load requests", e);
     }
-    
+
     let contentHtml = '';
     if (latestReq) {
         if (latestReq.status === 'pending') {
@@ -174,7 +254,7 @@ export async function showAdultAccessDialog() {
                     <strong>Admin Comment:</strong> "${escapeHtml(latestReq.admin_comment || 'No reason provided.')}"
                 </div>
                 <div class="dialog-actions" style="display: flex; flex-direction: column; gap: 8px;">
-                    <button class="btn btn-accent w-100 request-elevation-btn">🔞 Re-request Elevation</button>
+                    <button class="btn btn-accent w-100 profile-settings-btn">Open Profile Settings</button>
                     <button class="btn btn-ghost w-100 close-dialog">Close</button>
                 </div>
             `;
@@ -195,50 +275,32 @@ export async function showAdultAccessDialog() {
             <div class="status-indicator error" style="font-size: 3rem; margin-bottom: 16px;">🔞</div>
             <h3 style="margin-bottom: 8px;">18+ Content Restricted</h3>
             <p class="text-muted text-sm" style="margin-bottom: 20px;">
-                This folder or video is marked as <strong>R18 / Adult Content</strong>. Your account must be verified as 18+ to access this material.
+                This folder or video is marked as <strong>R18 / Adult Content</strong>. Use Profile settings to request access.
             </p>
             <div class="dialog-actions" style="display: flex; flex-direction: column; gap: 8px;">
-                <button class="btn btn-accent w-100 request-elevation-btn">🔞 Request 18+ Elevation</button>
+                <button class="btn btn-accent w-100 profile-settings-btn">Open Profile Settings</button>
                 <button class="btn btn-ghost w-100 close-dialog">Close</button>
             </div>
         `;
     }
-    
+
     dialog.innerHTML = `
-        <div class="dialog-card text-center" style="padding: 24px; position: relative;">
+        <div class="dialog-card text-center" style="position: relative;">
             <button class="close-dialog" style="position: absolute; top: 12px; right: 12px; border: none; background: transparent; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</button>
             ${contentHtml}
         </div>
     `;
-    
+
     const closeBtns = dialog.querySelectorAll('.close-dialog');
     closeBtns.forEach(btn => btn.addEventListener('click', () => dialog.close()));
-    
-    const requestBtn = dialog.querySelector('.request-elevation-btn');
-    if (requestBtn) {
-        requestBtn.addEventListener('click', async () => {
-            try {
-                dialog.innerHTML = `
-                    <div class="dialog-card text-center" style="padding: 24px;">
-                        <div class="spinner" style="margin: 20px auto;"></div>
-                        <p class="text-muted text-sm">Submitting elevation request...</p>
-                    </div>
-                `;
-                await api.submitRequest('adult_elevation');
-                toast('Elevation request submitted successfully', 'success');
-                dialog.close();
-                
-                const currentPath = window.location.pathname;
-                if (currentPath === '/profile' || currentPath === '/explorer' || currentPath === '/library') {
-                    window.location.reload();
-                }
-            } catch (e) {
-                toast(e.message, 'error');
-                dialog.close();
-            }
+
+    dialog.querySelectorAll('.profile-settings-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            dialog.close();
+            router.navigate('/profile');
         });
-    }
-    
+    });
+
     const reloadBtn = dialog.querySelector('.reload-btn');
     if (reloadBtn) {
         reloadBtn.addEventListener('click', () => {
@@ -260,4 +322,3 @@ export function escapeHtml(str) {
         }
     });
 }
-

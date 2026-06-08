@@ -54,7 +54,7 @@ class DiscoveryService:
             logger.info(f"Registering mDNS service: mediahub.local on {local_ip}:{self.port}")
             self.zeroconf.register_service(self.service_info)
         except Exception as e:
-            logger.error(f"Failed to start mDNS discovery: {e}")
+            logger.error("Failed to start mDNS discovery", exc_info=True)
 
     def stop(self):
         try:

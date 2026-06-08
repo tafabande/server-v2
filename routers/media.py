@@ -91,6 +91,11 @@ async def library(
                 MediaMetadata.duration_seconds <= 2400,
                 or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
             ))
+        elif t == "movies_series":
+            stmt = stmt.where(and_(
+                MediaMetadata.duration_seconds > 900,
+                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+            ))
         elif t == "videos" or t == "normal":
             stmt = stmt.where(and_(
                 MediaMetadata.duration_seconds >= 60,
@@ -1567,3 +1572,69 @@ async def serve_sprites_file(
         
     headers = {"Cache-Control": "public, max-age=3600"}
     return FileResponse(file_path, headers=headers)
+
+
+# ── Playlists ─────────────────────────────────────────────────────────────────
+
+from core.models import Playlist, PlaylistItem
+from core.schemas import PlaylistRead, PlaylistCreate, PlaylistItemAdd
+
+@router.get("/playlists", response_model=list[PlaylistRead])
+async def get_playlists(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Get all playlists owned by the current user."""
+    stmt = select(Playlist).where(Playlist.owner_user_id == current_user.id).order_by(Playlist.title)
+    result = await session.execute(stmt)
+    playlists = result.scalars().all()
+    
+    for pl in playlists:
+        count_stmt = select(func.count()).select_from(PlaylistItem).where(PlaylistItem.playlist_id == pl.id)
+        pl.item_count = (await session.execute(count_stmt)).scalar() or 0
+        pl.owner_username = current_user.username
+        
+    return playlists
+
+@router.post("/playlists", response_model=PlaylistRead)
+async def create_playlist(
+    payload: PlaylistCreate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Create a new personal playlist."""
+    pl = Playlist(owner_user_id=current_user.id, title=payload.title, description=payload.description)
+    session.add(pl)
+    await session.commit()
+    await session.refresh(pl)
+    pl.item_count = 0
+    pl.owner_username = current_user.username
+    return pl
+
+@router.post("/playlists/{playlist_id}/items", response_model=MessageResponse)
+async def add_playlist_item(
+    playlist_id: int,
+    payload: PlaylistItemAdd,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """Add a media item to an existing playlist."""
+    pl = await session.get(Playlist, playlist_id)
+    if not pl or pl.owner_user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+        
+    media = await get_media(session, payload.media_id)
+    
+    stmt = select(PlaylistItem).where(PlaylistItem.playlist_id == playlist_id, PlaylistItem.media_id == payload.media_id)
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing:
+        return MessageResponse(message="Item is already in this playlist.")
+        
+    pos_stmt = select(func.max(PlaylistItem.position)).where(PlaylistItem.playlist_id == playlist_id)
+    max_pos = (await session.execute(pos_stmt)).scalar() or 0
+    
+    item = PlaylistItem(playlist_id=playlist_id, media_id=payload.media_id, position=max_pos + 1)
+    session.add(item)
+    await session.commit()
+    
+    return MessageResponse(message="Media added to playlist.")

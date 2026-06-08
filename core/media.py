@@ -825,15 +825,32 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                 continue
 
             # 3. Healthy file: do normal metadata probing and thumbnail generation
-            probe = await asyncio.to_thread(probe_media, target_path)
-            duration = probe.get("duration_seconds")
-            thumbnail, was_repaired = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title, duration)
+            try:
+                probe = await asyncio.to_thread(probe_media, target_path)
+                duration = probe.get("duration_seconds")
+            except Exception as e:
+                logger.error(f"Error probing metadata for {virtual_rel}: {e}")
+                probe = {}
+                duration = None
+
+            try:
+                thumbnail, was_repaired = await asyncio.to_thread(build_thumbnail, target_path, virtual_rel, title, duration)
+            except Exception as e:
+                logger.error(f"Error generating thumbnail for {virtual_rel}: {e}")
+                dest = thumbnail_path_for(virtual_rel)
+                write_placeholder_thumbnail(dest, title)
+                thumbnail = f"/thumbs/{dest.name}"
+                was_repaired = False
+
             if was_repaired:
                 logger.info(f"Re-probing repaired file: {target_path}")
-                probe = await asyncio.to_thread(probe_media, target_path)
                 try:
-                    stat = target_path.stat()
-                except OSError:
+                    probe = await asyncio.to_thread(probe_media, target_path)
+                    try:
+                        stat = target_path.stat()
+                    except OSError:
+                        pass
+                except Exception:
                     pass
             elif thumbnail.endswith(".svg"):
                 logger.error(f"Thumbnail generation failed completely for {virtual_rel}. Marking as corrupted.")
@@ -1700,32 +1717,10 @@ async def is_media_accessible(
     media: MediaMetadata,
     current_user: User,
 ) -> bool:
-    # 1. R18 / Adult check
-    nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
-    if media.adult_only and ((not current_user.is_adult) or (not nsfw_enabled)):
-        return False
-        
-    # 2. Locked Content check
-    if media.requires_pin and current_user.role not in ("admin", "super-admin"):
-        from sqlalchemy import exists, and_, or_
-        from core.models import FolderPermission
-        
-        perm_exists = exists().where(
-            and_(
-                FolderPermission.user_id == current_user.id,
-                FolderPermission.can_view == True,
-                or_(
-                    func.lower(MediaMetadata.relative_path) == func.lower(FolderPermission.folder_path),
-                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderPermission.folder_path) + "/%")
-                )
-            )
-        )
-        stmt = select(1).where(MediaMetadata.id == media.id).where(perm_exists)
-        has_perm = (await session.execute(stmt)).scalar() is not None
-        if not has_perm:
-            return False
-            
-    return True
+    """Use the same filters as library/home queries so thumbnails match visible items."""
+    stmt = select(MediaMetadata.id).where(MediaMetadata.id == media.id)
+    stmt = await apply_media_security_filters(session, stmt, current_user)
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
 async def get_smart_home_data(session: AsyncSession, current_user: User) -> dict:

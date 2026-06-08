@@ -14,10 +14,10 @@ import { themeManager } from './theme-manager.js';
 import { HomeView } from './views/home.js';
 import { LibraryView } from './views/library.js';
 import { AdminView } from './views/admin.js';
-import { ExplorerView } from './views/explorer.js';
 import { HistoryView } from './views/history.js';
 import { ProfileView } from './views/profile.js';
 import { LoginView } from './views/login.js';
+import { UploadView } from './views/upload.js';
 import { FavoritesView } from './views/favorites.js';
 import { ShortiesView } from './views/shorties.js';
 
@@ -83,38 +83,50 @@ class App {
             this.logout();
         });
 
-        const makeLibView = (fmt) => class extends LibraryView {
+        const makeLibView = (fmt, options = {}) => class extends LibraryView {
             constructor(c) {
                 super(c);
                 this._fixedFormat = fmt;
-                this._isFolderView = localStorage.getItem(`lib_${this._fixedFormat}_is_folder`) === 'true';
-                this._currentPath = localStorage.getItem(`lib_${this._fixedFormat}_current_path`) || "";
-                
-                if (this._fixedFormat === 'videos') {
-                    this._isFolderView = false;
+                this._modeKey = options.storageKey || fmt;
+                this._titleOverride = options.title || (fmt === 'movies_series' ? 'Movies' : null);
+                this._currentPath = options.forceInitialFilter
+                    ? ''
+                    : (localStorage.getItem(`lib_${this._modeKey}_current_path`) || "");
+                this._movieFilter = options.forceInitialFilter
+                    ? (options.initialFilter || 'all')
+                    : (localStorage.getItem(`lib_${this._modeKey}_filter`) || options.initialFilter || 'all');
+                if (options.forceInitialFilter) {
+                    localStorage.setItem(`lib_${this._modeKey}_filter`, this._movieFilter);
+                    localStorage.setItem(`lib_${this._modeKey}_current_path`, '');
                 }
+                this.hlsJsPlayer = player.hlsJsPlayer; // Expose hls.js for future direct control
             }
 
-            async _loadFolders() {
-                const path = this._currentPath || '';
-                return api.request("/api/media/folders", { query: { path: String(path), type: this._fixedFormat } });
+            _mediaType() {
+                if (this._fixedFormat !== 'movies_series') {
+                    return this._fixedFormat;
+                }
+                return this._movieFilter === 'all' ? 'movies_series' : this._movieFilter;
+            }
+
+            async render() {
+                await super.render();
+                if (this._fixedFormat === 'movies_series') {
+                    this._renderFilterBar();
+                }
             }
 
             async _loadPath(path) {
                 this._currentPath = path;
-                localStorage.setItem(`lib_${this._fixedFormat}_current_path`, path);
+                localStorage.setItem(`lib_${this._modeKey}_current_path`, path);
                 this._renderBreadcrumbs();
-                
+
                 try {
-                    if (this._isFolderView) {
-                        const res = await this._loadFolders();
-                        this._folders = res.folders || [];
-                        this._items = res.items || [];
-                    } else {
-                        const res = await api.getVideosByType({ type: this._fixedFormat, per_page: 1000 });
-                        this._folders = [];
-                        this._items = res.items || [];
-                    }
+                    const res = await api.request("/api/media/folders", {
+                        query: { path: String(path), type: this._mediaType() }
+                    });
+                    this._folders = res.folders || [];
+                    this._items = res.items || [];
                     this._renderContent();
                 } catch (err) {
                     const target = document.getElementById('lib-content');
@@ -129,52 +141,63 @@ class App {
                 }
             }
 
-            _renderBreadcrumbs() {
-                const bc = document.getElementById('lib-breadcrumbs');
-                if (!bc) return;
-                if (!this._isFolderView) {
-                    bc.style.display = 'none';
-                } else {
-                    bc.style.display = 'flex';
-                    super._renderBreadcrumbs();
-                }
+            _setMovieFilter(filter) {
+                this._movieFilter = filter;
+                localStorage.setItem(`lib_${this._modeKey}_filter`, filter);
+                this._currentPath = '';
+                localStorage.setItem(`lib_${this._modeKey}_current_path`, '');
+                window.scrollTo(0, 0);
+                this.render();
             }
 
-            _renderTabs() {
-                const t = document.getElementById('lib-format-tabs');
-                if (t) {
-                    if (this._fixedFormat === 'movies' || this._fixedFormat === 'series') {
-                        t.style.display = 'flex';
-                        t.innerHTML = `
-                            <button class="tab ${!this._isFolderView ? 'active' : ''}" data-mode="list">List All</button>
-                            <button class="tab ${this._isFolderView ? 'active' : ''}" data-mode="folder">Folder View</button>
-                        `;
-                        t.querySelectorAll('.tab').forEach(btn => {
-                            btn.addEventListener('click', (e) => {
-                                const mode = e.target.dataset.mode;
-                                this._isFolderView = mode === 'folder';
-                                localStorage.setItem(`lib_${this._fixedFormat}_is_folder`, this._isFolderView);
-                                this._currentPath = '';
-                                this.render();
-                            });
-                        });
-                    } else {
-                        t.style.display = 'none';
-                    }
+            _renderFilterBar() {
+                const header = this.container.querySelector('.view-header');
+                if (!header) return;
+
+                let bar = this.container.querySelector('#movies-filter-bar');
+                if (!bar) {
+                    bar = document.createElement('div');
+                    bar.id = 'movies-filter-bar';
+                    header.insertAdjacentElement('afterend', bar);
                 }
+
+                bar.className = 'movie-filter-bar surface mb-md';
+                bar.innerHTML = `
+                    <div class="movie-filter-bar-head">
+                        <div>
+                            <div class="section-title" style="margin-bottom:4px;">Category</div>
+                            <div class="text-muted text-xs">Series is filtered inside Movies instead of living on its own tab.</div>
+                        </div>
+                        <div class="tabs movie-filter-tabs">
+                            <button class="tab ${this._movieFilter === 'all' ? 'active' : ''}" data-movie-filter="all">All</button>
+                            <button class="tab ${this._movieFilter === 'movies' ? 'active' : ''}" data-movie-filter="movies">Movies</button>
+                            <button class="tab ${this._movieFilter === 'series' ? 'active' : ''}" data-movie-filter="series">Series</button>
+                        </div>
+                    </div>
+                `;
+
+                bar.querySelectorAll('[data-movie-filter]').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const filter = e.currentTarget.dataset.movieFilter;
+                        if (filter && filter !== this._movieFilter) {
+                            this._setMovieFilter(filter);
+                        }
+                    });
+                });
             }
         };
 
         const routes = [
             { path: '/', view: async () => HomeView, requiresAuth: true },
-            { path: '/library', view: async () => LibraryView, requiresAuth: true },
             { path: '/favorites', view: async () => FavoritesView, requiresAuth: true },
             { path: '/shorties', view: async () => ShortiesView, requiresAuth: true },
-            { path: '/movies', view: async () => makeLibView('movies'), requiresAuth: true },
-            { path: '/series', view: async () => makeLibView('series'), requiresAuth: true },
-            { path: '/videos', view: async () => makeLibView('videos'), requiresAuth: true },
-            { path: '/explorer', view: async () => ExplorerView, requiresAuth: true },
+            { path: '/movies', view: async () => makeLibView('movies_series', { title: 'Movies', initialFilter: 'all' }), requiresAuth: true },
+            { path: '/series', view: async () => makeLibView('movies_series', { title: 'Movies', initialFilter: 'series', forceInitialFilter: true }), requiresAuth: true },
+            { path: '/videos', view: async () => makeLibView('videos', { title: 'Videos' }), requiresAuth: true },
+            { path: '/library', view: async () => LibraryView, requiresAuth: true }, // General Library view
             { path: '/history', view: async () => HistoryView, requiresAuth: true },
+            { path: '/upload', view: async () => UploadView, requiresAuth: true },
+            { path: '/explorer', view: async () => UploadView, requiresAuth: true },
             { path: '/admin', view: async () => AdminView, requiresAuth: true },
             { path: '/profile', view: async () => ProfileView, requiresAuth: true },
             { path: '/login', view: async () => LoginView, requiresAuth: false },
@@ -234,9 +257,6 @@ class App {
         // Nav
         await this.handleNavigation();
 
-        // Check for R18 confirmation prompt if logged in (deferred to avoid view transition race conditions)
-        this.checkR18SessionPrompt();
-
         // Hide boot loader
         const loader = document.getElementById('boot-loader');
         if (loader) loader.style.display = 'none';
@@ -252,10 +272,10 @@ class App {
             // Ctrl+K or '/' → search focus
             if (((e.ctrlKey || e.metaKey) && e.key === 'k') || (e.key === '/' && !isInput)) {
                 e.preventDefault();
-                const globalSearch = document.getElementById('global-search-input');
-                if (globalSearch) {
-                    globalSearch.focus();
-                    globalSearch.select();
+                const searchInput = document.getElementById('home-search') || document.getElementById('lib-search');
+                if (searchInput) {
+                    searchInput.focus();
+                    searchInput.select();
                 }
             }
 
@@ -308,29 +328,23 @@ class App {
         // Share QR
         this.els.btnShareQr?.addEventListener('click', () => this._showShareQR());
 
-        // NSFW Toggle Click Event
-        this.els.btnNsfwToggle?.addEventListener('click', async () => {
-            const currentR18 = sessionStorage.getItem('r18_enabled') === 'true';
-            const nextR18 = !currentR18;
+        // SFW mode toggle (on = hide 18+ content)
+        this.els.btnNsfwToggle?.addEventListener('change', async () => {
+            const sfwOn = this.els.btnNsfwToggle.checked;
+            const nextNsfw = !sfwOn;
             try {
-                const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
-                user.preferences = user.preferences || {};
-                user.preferences.nsfw = nextR18;
-
-                await this.api.updateProfile({ preferences: user.preferences });
-                localStorage.setItem('mediahub_user', JSON.stringify(user));
-                sessionStorage.setItem('r18_enabled', nextR18 ? 'true' : 'false');
-                this.store.set({ r18Enabled: nextR18, user });
-
+                const user = await persistNsfwPreference(nextNsfw);
+                this.store.set({ r18Enabled: nextNsfw, user });
                 this.updateUI();
 
                 const { toast } = await import('./utils.js');
-                toast(nextR18 ? 'NSFW Content Enabled' : 'NSFW Content Disabled', 'success');
+                toast(sfwOn ? 'SFW mode on — 18+ hidden' : 'SFW mode off — 18+ visible', 'success');
 
                 await this.handleNavigation();
             } catch (err) {
+                this.els.btnNsfwToggle.checked = !sfwOn;
                 const { toast } = await import('./utils.js');
-                toast(err.message || 'Failed to toggle NSFW', 'error');
+                toast(err.message || 'Failed to update content filter', 'error');
             }
         });
 
@@ -367,13 +381,12 @@ class App {
             linkMap['/'] = createLink('/', '🏠', 'Home');
             linkMap['/library'] = createLink('/library', '📚', 'Library');
             linkMap['/movies'] = createLink('/movies', '🎥', 'Movies');
-            linkMap['/series'] = createLink('/series', '📺', 'Series');
             linkMap['/videos'] = createLink('/videos', '📼', 'Videos');
             linkMap['/shorties'] = createLink('/shorties', '📱', 'Shorties');
             linkMap['/favorites'] = createLink('/favorites', '❤️', 'Favorites');
             linkMap['/history'] = createLink('/history', '⏱️', 'History');
+            linkMap['/upload'] = createLink('/upload', '📤', 'Upload');
             linkMap['/admin'] = createLink('/admin', '📊', 'Analytics', 'admin-only');
-            linkMap['/explorer'] = createLink('/explorer', '📁', 'Explorer');
             linkMap['/profile'] = createLink('/profile', '👤', 'Profile');
 
             const renderGroup = (title, hrefs) => {
@@ -387,7 +400,12 @@ class App {
                 group.appendChild(titleEl);
 
                 hrefs.forEach(href => {
-                    if (linkMap[href]) {
+                    if (href === 'nsfw-toggle') {
+                        const wrap = document.getElementById('nsfw-toggle-wrap');
+                        if (wrap) {
+                            group.appendChild(wrap);
+                        }
+                    } else if (linkMap[href]) {
                         group.appendChild(linkMap[href]);
                     }
                 });
@@ -396,8 +414,8 @@ class App {
 
             navContainer.innerHTML = '';
 
-            navContainer.appendChild(renderGroup('Discover', ['/', '/movies', '/series', '/videos', '/shorties']));
-            navContainer.appendChild(renderGroup('My Media', ['/library', '/favorites', '/explorer']));
+            navContainer.appendChild(renderGroup('Discover', ['/', 'nsfw-toggle', '/movies', '/videos', '/shorties']));
+            navContainer.appendChild(renderGroup('My Media', ['/library', '/favorites', '/upload']));
             navContainer.appendChild(renderGroup('Activity & Analytics', ['/history', '/admin']));
             navContainer.appendChild(renderGroup('Settings', ['/profile']));
 
@@ -583,10 +601,10 @@ class App {
 
         // Update Dynamic Title
         const titleMap = {
-            '/': 'Watch', '/library': 'Library', '/explorer': 'Uploads', '/admin': 'Insights', '/history': 'History', '/profile': 'Profile',
-            '/movies': 'Movies', '/series': 'Series', '/videos': 'Videos', '/shorties': 'Shorties'
+            '/': 'Watch', '/library': 'Library', '/upload': 'Upload', '/explorer': 'Upload', '/admin': 'Insights', '/history': 'History', '/profile': 'Profile',
+            '/movies': 'Movies', '/series': 'Movies', '/videos': 'Videos', '/shorties': 'Shorties'
         };
-        if (this.els.pageTitle) {
+        if (this.els.pageTitle) { // The title for /upload will be handled by UploadView
             this.els.pageTitle.textContent = titleMap[path] || 'Watch';
         }
     }
@@ -671,7 +689,7 @@ class App {
         }
 
         dialog.innerHTML = `
-            <div class="dialog-card text-center" style="padding: 32px 24px; position: relative; background: rgba(15, 10, 15, 0.95); border: 1px solid rgba(244, 63, 94, 0.25); box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(244, 63, 94, 0.15);">
+            <div class="dialog-card text-center" style="position: relative;">
                 <div class="status-indicator warning" style="font-size: 3.5rem; margin-bottom: 20px; filter: drop-shadow(0 0 10px rgba(244, 63, 94, 0.4));">🔞</div>
                 <h3 style="margin-bottom: 12px; font-family: 'Outfit', 'Inter', sans-serif; font-weight: 800; letter-spacing: -0.5px; color: #fff; background: linear-gradient(135deg, #fff 0%, #f43f5e 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Session Security</h3>
                 <p class="text-muted text-sm" style="margin-bottom: 24px; color: #ccc; line-height: 1.6; font-size: 0.95rem;">

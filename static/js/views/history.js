@@ -43,9 +43,15 @@ export class HistoryView {
                         <tbody>${items.map(item => {
                 const pct = item.media.duration_seconds ?
                     Math.round((item.last_position_seconds / item.media.duration_seconds) * 100) : 0;
+                const thumbSrc = item.media.id ? `/api/media/${item.media.id}/thumbnail` : '/static/placeholder.svg';
                 return `
                                 <tr class="history-row" data-media='${JSON.stringify(item.media).replace(/'/g, "&#39;")}' style="cursor:pointer">
-                                    <td><strong>${item.media.title}</strong></td>
+                                    <td>
+                                        <div style="display:flex;align-items:center;gap:12px">
+                                            <img src="${thumbSrc}" class="history-thumb" onerror="this.src='/static/placeholder.svg'">
+                                            <strong>${item.media.title}</strong>
+                                        </div>
+                                    </td>
                                     <td>
                                         <div class="flex gap-sm" style="align-items:center">
                                             <div class="progress" style="width:80px">
@@ -56,7 +62,7 @@ export class HistoryView {
                                     </td>
                                     <td class="text-muted">${formatDateTime(item.updated_at)}</td>
                                     <td>${item.completed ?
-                        '<span class="badge badge-success">Completed</span>' :
+                        '<span class="badge badge-success">Done</span>' :
                         `<span class="badge badge-accent">${formatDuration(item.last_position_seconds)}</span>`
                     }</td>
                                 </tr>

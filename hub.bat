@@ -143,6 +143,8 @@ echo                 scanned = status.get("files_scanned", 0) >> temp_scan.py
 echo                 pct = status.get("progress_percent", 0) >> temp_scan.py
 echo                 if total == 0: >> temp_scan.py
 echo                     sys.stdout.write('\r\033[96m    [SCAN]\033[0m Discovering files in library...' + ' '*20) >> temp_scan.py
+echo                 elif pct == 100 and status.get("scanning"): >> temp_scan.py
+echo                     sys.stdout.write('\r\033[96m    [SCAN]\033[0m Classifying and sorting media categories...' + ' '*10) >> temp_scan.py
 echo                 else: >> temp_scan.py
 echo                     bar_len = 40 >> temp_scan.py
 echo                     filled = int(bar_len * pct / 100) >> temp_scan.py

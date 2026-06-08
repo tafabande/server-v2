@@ -137,6 +137,18 @@ export class PlayerManager {
         this.volumeSlider = document.getElementById('volume-slider');
         this.volumeIcon = document.getElementById('volume-icon');
         this.transportBuffer = document.getElementById('transport-buffer');
+
+        // Dynamically inject playlist option into the settings drawer
+        if (this.mainMenu && !document.getElementById('item-playlist')) {
+            const renameItem = this.mainMenu.querySelector('#item-rename');
+            if (renameItem) {
+                const playlistItem = document.createElement('div');
+                playlistItem.className = 'drawer-item';
+                playlistItem.id = 'item-playlist';
+                playlistItem.innerHTML = `<div class="drawer-icon">📂</div><div class="drawer-label">Save to Playlist</div>`;
+                renameItem.parentNode.insertBefore(playlistItem, renameItem);
+            }
+        }
     }
 
     _bindEvents() {
@@ -298,6 +310,10 @@ export class PlayerManager {
                 if (item.id === 'item-rename') {
                     this.toggleDrawer(false);
                     this._onRenameClick();
+                }
+                if (item.id === 'item-playlist') {
+                    this.toggleDrawer(false);
+                    this._onPlaylistClick();
                 }
                 if (item.id === 'item-delete') {
                     this.toggleDrawer(false);
@@ -508,6 +524,81 @@ export class PlayerManager {
         }
     }
 
+    async _onPlaylistClick() {
+        if (!this.currentMedia) return;
+        const mediaId = this.currentMedia.id;
+
+        let playlists = [];
+        try {
+            playlists = await api.request('/api/media/playlists');
+        } catch (e) {
+            toast('Failed to load playlists', 'error');
+            return;
+        }
+
+        let dialog = document.getElementById('player-playlist-dialog');
+        if (!dialog) {
+            dialog = document.createElement('dialog');
+            dialog.id = 'player-playlist-dialog';
+            dialog.className = 'glass-modal';
+            dialog.style.maxWidth = '400px';
+            dialog.style.padding = '0';
+            dialog.style.border = 'none';
+            dialog.style.background = 'transparent';
+            document.body.appendChild(dialog);
+        }
+
+        const listHtml = playlists.length > 0 ? playlists.map(p => `
+            <div class="playlist-option" data-id="${p.id}" style="padding: 14px 16px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; margin-bottom: 8px; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: background 0.2s ease;">
+                <span style="font-weight: 600; font-size: 0.95rem; color: #fff;">${escapeHtml(p.title)}</span>
+                <span style="font-size: 0.75rem; color: #888;">${p.item_count} items</span>
+            </div>
+        `).join('') : '<p class="text-muted text-sm">No playlists found. Create one above.</p>';
+
+        dialog.innerHTML = `
+            <div class="dialog-card text-center" style="position: relative;">
+                <style>.playlist-option:hover { background: rgba(255,255,255,0.12) !important; }</style>
+                <h3 style="margin-bottom: 16px; font-size: 1.35rem; color: #fff;">Save to Playlist</h3>
+                <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+                    <input type="text" id="new-playlist-name" placeholder="Create new playlist..." class="form-control" style="flex: 1; padding: 12px 16px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; box-sizing: border-box; outline: none;" />
+                    <button class="btn btn-accent" id="btn-create-playlist" style="padding: 0 20px; border-radius: 10px; font-weight: 700; white-space: nowrap; border: none;">Add</button>
+                </div>
+                <div style="max-height: 220px; overflow-y: auto; padding-right: 4px;" id="existing-playlists">
+                    ${listHtml}
+                </div>
+                <div class="dialog-actions" style="margin-top: 24px;">
+                    <button class="btn btn-ghost w-100" id="playlist-cancel" style="padding: 12px; border-radius: 10px;">Close</button>
+                </div>
+            </div>
+        `;
+
+        dialog.showModal();
+
+        dialog.querySelector('#playlist-cancel').onclick = () => dialog.close();
+
+        dialog.querySelectorAll('.playlist-option').forEach(el => {
+            el.onclick = async () => {
+                const pid = el.dataset.id;
+                try {
+                    await api.request(\`/api/media/playlists/\${pid}/items\`, { method: 'POST', body: JSON.stringify({ media_id: mediaId }) });
+                    toast('Saved to playlist', 'success');
+                    dialog.close();
+                } catch(e) { toast('Failed to save to playlist', 'error'); }
+            };
+        });
+        
+        dialog.querySelector('#btn-create-playlist').onclick = async () => {
+            const name = dialog.querySelector('#new-playlist-name').value.trim();
+            if (!name) return;
+            try {
+                const newPl = await api.request('/api/media/playlists', { method: 'POST', body: JSON.stringify({ title: name, description: "" }) });
+                await api.request(\`/api/media/playlists/\${newPl.id}/items\`, { method: 'POST', body: JSON.stringify({ media_id: mediaId }) });
+                toast(\`Saved to new playlist '\${name}'\`, 'success');
+                dialog.close();
+            } catch(e) { toast('Failed to create playlist', 'error'); }
+        };
+    }
+
     _handleDoubleTap(zone) {
         if (zone === 'middle') {
             this.toggleFullscreen();
@@ -554,7 +645,7 @@ export class PlayerManager {
         if (type === 'play-pause') {
             const el = document.getElementById('play-pause-feedback');
             const icon = el.querySelector('i');
-            icon.className = `v-icon icon-${this.video.paused ? 'pause' : 'play'}`;
+            icon.className = `v - icon icon - ${ this.video.paused ? 'pause' : 'play' }`;
             el.classList.remove('animate');
             void el.offsetWidth; // trigger reflow
             el.classList.add('animate');
@@ -775,7 +866,7 @@ export class PlayerManager {
                 this.hls = null;
             }
             // Force direct mode in backend or just use file endpoint if available
-            const directUrl = `/api/media/${this.currentMedia.id}/file`;
+            const directUrl = `/ api / media / ${ this.currentMedia.id } / file`;
             this.video.src = directUrl;
             this._startPlayback();
         } catch (e) {
@@ -868,7 +959,7 @@ export class PlayerManager {
 
         this.queue.forEach((media, index) => {
             const item = document.createElement('div');
-            item.className = `queue-item ${index === this.queueIndex ? 'active' : ''}`;
+            item.className = `queue - item ${ index === this.queueIndex ? 'active' : ''}`;
 
             const indexSpan = document.createElement('span');
             indexSpan.className = 'queue-item-index';
@@ -1010,7 +1101,7 @@ export class PlayerManager {
 
     setPlaybackSpeed(rate) {
         this.video.playbackRate = rate;
-        this.valSpeed.textContent = `${rate}x`;
+        this.valSpeed.textContent = `${ rate } x`;
         this.speedMenu.querySelectorAll('.drawer-option').forEach(opt => {
             opt.classList.toggle('selected', parseFloat(opt.dataset.speed) === rate);
         });
@@ -1032,7 +1123,7 @@ export class PlayerManager {
         }
 
         if (!silent) {
-            this.showToast(vol === 0 ? 'Muted' : `Volume: ${Math.round(vol * 100)}%`);
+            this.showToast(vol === 0 ? 'Muted' : `Volume: ${ Math.round(vol * 100) }% `);
         }
     }
 
@@ -1141,7 +1232,7 @@ export class PlayerManager {
 
         if (duration > 0) {
             const pct = (currentTime / duration) * 100;
-            if (this.transportFill) this.transportFill.style.width = `${pct}%`;
+            if (this.transportFill) this.transportFill.style.width = `${ pct }% `;
         }
         if (this.transportCurrent) {
             this.transportCurrent.textContent = this._formatTime(currentTime, duration || undefined);
@@ -1216,7 +1307,7 @@ export class PlayerManager {
         if (tapeDur) tapeDur.textContent = this._formatTime(dur, dur);
 
         const tapeRes = document.getElementById('tape-resolution');
-        if (tapeRes) tapeRes.textContent = `${this.video.videoWidth}x${this.video.videoHeight}`;
+        if (tapeRes) tapeRes.textContent = `${ this.video.videoWidth }x${ this.video.videoHeight } `;
 
         const tapeFormat = document.getElementById('tape-format');
         if (tapeFormat) tapeFormat.textContent = this.currentMedia?.video_codec?.toUpperCase() || 'VIDEO';
@@ -1242,7 +1333,7 @@ export class PlayerManager {
             }
         }
         const pct = Math.min(100, (bufferedEnd / duration) * 100);
-        this.transportBuffer.style.width = `${pct}%`;
+        this.transportBuffer.style.width = `${ pct }% `;
     }
 
     _showControls() {
@@ -1305,8 +1396,8 @@ export class PlayerManager {
         const h = Math.floor(s / 3600);
         const m = Math.floor((s % 3600) / 60);
         const sec = Math.floor(s % 60);
-        if (showHours) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-        return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+        if (showHours) return `${ String(h).padStart(2, '0') }:${ String(m).padStart(2, '0') }:${ String(sec).padStart(2, '0') } `;
+        return `${ String(m).padStart(2, '0') }:${ String(sec).padStart(2, '0') } `;
     }
 
     /**
@@ -1355,18 +1446,18 @@ export class PlayerManager {
 
                 // Boost saturation for the accent
                 const hsl = this._rgbToHsl(avgR, avgG, avgB);
-                const accentHsl = `hsl(${hsl.h}, ${Math.min(100, hsl.s + 20)}%, ${Math.max(40, Math.min(70, hsl.l))}%)`;
-                const bgRgb = `${Math.round(avgR * 0.1)}, ${Math.round(avgG * 0.1)}, ${Math.round(avgB * 0.1)}`;
+                const accentHsl = `hsl(${ hsl.h }, ${ Math.min(100, hsl.s + 20) } %, ${ Math.max(40, Math.min(70, hsl.l)) } %)`;
+                const bgRgb = `${ Math.round(avgR * 0.1) }, ${ Math.round(avgG * 0.1) }, ${ Math.round(avgB * 0.1) } `;
 
                 this.modal.style.setProperty('--player-accent', accentHsl);
-                this.modal.style.setProperty('--player-accent-glow', `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, 0.4)`);
-                this.modal.style.setProperty('--player-bg', `rgb(${bgRgb})`);
+                this.modal.style.setProperty('--player-accent-glow', `hsla(${ hsl.h }, ${ hsl.s } %, ${ hsl.l } %, 0.4)`);
+                this.modal.style.setProperty('--player-bg', `rgb(${ bgRgb })`);
                 this.modal.style.setProperty('--player-bg-rgb', bgRgb);
 
                 // Also update the sidebar if it exists
                 const playerInfo = this.modal.querySelector('.player-info');
                 if (playerInfo) {
-                    playerInfo.style.background = `rgba(${bgRgb}, 0.8)`;
+                    playerInfo.style.background = `rgba(${ bgRgb }, 0.8)`;
                 }
                 themeManager.applyDynamicPlayerTheme(this.modal, {
                     r: avgR, g: avgG, b: avgB,
@@ -1428,8 +1519,8 @@ export class PlayerManager {
         const bgY = -(row * thumb_h);
 
         if (this.previewFrame) {
-            this.previewFrame.style.backgroundImage = `url(${url})`;
-            this.previewFrame.style.backgroundPosition = `${bgX}px ${bgY}px`;
+            this.previewFrame.style.backgroundImage = `url(${ url })`;
+            this.previewFrame.style.backgroundPosition = `${ bgX }px ${ bgY } px`;
         }
 
         // ── Clamp preview box to player edges ─────────────────────────────
@@ -1446,7 +1537,7 @@ export class PlayerManager {
         // Clamp in pixels so the box doesn't overflow either side of the player
         const leftPx = e.clientX - playerRect.left;
         const clampedPx = Math.max(halfPreview, Math.min(playerRect.width - halfPreview, leftPx));
-        this.seekPreview.style.left = `${clampedPx - (trackRect.left - playerRect.left)}px`;
+        this.seekPreview.style.left = `${ clampedPx - (trackRect.left - playerRect.left) } px`;
         this.seekPreview.classList.add('visible');
 
         // ── Time label ────────────────────────────────────────────────────
@@ -1488,218 +1579,217 @@ export class PlayerManager {
 
         const tryFetch = async () => {
             try {
-                const res = await fetch(`/api/media/${mediaId}/sprites`, {
-                    credentials: 'include',
+                const res = await fetch(`/ api / media / ${ mediaId }/sprites`, {
+                credentials: 'include',
                 });
-                if (res.status === 200) {
-                    const data = await res.json();
-                    this._sprite = data;
-                    this._spriteCache.set(mediaId, data);
+        if (res.status === 200) {
+            const data = await res.json();
+            this._sprite = data;
+            this._spriteCache.set(mediaId, data);
 
-                    // Pre-load the sprite image so first hover is instant
-                    const img = new Image();
-                    img.src = data.url;
-                    return;
-                }
-                if (res.status === 404) {
-                    // Cache the 404 as null so we don't retry or request again
-                    this._spriteCache.set(mediaId, null);
-                    return;
-                }
-                // 202 = still generating — schedule retry
-                if (res.status === 202 && attempts < maxAttempts) {
-                    attempts++;
-                    this._spriteRetryTimer = setTimeout(tryFetch, delays.at(attempts - 1) ?? 40000);
-                }
-            } catch (_) {
-                // Network error: retry silently
-                if (attempts < maxAttempts) {
-                    attempts++;
-                    this._spriteRetryTimer = setTimeout(tryFetch, delays.at(attempts - 1) ?? 40000);
-                }
-            }
-        };
-        tryFetch();
+            // Pre-load the sprite image so first hover is instant
+            const img = new Image();
+            img.src = data.url;
+            return;
+        }
+        if (res.status === 404) {
+            // Cache the 404 as null so we don't retry or request again
+            this._spriteCache.set(mediaId, null);
+            return;
+        }
+        // 202 = still generating — schedule retry
+        if (res.status === 202 && attempts < maxAttempts) {
+            attempts++;
+            this._spriteRetryTimer = setTimeout(tryFetch, delays.at(attempts - 1) ?? 40000);
+        }
+    } catch(_) {
+        // Network error: retry silently
+        if (attempts < maxAttempts) {
+            attempts++;
+            this._spriteRetryTimer = setTimeout(tryFetch, delays.at(attempts - 1) ?? 40000);
+        }
+    }
+};
+tryFetch();
     }
 
     async _onRenameClick() {
-        console.log("Starting rename flow...");
-        if (!this.currentMedia) {
-            console.warn("No active media to rename.");
-            return;
+    console.log("Starting rename flow...");
+    if (!this.currentMedia) {
+        console.warn("No active media to rename.");
+        return;
+    }
+    const currentTitle = this.currentMedia.title || 'Untitled';
+
+    // Dynamically create and show a custom modal for renaming
+    const newTitle = await new Promise((resolve) => {
+        let dialog = document.getElementById('player-rename-dialog');
+        if (!dialog) {
+            dialog = document.createElement('dialog');
+            dialog.id = 'player-rename-dialog';
+            dialog.className = 'glass-modal';
+            dialog.style.maxWidth = '400px';
+            dialog.style.padding = '0';
+            dialog.style.border = 'none';
+            dialog.style.background = 'transparent';
+            document.body.appendChild(dialog);
         }
-        const currentTitle = this.currentMedia.title || 'Untitled';
 
-        // Dynamically create and show a custom modal for renaming
-        const newTitle = await new Promise((resolve) => {
-            let dialog = document.getElementById('player-rename-dialog');
-            if (!dialog) {
-                dialog = document.createElement('dialog');
-                dialog.id = 'player-rename-dialog';
-                dialog.className = 'glass-modal';
-                dialog.style.maxWidth = '400px';
-                dialog.style.padding = '0';
-                dialog.style.border = 'none';
-                dialog.style.background = 'transparent';
-                document.body.appendChild(dialog);
-            }
+        const dialogCard = document.createElement('div');
+        dialogCard.className = 'dialog-card text-center';
 
-            const dialogCard = document.createElement('div');
-            dialogCard.className = 'dialog-card text-center';
-            dialogCard.style.cssText = 'padding: 24px; background: rgba(18, 18, 18, 0.95); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);';
+        const renameTitleHtml = '<h3>Rename Media</h3><p class="text-muted text-sm" style="margin-bottom: 16px;">Modify the media display title below:</p>';
 
-            const titleHtml = '<h3 style="margin-bottom: 12px; color: #fff; font-size: 1.2rem;">Rename Media</h3><p class="text-muted text-sm" style="margin-bottom: 16px;">Modify the media display title below:</p>';
+        const inputField = document.createElement('input');
+        inputField.type = 'text';
+        inputField.id = 'rename-input';
+        inputField.className = 'form-control';
+        inputField.style.cssText = 'width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;';
+        inputField.value = currentTitle;
 
-            const inputField = document.createElement('input');
-            inputField.type = 'text';
-            inputField.id = 'rename-input';
-            inputField.className = 'form-control';
-            inputField.style.cssText = 'width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;';
-            inputField.value = currentTitle;
-
-            const actionDiv = document.createElement('div');
-            actionDiv.className = 'dialog-actions';
-            actionDiv.style.cssText = 'display: flex; gap: 12px;';
-            actionDiv.innerHTML = `
+        const actionDiv = document.createElement('div');
+        actionDiv.className = 'dialog-actions';
+        actionDiv.style.cssText = 'display: flex; gap: 12px;';
+        actionDiv.innerHTML = `
                 <button class="btn btn-ghost w-100" id="rename-cancel" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; cursor: pointer;">Cancel</button>
                 <button class="btn btn-accent w-100" id="rename-save" style="padding: 10px; border-radius: 8px; border: none; background: var(--player-accent, #00aaff); color: #000; font-weight: 600; cursor: pointer; box-shadow: 0 0 10px var(--player-accent-glow);">Save</button>
             `;
 
-            dialogCard.innerHTML = titleHtml;
-            dialogCard.appendChild(inputField);
-            dialogCard.appendChild(actionDiv);
+        dialogCard.innerHTML = renameTitleHtml;
+        dialogCard.appendChild(inputField);
+        dialogCard.appendChild(actionDiv);
 
-            dialog.innerHTML = '';
-            dialog.appendChild(dialogCard);
+        dialog.innerHTML = '';
+        dialog.appendChild(dialogCard);
 
-            const input = dialog.querySelector('#rename-input');
-            const cancelBtn = dialog.querySelector('#rename-cancel');
-            const saveBtn = dialog.querySelector('#rename-save');
+        const input = dialog.querySelector('#rename-input');
+        const cancelBtn = dialog.querySelector('#rename-cancel');
+        const saveBtn = dialog.querySelector('#rename-save');
 
-            const close = (val) => {
-                dialog.close();
-                resolve(val);
-            };
+        const close = (val) => {
+            dialog.close();
+            resolve(val);
+        };
 
-            cancelBtn.addEventListener('click', () => close(null));
-            saveBtn.addEventListener('click', () => {
-                const val = input.value.trim();
-                if (val) close(val);
-            });
-
-            // Handle enter key
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    const val = input.value.trim();
-                    if (val) close(val);
-                }
-            });
-
-            dialog.showModal();
-            input.focus();
-            input.select();
+        cancelBtn.addEventListener('click', () => close(null));
+        saveBtn.addEventListener('click', () => {
+            const val = input.value.trim();
+            if (val) close(val);
         });
 
-        if (!newTitle) {
-            console.log("Rename cancelled by user.");
-            return;
-        }
+        // Handle enter key
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const val = input.value.trim();
+                if (val) close(val);
+            }
+        });
 
-        try {
-            await api.renameMedia(this.currentMedia.id, newTitle);
+        dialog.showModal();
+        input.focus();
+        input.select();
+    });
 
-            // Instantly mutate displayed titles without reloading
-            this.currentMedia.title = newTitle;
-            if (this.tapeTitle) this.tapeTitle.textContent = newTitle;
-            const sideTitle = document.getElementById('tape-title');
-            if (sideTitle) sideTitle.textContent = newTitle;
-
-            // Update queue item dynamically in the playlist queue sheet
-            const activeQueueItem = this.queueList?.querySelector('.queue-item.active .queue-item-title');
-            if (activeQueueItem) activeQueueItem.textContent = newTitle;
-
-            toast('Media renamed successfully', 'success');
-        } catch (e) {
-            console.error("Failed to rename media", e);
-            toast(`Failed to rename: ${e.message}`, 'error');
-        }
+    if (!newTitle) {
+        console.log("Rename cancelled by user.");
+        return;
     }
+
+    try {
+        await api.renameMedia(this.currentMedia.id, newTitle);
+
+        // Instantly mutate displayed titles without reloading
+        this.currentMedia.title = newTitle;
+        if (this.tapeTitle) this.tapeTitle.textContent = newTitle;
+        const sideTitle = document.getElementById('tape-title');
+        if (sideTitle) sideTitle.textContent = newTitle;
+
+        // Update queue item dynamically in the playlist queue sheet
+        const activeQueueItem = this.queueList?.querySelector('.queue-item.active .queue-item-title');
+        if (activeQueueItem) activeQueueItem.textContent = newTitle;
+
+        toast('Media renamed successfully', 'success');
+    } catch (e) {
+        console.error("Failed to rename media", e);
+        toast(`Failed to rename: ${e.message}`, 'error');
+    }
+}
 
     async _onDeleteClick() {
-        console.log("Starting delete flow...");
-        if (!this.currentMedia) {
-            console.warn("No active media to delete.");
-            return;
-        }
-
-        const confirmed = await confirm("Delete File", "Are you sure you want to delete this file?");
-        if (!confirmed) {
-            console.log("Delete cancelled by user.");
-            return;
-        }
-
-        const mediaId = this.currentMedia.id;
-
-        try {
-            // First stop the player and release all browser file handles
-            console.log("Stopping video and releasing file handles...");
-            this.video.pause();
-            this._cleanup();
-
-            // Wait a tiny bit (e.g. 200ms) for the server to close socket/file handles
-            await new Promise(resolve => setTimeout(resolve, 200));
-
-            await api.deleteMedia(mediaId);
-
-            toast('File successfully deleted', 'success');
-
-            // Remove the deleted media item from this.queue and this.originalQueue
-            this.queue = this.queue.filter(item => item.id !== mediaId);
-            this.originalQueue = this.originalQueue.filter(item => item.id !== mediaId);
-
-            // If the queue is empty, eject from player
-            if (this.queue.length === 0) {
-                this.eject();
-                return;
-            }
-
-            // If there's a next media item, skip playback to it.
-            if (this.queueIndex >= this.queue.length) {
-                this.queueIndex = 0;
-            }
-
-            // Instantly load the next media item and play
-            this._loadCurrent();
-        } catch (e) {
-            console.error("Failed to delete media", e);
-            toast(`Failed to delete: ${e.message}`, 'error');
-
-            // If it failed, reload current media to restore state
-            this._loadCurrent();
-        }
+    console.log("Starting delete flow...");
+    if (!this.currentMedia) {
+        console.warn("No active media to delete.");
+        return;
     }
+
+    const confirmed = await confirm("Delete File", "Are you sure you want to delete this file?");
+    if (!confirmed) {
+        console.log("Delete cancelled by user.");
+        return;
+    }
+
+    const mediaId = this.currentMedia.id;
+
+    try {
+        // First stop the player and release all browser file handles
+        console.log("Stopping video and releasing file handles...");
+        this.video.pause();
+        this._cleanup();
+
+        // Wait a tiny bit (e.g. 200ms) for the server to close socket/file handles
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        await api.deleteMedia(mediaId);
+
+        toast('File successfully deleted', 'success');
+
+        // Remove the deleted media item from this.queue and this.originalQueue
+        this.queue = this.queue.filter(item => item.id !== mediaId);
+        this.originalQueue = this.originalQueue.filter(item => item.id !== mediaId);
+
+        // If the queue is empty, eject from player
+        if (this.queue.length === 0) {
+            this.eject();
+            return;
+        }
+
+        // If there's a next media item, skip playback to it.
+        if (this.queueIndex >= this.queue.length) {
+            this.queueIndex = 0;
+        }
+
+        // Instantly load the next media item and play
+        this._loadCurrent();
+    } catch (e) {
+        console.error("Failed to delete media", e);
+        toast(`Failed to delete: ${e.message}`, 'error');
+
+        // If it failed, reload current media to restore state
+        this._loadCurrent();
+    }
+}
 
     async toggleFavorite() {
-        if (!this.currentMedia) return;
-        try {
-            await api.toggleFavorite(this.currentMedia.id);
-            this.currentMedia.is_favorite = !this.currentMedia.is_favorite;
-            this._updateFavoriteButton();
+    if (!this.currentMedia) return;
+    try {
+        await api.toggleFavorite(this.currentMedia.id);
+        this.currentMedia.is_favorite = !this.currentMedia.is_favorite;
+        this._updateFavoriteButton();
 
-            // Dispatch a global event or refresh views if needed
-            document.dispatchEvent(new CustomEvent('favorite-toggled', {
-                detail: { mediaId: this.currentMedia.id, isFavorite: this.currentMedia.is_favorite }
-            }));
+        // Dispatch a global event or refresh views if needed
+        document.dispatchEvent(new CustomEvent('favorite-toggled', {
+            detail: { mediaId: this.currentMedia.id, isFavorite: this.currentMedia.is_favorite }
+        }));
 
-            toast(this.currentMedia.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
-        } catch (e) {
-            console.error("Failed to toggle favorite:", e);
-            toast('Failed to toggle favorite', 'error');
-        }
+        toast(this.currentMedia.is_favorite ? 'Added to favorites' : 'Removed from favorites', 'success');
+    } catch (e) {
+        console.error("Failed to toggle favorite:", e);
+        toast('Failed to toggle favorite', 'error');
     }
+}
 
-    _updateFavoriteButton() {
-        if (!this.btnFavorite || !this.currentMedia) return;
-        this.btnFavorite.classList.toggle('active', !!this.currentMedia.is_favorite);
-    }
+_updateFavoriteButton() {
+    if (!this.btnFavorite || !this.currentMedia) return;
+    this.btnFavorite.classList.toggle('active', !!this.currentMedia.is_favorite);
+}
 }

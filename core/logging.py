@@ -31,6 +31,19 @@ def _safe_log_dir():
 
 def setup_logging():
     """Configures the logging system for the application."""
+    # Ensure standard console streams support UTF-8 on Windows to prevent UnicodeEncodeError on emojis/special characters.
+    import sys
+    try:
+        if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+    try:
+        if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
     log_dir = _safe_log_dir()
     settings.logs_folder = log_dir
 

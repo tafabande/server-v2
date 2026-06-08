@@ -4,7 +4,7 @@
  * my list, and categories with horizontal scroll rows and hover previews.
  */
 import { api, player, router } from '../app.js';
-import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog, escapeHtml } from '../utils.js';
+import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog, escapeHtml, homeCacheKey, clearContentCaches } from '../utils.js';
 
 export class HomeView {
     constructor(container) {
@@ -23,10 +23,9 @@ export class HomeView {
             <div class="view-header flex-between mb-lg" style="position: relative; z-index: 10;">
                 <div>
                     <h1 class="page-title">Home</h1>
-                    <p class="page-subtitle">Curated for your LAN</p>
                 </div>
-                <div class="search-bar" style="margin-bottom:0; position:relative;">
-                    <input id="home-search" class="input" type="text" placeholder="Quick find... (Ctrl+K)" autocomplete="off">
+                <div class="search-bar" style="margin-bottom:0; position:relative; max-width: 320px;">
+                    <input id="home-search" class="input" type="text" placeholder="Search..." autocomplete="off">
                     <div id="search-suggestions" class="search-suggestions"></div>
                 </div>
             </div>
@@ -63,7 +62,7 @@ export class HomeView {
                 <div class="skeleton-row">
                     <div class="skeleton-row-title shimmer-bg"></div>
                     <div class="skeleton-row-items">
-                        ${Array(6).fill().map(() => `
+                        ${Array(4).fill().map(() => `
                             <div class="skeleton-row-card">
                                 <div class="skeleton-poster shimmer-bg"></div>
                                 <div class="skeleton-title shimmer-bg"></div>
@@ -74,7 +73,7 @@ export class HomeView {
                 <div class="skeleton-row">
                     <div class="skeleton-row-title shimmer-bg"></div>
                     <div class="skeleton-row-items">
-                        ${Array(6).fill().map(() => `
+                        ${Array(4).fill().map(() => `
                             <div class="skeleton-row-card">
                                 <div class="skeleton-poster shimmer-bg"></div>
                                 <div class="skeleton-title shimmer-bg"></div>
@@ -248,8 +247,8 @@ export class HomeView {
         const target = document.getElementById('smart-sections');
         if (!target) return;
 
-        const cacheKey = 'mediahub_home_cache';
-        const cacheTimeKey = 'mediahub_home_cache_time';
+        const cacheKey = homeCacheKey();
+        const cacheTimeKey = `${cacheKey}_time`;
         const cachedData = localStorage.getItem(cacheKey);
         const cachedTime = localStorage.getItem(cacheTimeKey);
 
@@ -339,8 +338,8 @@ export class HomeView {
         if (!heroDiv) return;
 
         const backdrop = heroDiv.querySelector('.hero-backdrop');
-        if (backdrop) {
-            backdrop.style.backgroundImage = `url('${hero.backdrop}')`;
+        if (backdrop && hero.id) {
+            backdrop.style.backgroundImage = `url('${thumbUrl(hero.id)}')`;
         }
 
         heroDiv.querySelector('.hero-title').textContent = hero.title;
@@ -372,7 +371,7 @@ export class HomeView {
                     await api.addToPlaylist(mylist.id, hero.id);
                     toast('Added to My List', 'success');
                     mylistBtn.textContent = '✓ In My List';
-                    localStorage.removeItem('mediahub_home_cache');
+                    clearContentCaches();
                 } catch (e) {
                     toast(e.message || 'Could not add to My List', 'error');
                 }
@@ -425,17 +424,22 @@ export class HomeView {
             ? `<div class="card-progress"><div class="card-progress-bar" style="width: ${item.progress * 100}%"></div></div>`
             : '';
 
+        const duration = item.duration ? this._formatDuration(item.duration) : '';
+
         return `
             <div class="home-card" data-id="${item.id}" data-title="${escapeHtml(item.title)}" style="will-change: transform;">
-                <div class="card-poster">
-                    <img src="/static/placeholder.svg" data-src="${item.poster}" alt="${escapeHtml(item.title)}" class="lazy-poster">
+                <div class="card-poster" style="aspect-ratio: 16/9;">
+                    <img src="/static/placeholder.svg" data-src="${thumbUrl(item.id)}" alt="${escapeHtml(item.title)}" class="lazy-poster" onerror="this.onerror=null;this.src='/static/placeholder.svg'">
                     ${progressHtml}
+                    ${duration ? `<span class="media-badge duration-badge">${duration}</span>` : ''}
                     <div class="card-hover-info">
                         <button class="card-play-btn">▶</button>
-                        <span class="card-year">${escapeHtml(String(item.year || ''))}</span>
                     </div>
                 </div>
-                <div class="card-title">${escapeHtml(item.title)}</div>
+                <div class="media-card-info">
+                    <h3 class="media-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</h3>
+                    ${item.year ? `<div class="media-meta"><span>${escapeHtml(String(item.year))}</span></div>` : ''}
+                </div>
             </div>
         `;
     }
@@ -447,6 +451,10 @@ export class HomeView {
                 entries.forEach(entry => {
                     if (entry.isIntersecting) {
                         const img = entry.target;
+                        img.addEventListener('error', () => {
+                            img.onerror = null;
+                            img.src = '/static/placeholder.svg';
+                        }, { once: true });
                         img.src = img.dataset.src;
                         img.classList.remove('lazy-poster');
                         observer.unobserve(img);
@@ -594,12 +602,13 @@ export class HomeView {
                     }
                     this.rowsOffset += moreRows.length;
 
-                    const cacheKey = 'mediahub_home_cache';
+                    const cacheKey = homeCacheKey();
                     const cached = JSON.parse(localStorage.getItem(cacheKey) || '{"rows":[]}');
                     const mergedRows = [...cached.rows, ...moreRows];
                     this._bindRowClickHandlers(rowsContainer, mergedRows);
 
                     localStorage.setItem(cacheKey, JSON.stringify({ hero: cached.hero, rows: mergedRows }));
+                    localStorage.setItem(`${cacheKey}_time`, Date.now().toString());
                 }
             }
         } catch (e) {
@@ -642,25 +651,32 @@ export class HomeView {
             }
 
             target.innerHTML = `
-                <div class="gallery-row" style="margin-left: 0;">
+                <div style="margin-left: 0;">
                     <div class="section-title">Search Results for "${escapeHtml(q)}"</div>
-                    <div class="gallery-track results-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:20px; overflow:visible; padding:0;">
+                    <div class="yt-grid">
                         ${results.map((m) => `
-                            <div class="home-card" data-id="${m.id}" data-title="${escapeHtml(m.title)}" style="width: 100%;">
-                                <div class="card-poster">
-                                    <img src="${thumbUrl(m)}" alt="${escapeHtml(m.title)}" onerror="this.src='/static/placeholder.svg'">
-                                    <div class="card-hover-info">
-                                        <button class="card-play-btn">▶</button>
+                            <div class="media-card" data-id="${m.id}" data-title="${escapeHtml(m.title)}">
+                                <div class="media-card-poster">
+                                    <img class="media-card-thumb" src="${thumbUrl(m)}" alt="${escapeHtml(m.title)}" onerror="this.src='/static/placeholder.svg'">
+                                    ${m.duration_seconds ? `<span class="media-badge duration-badge">${formatDuration(m.duration_seconds)}</span>` : ''}
+                                    <div class="media-card-actions">
+                                        <button class="btn-icon btn-play">▶</button>
                                     </div>
                                 </div>
-                                <div class="card-title">${escapeHtml(m.title)}</div>
+                                <div class="media-card-info">
+                                    <h3 class="media-title">${escapeHtml(m.title)}</h3>
+                                    <div class="media-meta">
+                                        ${m.duration_seconds ? `<span>${formatDuration(m.duration_seconds)}</span><span class="dot">·</span>` : ''}
+                                        <span>${escapeHtml(m.video_codec?.toUpperCase() || 'VIDEO')}</span>
+                                    </div>
+                                </div>
                             </div>
                         `).join('')}
                     </div>
                 </div>
             `;
 
-            target.querySelectorAll('.home-card').forEach((card, idx) => {
+            target.querySelectorAll('.media-card').forEach((card, idx) => {
                 card.addEventListener('click', () => {
                     const list = results.map(item => ({ id: item.id, title: item.title, duration_seconds: item.duration_seconds }));
                     player.play(list, idx);

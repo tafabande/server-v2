@@ -25,53 +25,50 @@ export class LibraryView {
     }
 
     async render() {
-        const title = this._fixedFormat ? (this._fixedFormat.charAt(0).toUpperCase() + this._fixedFormat.slice(1)) : 'Library';
+        const title = this._titleOverride || (this._fixedFormat ? (this._fixedFormat.charAt(0).toUpperCase() + this._fixedFormat.slice(1)) : 'Library');
+        const isAdmin = this._isAdmin();
         this.container.innerHTML = `
             <div class="view-header flex-between mb-lg">
                 <div>
                     <h1 class="page-title">${title}</h1>
-                    <div id="lib-breadcrumbs" class="page-subtitle breadcrumbs">
-                        <!-- Breadcrumbs -->
-                    </div>
+                    <div id="lib-breadcrumbs" class="page-subtitle breadcrumbs"></div>
                 </div>
                 <div class="flex gap-sm">
                     <div class="search-bar" style="margin-bottom:0">
                         <input id="lib-search" class="input" type="text" placeholder="Search...">
                     </div>
-                    <button id="lib-toggle-selection" class="btn btn-ghost" title="Select multiple items">~ Select</button>
-                    <select id="lib-sort" class="select" style="width:auto; min-width:120px">
-                        <option value="title">Alphabetical</option>
-                        <option value="date">Recently Added</option>
-                        <option value="size">File Size</option>
-                        <option value="duration">Runtime</option>
+                    ${isAdmin ? `<button id="lib-toggle-selection" class="btn btn-ghost btn-sm" title="Select">☑ Select</button>` : ''}
+                    <select id="lib-sort" class="select" style="width:auto; min-width:100px">
+                        <option value="title">A-Z</option>
+                        <option value="date">Newest</option>
+                        <option value="size">Size</option>
+                        <option value="duration">Duration</option>
                     </select>
-                    <button id="lib-play-all" class="btn btn-accent shadow-sm" title="Play current list">- Play All</button>
-                    <button id="lib-toggle" class="btn btn-ghost" title="Toggle view">
-                        ${this._viewMode === 'grid' ? '~' : '-'}
+                    <button id="lib-play-all" class="btn btn-accent btn-sm" title="Play All">▶ Play</button>
+                    <button id="lib-toggle" class="btn btn-ghost btn-sm" title="Toggle view">
+                        ${this._viewMode === 'grid' ? '☰' : '▦'}
                     </button>
                 </div>
             </div>
             
-            <div class="tabs" id="lib-format-tabs" style="display: none; margin-bottom: 20px;"></div>
-            
-            <div id="lib-selection-bar" class="library-controls surface mb-md flex-between" style="display: none; padding: 10px; border-radius: var(--radius); border: 1px solid var(--accent);">
-                <div>
-                    <span id="lib-selection-count" style="font-weight: bold; margin-right: 15px;">0 selected</span>
-                    <button id="lib-bulk-lock" class="btn btn-sm btn-ghost">Y"S Lock</button>
-                    <button id="lib-bulk-unlock" class="btn btn-sm btn-ghost">Y"" Unlock</button>
-                    <button id="lib-bulk-r18" class="btn btn-sm btn-ghost">🔞 Set R18</button>
-                    <button id="lib-bulk-unr18" class="btn btn-sm btn-ghost">✅ Unset R18</button>
+            ${isAdmin ? `
+            <div id="lib-selection-bar" class="surface mb-md flex-between" style="display: none; padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--accent);">
+                <div class="flex gap-sm" style="align-items:center">
+                    <span id="lib-selection-count" style="font-weight: 700;">0 selected</span>
+                    <button id="lib-bulk-lock" class="btn btn-sm btn-ghost">🔒 Lock</button>
+                    <button id="lib-bulk-unlock" class="btn btn-sm btn-ghost">🔓 Unlock</button>
+                    <button id="lib-bulk-r18" class="btn btn-sm btn-ghost">🔞 R18</button>
+                    <button id="lib-bulk-unr18" class="btn btn-sm btn-ghost">✅ Safe</button>
                 </div>
                 <button id="lib-selection-cancel" class="btn btn-sm btn-ghost">Cancel</button>
-            </div>
+            </div>` : ''}
 
             <div id="lib-content" class="fade-in">
                 <div class="skeleton-grid">
-                    ${Array(12).fill().map(() => `
+                    ${Array(8).fill().map(() => `
                         <div class="skeleton-card">
                             <div class="skeleton-poster shimmer-bg"></div>
                             <div class="skeleton-title shimmer-bg"></div>
-                            <div class="skeleton-meta shimmer-bg"></div>
                         </div>
                     `).join('')}
                 </div>
@@ -87,18 +84,15 @@ export class LibraryView {
         document.getElementById('lib-toggle')?.addEventListener('click', () => this._toggleView());
         document.getElementById('lib-play-all')?.addEventListener('click', () => this._playAll());
         
-        document.getElementById('lib-toggle-selection')?.addEventListener('click', () => this._toggleSelectionMode());
-        document.getElementById('lib-selection-cancel')?.addEventListener('click', () => this._toggleSelectionMode(false));
-        
-        document.getElementById('lib-bulk-lock')?.addEventListener('click', () => this._bulkAction('lock', true));
-        document.getElementById('lib-bulk-unlock')?.addEventListener('click', () => this._bulkAction('lock', false));
-        document.getElementById('lib-bulk-r18')?.addEventListener('click', () => this._bulkAction('r18', true));
-        document.getElementById('lib-bulk-unr18')?.addEventListener('click', () => this._bulkAction('r18', false));
-
-        await this._loadPath(this._currentPath);
-        if (this._renderTabs) {
-            this._renderTabs();
+        if (isAdmin) {
+            document.getElementById('lib-toggle-selection')?.addEventListener('click', () => this._toggleSelectionMode());
+            document.getElementById('lib-selection-cancel')?.addEventListener('click', () => this._toggleSelectionMode(false));
+            document.getElementById('lib-bulk-lock')?.addEventListener('click', () => this._bulkAction('lock', true));
+            document.getElementById('lib-bulk-unlock')?.addEventListener('click', () => this._bulkAction('lock', false));
+            document.getElementById('lib-bulk-r18')?.addEventListener('click', () => this._bulkAction('r18', true));
+            document.getElementById('lib-bulk-unr18')?.addEventListener('click', () => this._bulkAction('r18', false));
         }
+        await this._loadPath(this._currentPath);
     }
     
     _renderBreadcrumbs() {
@@ -225,32 +219,25 @@ export class LibraryView {
         const isAdmin = this._isAdmin();
         
         // Render Folders
-        let html = `<div class="media-grid folder-grid mb-lg" style="gap:15px; display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">`;
+        let html = `<div class="folder-grid mb-lg">`;
         fFolders.forEach(folder => {
             const cover = folder.cover_media_id ? thumbUrl(folder.cover_media_id) : '';
             const blurClass = folder.is_locked ? 'blur-sm' : '';
-            const lockBadge = folder.is_locked ? `<div class="media-badge lock-badge">Y"S</div>` : '';
+            const lockBadge = folder.is_locked ? `<div class="media-badge lock-badge">🔒</div>` : '';
             const r18Badge = folder.is_adult ? `<div class="media-badge r18-badge">🔞</div>` : '';
             
-            const checkbox = this._selectionMode ? `
-                <div class="selection-checkbox ${this._selectedPaths.has(folder.path) ? 'checked' : ''}" data-path="${folder.path}">
-                    ${this._selectedPaths.has(folder.path) ? '~S' : ''}
-                </div>
-            ` : '';
-
             html += `
-                <div class="folder-card surface" data-path="${folder.path}" style="position:relative; cursor:pointer; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border-subtle);">
-                    ${checkbox}
-                    <div class="folder-cover shimmer-bg ${blurClass}" style="height: 120px; background-image: url('${cover}'); background-size: cover; background-position: center; position:relative;">
+                <div class="folder-card surface" data-path="${folder.path}" style="position:relative; cursor:pointer; border: 1px solid var(--border-subtle);">
+                    <div class="folder-cover shimmer-bg ${blurClass}" style="height: 100px; background-image: url('${cover}'); background-size: cover; background-position: center; position:relative; aspect-ratio: 16/9;">
                         ${lockBadge} ${r18Badge}
-                        <div style="position:absolute; bottom:0; left:0; width:100%; padding:10px; background: linear-gradient(transparent, rgba(0,0,0,0.8));">
-                            <h3 style="margin:0; font-size:1rem; text-shadow:0 1px 3px #000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📁 ${folder.name}</h3>
-                            <div style="font-size:0.75rem; color:#ccc;">${folder.item_count} items</div>
+                        <div style="position:absolute; bottom:0; left:0; width:100%; padding: 8px 10px; background: linear-gradient(transparent, rgba(0,0,0,0.85));">
+                            <h3 style="margin:0; font-size:0.9rem; text-shadow:0 1px 3px #000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff;">📁 ${folder.name}</h3>
+                            <div style="font-size:0.7rem; color:#bbb;">${folder.item_count} items</div>
                         </div>
                     </div>
                     ${isAdmin && !this._selectionMode ? `
-                        <div class="folder-actions" style="position:absolute; top:5px; right:5px;">
-                            <button class="btn-icon btn-folder-menu" data-path="${folder.path}">~Z</button>
+                        <div style="position:absolute; top:4px; right:4px;">
+                            <button class="btn-icon btn-folder-menu" data-path="${folder.path}" style="width:28px;height:28px;font-size:0.8rem;">⋮</button>
                         </div>
                     ` : ''}
                 </div>
@@ -259,7 +246,7 @@ export class LibraryView {
         html += `</div>`;
         
         // Render Items
-        html += `<div class="${this._viewMode === 'grid' ? 'media-grid' : 'media-table'}">`;
+        html += `<div class="${this._viewMode === 'grid' ? 'yt-grid' : 'media-table'}">`;
         fItems.forEach((media, idx) => {
             if (this._viewMode === 'grid') {
                 html += this._renderGridCard(media, idx);
@@ -278,34 +265,31 @@ export class LibraryView {
     _renderGridCard(media, idx) {
         const title = media.title || media.filename;
         const dur = formatDuration(media.duration_seconds);
-        const lockIcon = media.requires_pin ? 'Y"S' : '';
-        const thumb = thumbUrl(media.id);
+        const thumb = thumbUrl(media);
         const adultBadge = media.adult_only ? `<div class="media-badge r18-badge">R18</div>` : '';
-        
-        const checkbox = this._selectionMode ? `
-            <div class="selection-checkbox ${this._selectedMediaIds.has(media.id) ? 'checked' : ''}" data-id="${media.id}">
-                ${this._selectedMediaIds.has(media.id) ? '~S' : ''}
-            </div>
-        ` : '';
+        const lockBadge = media.requires_pin ? `<div class="media-badge lock-badge">🔒</div>` : '';
 
         return `
             <div class="media-card" data-media-id="${media.id}" data-index="${idx}">
-                <div class="media-card-poster shimmer-bg">
-                    ${checkbox}
-                    <img src="${thumb}" alt="${title}" class="media-card-thumb" loading="lazy">
+                <div class="media-card-poster">
+                    <img src="${thumb}" alt="${title}" class="media-card-thumb" loading="lazy" onerror="this.src='/static/placeholder.svg'">
                     ${adultBadge}
-                    ${lockIcon ? `<div class="media-badge lock-badge">${lockIcon}</div>` : ''}
-                    <div class="media-badge duration-badge">${dur}</div>
-                    
+                    ${lockBadge}
+                    <span class="media-badge duration-badge">${dur}</span>
                     <div class="media-card-actions">
-                        <button class="btn-icon btn-play" title="Play">-</button>
+                        <button class="btn-icon btn-play" title="Play">▶</button>
                         <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
-                            ${media.is_favorite ? '?ϋ?' : 'Y?'}
+                            ${media.is_favorite ? '❤️' : '♡'}
                         </button>
                     </div>
                 </div>
                 <div class="media-card-info">
                     <h3 class="media-title" title="${title}">${title}</h3>
+                    <div class="media-meta">
+                        <span>${dur}</span>
+                        <span class="dot">·</span>
+                        <span>${media.video_codec?.toUpperCase() || 'VIDEO'}</span>
+                    </div>
                 </div>
             </div>
         `;
@@ -314,32 +298,22 @@ export class LibraryView {
     _renderTableRow(media, idx) {
         const dur = formatDuration(media.duration_seconds);
         const size = formatBytes(media.file_size);
-        const date = new Date(media.created_at).toLocaleDateString();
         const title = media.title || media.filename;
-        const lockIcon = media.requires_pin ? '<span style="color:var(--danger)">Y"S</span>' : '';
-        
-        const checkbox = this._selectionMode ? `
-            <div class="selection-checkbox ${this._selectedMediaIds.has(media.id) ? 'checked' : ''}" data-id="${media.id}" style="position:static; margin-right:10px;">
-                ${this._selectedMediaIds.has(media.id) ? '~S' : ''}
-            </div>
-        ` : '';
 
         return `
             <div class="table-row" data-media-id="${media.id}" data-index="${idx}">
-                <div class="flex align-center gap-sm">
-                    ${checkbox}
-                    <div class="table-thumb-wrapper">
-                        <img src="${thumbUrl(media.id)}" loading="lazy" class="table-thumb">
-                    </div>
-                    <div class="table-title">
-                        ${title} ${media.adult_only ? '<span class="text-xs text-danger border border-danger rounded px-1">R18</span>' : ''} ${lockIcon}
-                    </div>
+                <div class="table-thumb-wrapper">
+                    <img src="${thumbUrl(media)}" loading="lazy" onerror="this.src='/static/placeholder.svg'">
                 </div>
-                <div class="table-meta text-muted">${dur}</div>
-                <div class="table-meta text-muted">${size}</div>
-                <div class="table-meta text-muted">${date}</div>
+                <div class="table-title">
+                    ${title}
+                    ${media.adult_only ? '<span class="badge badge-error" style="font-size:0.6rem;margin-left:6px">R18</span>' : ''}
+                    ${media.requires_pin ? '<span style="color:var(--error);margin-left:4px">🔒</span>' : ''}
+                </div>
+                <div class="table-meta">${dur}</div>
+                <div class="table-meta">${size}</div>
                 <div class="table-actions">
-                    <button class="btn-icon btn-play">-</button>
+                    <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
                 </div>
             </div>
         `;
@@ -469,7 +443,7 @@ export class LibraryView {
         this._viewMode = this._viewMode === 'grid' ? 'table' : 'grid';
         localStorage.setItem('lib_view_mode', this._viewMode);
         const toggleBtn = document.getElementById('lib-toggle');
-        if (toggleBtn) toggleBtn.textContent = this._viewMode === 'grid' ? '~' : '-';
+        if (toggleBtn) toggleBtn.textContent = this._viewMode === 'grid' ? '☰' : '▦';
         this._renderContent();
     }
 

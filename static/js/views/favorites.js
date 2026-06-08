@@ -172,7 +172,7 @@ export class FavoritesView {
                         <span class="subfolder-name">📁 ${subfolderName}</span>
                         <span class="subfolder-count">${subfolderItems.length} items</span>
                     </div>
-                    <div class="subfolder-content ${collapsedClass} gallery-grid">
+                    <div class="subfolder-content ${collapsedClass} yt-grid">
                         ${subfolderItems.map(m => {
                 const originalIdx = this._items.indexOf(m);
                 return this._renderCard(m, originalIdx);
@@ -212,17 +212,18 @@ export class FavoritesView {
         return `
             <div class="media-card ${media.adult_only ? 'is-adult' : ''}" data-index="${index}">
                 <div class="media-card-poster">
-                    <img class="media-card-thumb" src="${thumb}" alt="${media.title}" loading="lazy">
-                    <div class="media-card-overlay">
+                    <img class="media-card-thumb" src="${thumb}" alt="${media.title}" loading="lazy" onerror="this.src='/static/placeholder.svg'">
+                    <span class="media-badge duration-badge">${dur}</span>
+                    <div class="media-card-actions">
                         <button class="play-action-btn">▶</button>
                     </div>
                     <div class="media-card-badges">
                         <button class="favorite-toggle-btn active" title="Remove from favorites">❤️</button>
                     </div>
                 </div>
-                <div class="media-card-body">
-                    <div class="media-card-title">${media.title}</div>
-                    <div class="media-card-meta">
+                <div class="media-card-info">
+                    <h3 class="media-title">${media.title}</h3>
+                    <div class="media-meta">
                         <span>${dur}</span>
                         <span class="dot">·</span>
                         <span>${media.video_codec?.toUpperCase() || 'VIDEO'}</span>

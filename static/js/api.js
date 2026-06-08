@@ -1,3 +1,5 @@
+import { isNsfwEnabled } from './utils.js';
+
 export class ApiError extends Error {
   constructor(message, status) {
     super(message);
@@ -46,7 +48,7 @@ export class ApiClient {
       const headers = new Headers(rawHeaders || {});
       // We are now using cookie-based auth natively via credentials: 'same-origin'
       if (json !== undefined) headers.set("Content-Type", "application/json");
-      if (sessionStorage.getItem('r18_enabled') === 'false') {
+      if (!isNsfwEnabled()) {
         headers.set("X-Disable-R18", "true");
       }
 
