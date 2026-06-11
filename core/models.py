@@ -50,6 +50,8 @@ class MediaMetadata(Base):
     hls_status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
     requires_pin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     adult_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     intro_start: Mapped[float | None] = mapped_column(Float, nullable=True)
     intro_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

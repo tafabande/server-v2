@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from core.schemas import (
     MediaRead,
     MessageResponse,
     PlaylistCreate,
+    PlaylistUpdate,
     PlaylistDetailRead,
     PlaylistItemAdd,
     PlaylistPlayResponse,
@@ -27,11 +28,24 @@ async def list_playlists(
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[PlaylistRead]:
-    """List playlists owned by the current user."""
+    """List playlists owned by the current user. Favorites is always first."""
     result = await session.execute(
-        select(Playlist).where(Playlist.owner_user_id == current_user.id).order_by(Playlist.created_at.desc())
+        select(Playlist).where(Playlist.owner_user_id == current_user.id).order_by(Playlist.created_at.asc())
     )
-    playlists = result.scalars().all()
+    playlists = list(result.scalars().all())
+
+    # Ensure Favorites exists
+    fav_pl = next((p for p in playlists if p.title == "Favorites"), None)
+    if not fav_pl:
+        fav_pl = Playlist(owner_user_id=current_user.id, title="Favorites", description=None)
+        session.add(fav_pl)
+        await session.commit()
+        await session.refresh(fav_pl)
+        playlists.insert(0, fav_pl)
+    else:
+        # Move favorites to front
+        playlists = [fav_pl] + [p for p in playlists if p.id != fav_pl.id]
+
     out = []
     from core.media import apply_media_security_filters
     for pl in playlists:
@@ -82,6 +96,7 @@ async def create_playlist(
 
 @router.get("/{playlist_id}", response_model=PlaylistDetailRead)
 async def get_playlist(
+    request: Request,
     playlist_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
@@ -103,7 +118,7 @@ async def get_playlist(
     media_items = []
     for item in items:
         media = await session.get(MediaMetadata, item.media_id)
-        if media and await is_media_accessible(session, media, current_user):
+        if media and await is_media_accessible(session, media, current_user, request):
             media_items.append(MediaRead.model_validate(media))
 
     owner = await session.get(User, playlist.owner_user_id)
@@ -123,16 +138,62 @@ async def delete_playlist(
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Delete a playlist (owner or admin only)."""
+    """Delete a playlist (owner or admin only). The Favorites playlist cannot be deleted."""
+    playlist = await session.get(Playlist, playlist_id)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if playlist.owner_user_id != current_user.id and current_user.role not in ("admin", "super-admin"):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    if playlist.title == "Favorites":
+        raise HTTPException(status_code=400, detail="The Favorites playlist cannot be deleted.")
+
+    await session.delete(playlist)
+    await session.commit()
+    return MessageResponse(message="Playlist deleted.")
+
+
+@router.put("/{playlist_id}", response_model=PlaylistRead)
+async def update_playlist(
+    playlist_id: int,
+    payload: PlaylistUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: AsyncSession = Depends(get_db),
+) -> PlaylistRead:
+    """Update a playlist's details."""
     playlist = await session.get(Playlist, playlist_id)
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found.")
     if playlist.owner_user_id != current_user.id and current_user.role not in ("admin", "super-admin"):
         raise HTTPException(status_code=403, detail="Not authorized.")
 
-    await session.delete(playlist)
+    if payload.title is not None:
+        playlist.title = payload.title
+    if payload.description is not None:
+        playlist.description = payload.description or None
+
     await session.commit()
-    return MessageResponse(message="Playlist deleted.")
+    await session.refresh(playlist)
+
+    from core.media import apply_media_security_filters
+    count_stmt = (
+        select(func.count())
+        .select_from(PlaylistItem)
+        .join(MediaMetadata, PlaylistItem.media_id == MediaMetadata.id)
+        .where(PlaylistItem.playlist_id == playlist.id)
+    )
+    count_stmt = await apply_media_security_filters(session, count_stmt, current_user)
+    count_result = await session.execute(count_stmt)
+    count = count_result.scalar() or 0
+
+    return PlaylistRead(
+        id=playlist.id,
+        title=playlist.title,
+        description=playlist.description,
+        item_count=count,
+        owner_username=current_user.username,
+        created_at=playlist.created_at,
+    )
+
 
 
 @router.post("/{playlist_id}/items", response_model=MessageResponse)
@@ -165,10 +226,10 @@ async def add_item_to_playlist(
     return MessageResponse(message=f"Added '{media.title}' to playlist.")
 
 
-@router.delete("/{playlist_id}/items/{item_id}", response_model=MessageResponse)
+@router.delete("/{playlist_id}/items/{media_id}", response_model=MessageResponse)
 async def remove_item_from_playlist(
     playlist_id: int,
-    item_id: int,
+    media_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
@@ -179,13 +240,19 @@ async def remove_item_from_playlist(
     if playlist.owner_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not your playlist.")
 
-    item = await session.get(PlaylistItem, item_id)
-    if not item or item.playlist_id != playlist_id:
+    stmt = select(PlaylistItem).where(
+        PlaylistItem.playlist_id == playlist_id,
+        PlaylistItem.media_id == media_id
+    )
+    result = await session.execute(stmt)
+    item = result.scalars().first()
+    if not item:
         raise HTTPException(status_code=404, detail="Item not found in this playlist.")
 
     await session.delete(item)
     await session.commit()
     return MessageResponse(message="Item removed from playlist.")
+
 
 
 @router.put("/{playlist_id}/reorder", response_model=MessageResponse)
@@ -213,6 +280,7 @@ async def reorder_playlist(
 
 @router.post("/{playlist_id}/play", response_model=PlaylistPlayResponse)
 async def play_playlist(
+    request: Request,
     playlist_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
@@ -235,7 +303,7 @@ async def play_playlist(
     media_items = []
     for item in items:
         media = await session.get(MediaMetadata, item.media_id)
-        if media and await is_media_accessible(session, media, current_user):
+        if media and await is_media_accessible(session, media, current_user, request):
             media_items.append(MediaRead.model_validate(media))
 
     return PlaylistPlayResponse(

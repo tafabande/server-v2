@@ -1,5 +1,5 @@
 import { api, player } from '../app.js';
-import { toast, isAdultApproved, showAdultAccessDialog } from '../utils.js';
+import { toast, isAdultApproved, isNsfwEnabled, showAdultAccessDialog, confirm } from '../utils.js';
 
 export class ShortiesView {
     constructor(container) {
@@ -19,15 +19,55 @@ export class ShortiesView {
             player.video.pause();
         }
 
+        // Inject custom animations for the floating heart
+        if (!document.getElementById('shorties-custom-styles')) {
+            const style = document.createElement('style');
+            style.id = 'shorties-custom-styles';
+            style.textContent = `
+                @keyframes floatUpHeart {
+                    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+                    15% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+                    30% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+                    100% { transform: translate(-50%, -150px) scale(1.5); opacity: 0; }
+                }
+                .floating-heart {
+                    position: absolute;
+                    font-size: 5rem;
+                    pointer-events: none;
+                    z-index: 100;
+                    animation: floatUpHeart 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+                    filter: drop-shadow(0 4px 10px rgba(0,0,0,0.3));
+                }
+                .shorty-progress-bar:hover, .shorty-progress-bar:active {
+                    height: 8px !important;
+                }
+                .shorty-video-wrapper {
+                    height: 100%;
+                    max-height: calc(100vh - 120px);
+                    display: flex;
+                    justify-content: center;
+                    background: #000;
+                    position: relative;
+                }
+                .shorty-video {
+                    max-height: 100%;
+                    object-fit: contain;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
         this.container.innerHTML = `
             <div class="view-header flex-between mb-lg">
                 <div>
                     <h1 class="page-title">Shorties</h1>
-                    <p class="page-subtitle">Swipe or scroll vertical micro-entertainment feed</p>
                 </div>
-                <div class="flex gap-sm">
-                    <button id="btn-shuffle-shorties" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 6px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button id="btn-shuffle-shorties" class="btn btn-secondary btn-sm" style="display: flex; align-items: center; gap: 6px; white-space: nowrap;">
                         🔀 Shuffle
+                    </button>
+                    <button id="btn-delete-current-shorty" class="btn btn-danger btn-sm" style="display: flex; align-items: center; gap: 6px; white-space: nowrap;">
+                        🗑️ Delete
                     </button>
                 </div>
             </div>
@@ -45,6 +85,13 @@ export class ShortiesView {
         if (shuffleBtn) {
             shuffleBtn.addEventListener('click', () => {
                 this._shuffleVideos();
+            });
+        }
+
+        const deleteBtn = document.getElementById('btn-delete-current-shorty');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', () => {
+                this._deleteCurrentShorty();
             });
         }
     }
@@ -65,14 +112,15 @@ export class ShortiesView {
                 items = allItems.filter(v => v.duration_seconds > 0 && v.duration_seconds < 300);
             }
 
-            // Filter out adult content if not approved or nsfw preference is off
-            const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
-            const nsfwEnabled = user.preferences?.nsfw === true;
-            if (!isAdultApproved() || !nsfwEnabled) {
-                items = items.filter(v => !v.adult_only);
-            }
-
             this._allVideos = items;
+
+            // Enforce NSFW toggle on Shorties
+            const nsfwOn = isNsfwEnabled();
+            const adultApproved = isAdultApproved();
+            this._allVideos = this._allVideos.filter(v => {
+                if (v.adult_only) return nsfwOn && adultApproved;
+                return !nsfwOn; // Show safe only when SFW is on
+            });
 
             if (this._allVideos.length === 0) {
                 const emptyDiv = document.createElement('div');
@@ -91,7 +139,7 @@ export class ShortiesView {
             }
 
             this._shuffleArray(this._allVideos);
-            
+
             // Limit first render to 50 items
             this._videos = this._allVideos.slice(0, 50);
 
@@ -105,9 +153,9 @@ export class ShortiesView {
                 cardEl.innerHTML = this._renderShortyCardInner(v, idx);
                 fragment.appendChild(cardEl);
             });
-            
+
             feed.replaceChildren(fragment);
-            
+
             this._setupIntersectionObserver();
             this._bindEvents();
             this._setupFocusMode();
@@ -124,10 +172,17 @@ export class ShortiesView {
     }
 
     _shuffleArray(array) {
-        for (let i = array.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [array[i], array[j]] = [array[j], array[i]];
-        }
+        // Weighted random sort based on likes_count to play highly liked videos more frequently
+        array.sort((a, b) => {
+            const weightA = Math.random() * (1 + (a.likes_count || 0) * 2);
+            const weightB = Math.random() * (1 + (b.likes_count || 0) * 2);
+            return weightB - weightA;
+        });
+    }
+
+    _isAdmin() {
+        const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+        return user.role === 'admin' || user.role === 'super-admin';
     }
 
     _renderShortyCardInner(v, idx) {
@@ -137,6 +192,18 @@ export class ShortiesView {
         const muteIcon = this._isMuted ? '<i class="v-icon icon-mute"></i>' : '<i class="v-icon icon-volume"></i>';
         const favoriteIcon = '<i class="v-icon icon-favorite"></i>';
         const activeFavClass = v.is_favorite ? 'active' : '';
+
+        let deleteBtnHtml = '';
+        if (this._isAdmin()) {
+            deleteBtnHtml = `
+                <div style="display: flex; flex-direction: column; align-items: center; margin-top: 12px;">
+                    <button class="shorty-action-btn delete-btn" data-id="${v.id}" style="background: rgba(220, 38, 38, 0.6); border-color: rgba(220, 38, 38, 0.4);">
+                        <i class="v-icon icon-delete"></i>
+                    </button>
+                    <span class="shorty-action-label">Delete</span>
+                </div>
+            `;
+        }
 
         return `
             <div class="shorty-video-wrapper">
@@ -153,32 +220,44 @@ export class ShortiesView {
                     <span class="shorty-play-feedback-icon">▶</span>
                 </div>
 
+                <div class="shorty-speed-indicator" style="position: absolute; top: 12%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); color: #fff; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 700; display: flex; align-items: center; gap: 4px; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 15; backdrop-filter: blur(4px);">
+                    <span>⚡ 2x Speed</span>
+                </div>
+
                 <!-- Bottom Info Overlay -->
-                <div class="shorty-overlay-bottom">
+                <div class="shorty-overlay-bottom" style="padding-bottom: 12px;">
                     <h4 class="shorty-title">${v.title}</h4>
                     <p class="shorty-desc">📁 ${v.category || 'Shorts'}</p>
                 </div>
 
                 <!-- Floating Action Buttons -->
-                <div class="shorty-overlay-right">
+                <div class="shorty-overlay-right" style="display: flex; flex-direction: column; align-items: center;">
                     <div style="display: flex; flex-direction: column; align-items: center;">
                         <button class="shorty-action-btn fav-btn ${activeFavClass}" data-id="${v.id}">
                             ${favoriteIcon}
                         </button>
-                        <span class="shorty-action-label">Like</span>
+                        <span class="shorty-action-label like-count-label" data-id="${v.id}">${v.likes_count > 0 ? v.likes_count : 'Like'}</span>
                     </div>
                     
+                    <div style="display: flex; flex-direction: column; align-items: center;">
+                        <button class="shorty-action-btn save-btn" data-id="${v.id}">
+                            <i class="v-icon icon-playlist">➕</i>
+                        </button>
+                        <span class="shorty-action-label">Save</span>
+                    </div>
+
                     <div style="display: flex; flex-direction: column; align-items: center;">
                         <button class="shorty-action-btn mute-btn ${activeMuteClass}" data-id="${v.id}">
                             ${muteIcon}
                         </button>
                         <span class="shorty-action-label">Mute</span>
                     </div>
+                    ${deleteBtnHtml}
                 </div>
 
                 <!-- Progress Bar -->
-                <div class="shorty-progress-bar">
-                    <div class="shorty-progress-fill" style="width: 0%;"></div>
+                <div class="shorty-progress-bar" style="position: absolute; bottom: 0; left: 0; right: 0; z-index: 20; overflow: hidden; cursor: pointer; height: 4px; background: rgba(255,255,255,0.3); transition: height 0.2s ease;">
+                    <div class="shorty-progress-fill" style="width: 0%; height: 100%; background: var(--player-accent); transition: width 0.1s linear;"></div>
                 </div>
             </div>
         `;
@@ -291,11 +370,21 @@ export class ShortiesView {
         } catch (e) { }
     }
 
+    _showSpeedIndicator(card, show) {
+        const ind = card.querySelector('.shorty-speed-indicator');
+        if (ind) ind.style.opacity = show ? '1' : '0';
+    }
+
     _bindCardEvents(card) {
         const video = card.querySelector('.shorty-video');
         const feedback = card.querySelector('.shorty-play-feedback');
 
         let lastTap = 0;
+        let longPressTimer = null;
+        let isLongPress = false;
+        let tapTimer = null;
+        let lastTapX = 0;
+        let lastTapY = 0;
 
         if (video) {
             video.addEventListener('ended', () => {
@@ -310,23 +399,68 @@ export class ShortiesView {
             });
         }
 
-        card.querySelector('.shorty-video-wrapper')?.addEventListener('pointerdown', (e) => {
+        const wrapper = card.querySelector('.shorty-video-wrapper');
+        wrapper?.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+        wrapper?.addEventListener('pointerdown', (e) => {
             if (e.target.closest('.shorty-overlay-right') || e.target.closest('.shorty-overlay-bottom') || e.target.closest('.shorty-progress-bar')) {
+                return;
+            }
+
+            if (e.pointerType === 'touch') {
+                e.target.setPointerCapture(e.pointerId);
+            }
+            lastTapX = e.clientX;
+            lastTapY = e.clientY;
+
+            isLongPress = false;
+            clearTimeout(longPressTimer);
+
+            longPressTimer = setTimeout(() => {
+                isLongPress = true;
+                if (video && !video.paused) {
+                    video.playbackRate = 2.0;
+                    this._showSpeedIndicator(card, true);
+                }
+            }, 500);
+        });
+
+        const handlePointerEnd = (e) => {
+            clearTimeout(longPressTimer);
+
+            if (isLongPress) {
+                if (video) {
+                    video.playbackRate = 1.0;
+                    this._showSpeedIndicator(card, false);
+                }
+                isLongPress = false;
                 return;
             }
 
             const now = Date.now();
             if (now - lastTap < 300) {
-                this._handleDoubleTap('middle');
+                clearTimeout(tapTimer);
                 lastTap = 0;
+                this._handleDoubleTap('middle', lastTapX, lastTapY);
             } else {
                 lastTap = now;
-                setTimeout(() => {
+                tapTimer = setTimeout(() => {
                     if (lastTap !== 0) {
                         this._togglePlayPause(video, feedback);
                         lastTap = 0;
                     }
-                }, 280);
+                }, 300);
+            }
+        };
+
+        wrapper?.addEventListener('pointerup', handlePointerEnd);
+        wrapper?.addEventListener('pointercancel', handlePointerEnd);
+        wrapper?.addEventListener('pointerleave', (e) => {
+            if (isLongPress) {
+                handlePointerEnd(e);
+            } else {
+                clearTimeout(longPressTimer);
             }
         });
 
@@ -366,6 +500,13 @@ export class ShortiesView {
                 if (muteBtn) {
                     e.stopPropagation();
                     this._toggleMute();
+                    return;
+                }
+
+                const deleteBtn = e.target.closest('.delete-btn');
+                if (deleteBtn) {
+                    e.stopPropagation();
+                    this._deleteShortyById(deleteBtn.dataset.id);
                     return;
                 }
             });
@@ -521,7 +662,7 @@ export class ShortiesView {
                 fragment.appendChild(cardEl);
             });
             feed.replaceChildren(fragment);
-            
+
             this._setupIntersectionObserver();
             this._bindEvents();
             this._setupFocusMode();
@@ -541,7 +682,7 @@ export class ShortiesView {
 
         const feed = document.getElementById('shorties-feed');
         let targetCard = feed?.querySelector(`.shorty-card[data-index="${nextIndex}"]`);
-        
+
         if (!targetCard && nextIndex < this._allVideos.length) {
             this._renderMoreShorties(50);
             targetCard = feed?.querySelector(`.shorty-card[data-index="${nextIndex}"]`);
@@ -552,17 +693,187 @@ export class ShortiesView {
         }
     }
 
-    _handleDoubleTap(zone) {
+    async _handleDoubleTap(zone, x, y) {
         if (zone === 'middle') {
             const card = this._activeVideoEl.closest('.shorty-card');
-            this._toggleFavorite(card.dataset.id, card.querySelector('.fav-btn'));
+            if (!card) return;
 
+            const mediaId = card.dataset.id;
+
+            // Spatially aware floating heart animation
             const heart = document.createElement('div');
             heart.innerHTML = '❤️';
-            heart.className = 'heart-animation';
+            heart.className = 'floating-heart';
+
+            const rect = card.getBoundingClientRect();
+            const relX = x ? (x - rect.left) : (rect.width / 2);
+            const relY = y ? (y - rect.top) : (rect.height / 2);
+
+            heart.style.left = `${relX}px`;
+            heart.style.top = `${relY}px`;
             card.appendChild(heart);
-            setTimeout(() => heart.remove(), 600);
+            setTimeout(() => heart.remove(), 1000);
+
+            // Increment likes dynamically in UI and ensure Favorite is active
+            const v = this._allVideos.find(vid => vid.id == mediaId);
+            if (v) {
+                v.is_favorite = true;
+                v.likes_count = (v.likes_count || 0) + 1;
+
+                const favBtn = card.querySelector('.fav-btn');
+                if (favBtn && !favBtn.classList.contains('active')) {
+                    favBtn.classList.add('active');
+                }
+
+                const label = card.querySelector('.like-count-label');
+                if (label) label.textContent = v.likes_count;
+            }
+
+            // Call backend API to add like and ensure favorited permanently
+            try {
+                if (typeof api.likeMedia === 'function') {
+                    await api.likeMedia(mediaId);
+                } else {
+                    await api._fetch(`/media/${mediaId}/like`, { method: 'POST' });
+                }
+            } catch (e) {
+                console.error("Failed to add like", e);
+            }
         }
+    }
+
+    async _showPlaylistDialog(mediaId) {
+        let playlists = [];
+        try {
+            const res = await api.getPlaylists();
+            playlists = Array.isArray(res) ? res : (res?.items || []);
+        } catch (e) {
+            toast('Failed to load playlists', 'error');
+            return;
+        }
+
+        let dialog = document.getElementById('shorty-playlist-dialog');
+        if (!dialog) {
+            dialog = document.createElement('dialog');
+            dialog.id = 'shorty-playlist-dialog';
+            dialog.className = 'glass-modal';
+            dialog.style.maxWidth = '400px';
+            dialog.style.padding = '0';
+            dialog.style.border = 'none';
+            dialog.style.background = 'transparent';
+            document.body.appendChild(dialog);
+        }
+
+        const listHtml = playlists.length > 0 ? playlists.map(p => `
+            <div class="playlist-option" data-id="${p.id}" style="padding: 14px 16px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; margin-bottom: 8px; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; transition: background 0.2s ease;">
+                <span style="font-weight: 600; font-size: 0.95rem; color: #fff;">${escapeHtml(p.title)}</span>
+                <span style="font-size: 0.75rem; color: #888;">${p.item_count} items</span>
+            </div>
+        `).join('') : '<p class="text-muted text-sm">No playlists found.</p>';
+
+        dialog.innerHTML = `
+            <div class="dialog-card text-center" style="position: relative;">
+                <style>.playlist-option:hover { background: rgba(255,255,255,0.12) !important; }</style>
+                <h3 style="margin-bottom: 16px; font-size: 1.35rem; color: #fff;">Save to Playlist</h3>
+                <div style="max-height: 220px; overflow-y: auto; padding-right: 4px;">
+                    ${listHtml}
+                </div>
+                <div class="dialog-actions" style="margin-top: 24px;">
+                    <button class="btn btn-ghost w-100" id="shorty-playlist-cancel" style="padding: 12px; border-radius: 10px;">Close</button>
+                </div>
+            </div>
+        `;
+
+        dialog.showModal();
+        dialog.querySelector('#shorty-playlist-cancel').onclick = () => dialog.close();
+
+        dialog.querySelectorAll('.playlist-option').forEach(el => {
+            el.onclick = async () => {
+                const pid = el.dataset.id;
+                try {
+                    await api.addToPlaylist(pid, mediaId);
+                    toast('Saved to playlist', 'success');
+                    dialog.close();
+                } catch (e) { toast('Failed to save', 'error'); }
+            };
+        });
+    }
+
+    async _deleteShortyById(mediaId) {
+        if (!mediaId) return;
+        const card = document.getElementById(`shorty-card-${mediaId}`);
+        if (!card) return;
+
+        const confirmed = await confirm('Delete Shorty', 'Are you sure you want to permanently delete this shorty? This cannot be undone.');
+        if (!confirmed) return;
+
+        try {
+            await api.deleteMedia(mediaId);
+            toast('Shorty deleted successfully!', 'success');
+
+            const currentIndex = parseInt(card.dataset.index);
+
+            this._allVideos = this._allVideos.filter(v => v.id != mediaId);
+            this._videos = this._videos.filter(v => v.id != mediaId);
+
+            // Re-index remaining cards in the DOM to maintain feed integrity
+            const feed = document.getElementById('shorties-feed');
+            let found = false;
+            feed.querySelectorAll('.shorty-card').forEach(c => {
+                if (c === card) {
+                    found = true;
+                } else if (found) {
+                    c.dataset.index = parseInt(c.dataset.index) - 1;
+                }
+            });
+
+            // Pause if this was active
+            const video = card.querySelector('.shorty-video');
+            if (video && this._activeVideoEl === video) {
+                this._pauseVideo(video);
+                this._activeVideoEl = null;
+            }
+
+            // Phase 1: Slide out horizontally
+            card.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+            card.style.transform = 'translateX(-100%)';
+            card.style.opacity = '0';
+
+            setTimeout(() => {
+                // Phase 2: Collapse height smoothly
+                card.style.height = card.offsetHeight + 'px';
+                void card.offsetHeight; // Force reflow
+                card.style.transition = 'height 0.3s ease, margin 0.3s ease, padding 0.3s ease';
+                card.style.height = '0px';
+                card.style.margin = '0px';
+                card.style.padding = '0px';
+                card.style.overflow = 'hidden';
+
+                setTimeout(() => {
+                    card.remove();
+                    let targetCard = feed?.querySelector(`.shorty-card[data-index="${currentIndex}"]`) || feed?.querySelector(`.shorty-card[data-index="${currentIndex - 1}"]`);
+                    if (!targetCard && currentIndex < this._allVideos.length) {
+                        this._renderMoreShorties(50);
+                        targetCard = feed?.querySelector(`.shorty-card[data-index="${currentIndex}"]`);
+                    }
+                    if (targetCard) targetCard.scrollIntoView({ behavior: 'smooth' });
+                }, 300);
+            }, 300);
+        } catch (err) { toast(`Failed to delete shorty: ${err.message}`, 'error'); }
+    }
+
+    async _deleteCurrentShorty() {
+        if (!this._activeVideoEl) {
+            toast('No shorty is currently playing.', 'warning');
+            return;
+        }
+        const card = this._activeVideoEl.closest('.shorty-card');
+        const mediaId = card?.dataset.id;
+        if (!mediaId) {
+            toast('Could not identify the current shorty for deletion.', 'error');
+            return;
+        }
+        await this._deleteShortyById(mediaId);
     }
 
     destroy() {

@@ -4,7 +4,7 @@
  * Supports Folder Navigation and bulk operations!
  */
 import { api, player, router } from '../app.js';
-import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved, showAdultAccessDialog, showPinDialog } from '../utils.js';
+import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved, showAdultAccessDialog, showPinDialog, prefetchThumbnails } from '../utils.js';
 
 export class LibraryView {
     constructor(container) {
@@ -19,9 +19,21 @@ export class LibraryView {
         this._selectionMode = false;
         this._selectedPaths = new Set();
         this._selectedMediaIds = new Set();
+        this._lastSelectedMediaIndex = null;
 
         this.hoverTimeout = null;
         this.previewVideo = null;
+        this._renderedCount = 0;
+        this._observer = null;
+        this._pageSize = 50;
+
+        // Upload permissions and state
+        const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+        this._canUpload = user.role === 'admin' || user.role === 'family';
+        this._queue = [];
+        this._problems = [];
+        this._dragDepth = 0;
+        this._uploading = false;
     }
 
     async render() {
@@ -37,6 +49,7 @@ export class LibraryView {
                     <div class="search-bar" style="margin-bottom:0">
                         <input id="lib-search" class="input" type="text" placeholder="Search...">
                     </div>
+                    ${this._canUpload ? `<button id="lib-toggle-upload" class="btn btn-ghost btn-sm" title="Upload">📤 Upload</button>` : ''}
                     ${isAdmin ? `<button id="lib-toggle-selection" class="btn btn-ghost btn-sm" title="Select">☑ Select</button>` : ''}
                     <select id="lib-sort" class="select" style="width:auto; min-width:100px">
                         <option value="title">A-Z</option>
@@ -44,6 +57,7 @@ export class LibraryView {
                         <option value="size">Size</option>
                         <option value="duration">Duration</option>
                     </select>
+                    <button id="lib-sort-dir" class="btn btn-ghost btn-sm" title="Reverse Order" data-rev="false" style="padding: 0 8px;">⬇️</button>
                     <button id="lib-play-all" class="btn btn-accent btn-sm" title="Play All">▶ Play</button>
                     <button id="lib-toggle" class="btn btn-ghost btn-sm" title="Toggle view">
                         ${this._viewMode === 'grid' ? '☰' : '▦'}
@@ -51,6 +65,55 @@ export class LibraryView {
                 </div>
             </div>
             
+            ${this._canUpload ? `
+            <div id="lib-upload-panel" class="surface mb-md fade-in" style="display: none; padding: 16px; border-radius: var(--radius); border: 1px solid var(--border-subtle);">
+                <div class="flex-between mb-sm">
+                    <div class="section-title" style="margin-bottom: 0;">Upload to /<span id="upload-dest-display">Root</span></div>
+                    <button id="upload-close-btn" class="btn-close" style="font-size: 1.2rem; cursor: pointer; background:none; border:none; color:var(--text-muted);">&times;</button>
+                </div>
+                <div class="upload-layout" style="display: grid; grid-template-columns: 2fr 1fr; gap: 16px;">
+                    <div class="upload-main">
+                        <div class="form-row" style="display: flex; gap: 12px; margin-bottom: 12px;">
+                            <div class="form-group" style="flex: 1;">
+                                <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Destination Path</label>
+                                <input id="upload-path" class="input" type="text" placeholder="Movies/Season 01" value="" style="width: 100%;">
+                            </div>
+                            <div class="form-group" style="width: 150px;">
+                                <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Folder PIN (if locked)</label>
+                                <input id="upload-pin" class="input" type="password" placeholder="Optional" style="width: 100%;">
+                            </div>
+                            <div class="form-group" style="width: 120px;">
+                                <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Content Rating</label>
+                                <select id="upload-rating" class="select" style="width: 100%;">
+                                    <option value="sfw">Safe (SFW)</option>
+                                    <option value="nsfw">Adult (18+)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="upload-dropzone" class="upload-dropzone" style="border: 2px dashed var(--border-subtle); border-radius: var(--radius); padding: 24px; text-align: center; background: rgba(255,255,255,0.02); transition: all 0.2s; cursor: pointer; margin-bottom: 12px;">
+                            <strong>Drag & Drop files here</strong>
+                            <p style="margin: 4px 0 0; font-size: 0.8rem; color: var(--text-muted);">or click to browse files</p>
+                            <input id="upload-file-input" type="file" hidden multiple>
+                        </div>
+                        <div class="flex gap-sm">
+                            <button id="upload-start-btn" class="btn btn-accent btn-sm">Start Upload</button>
+                            <button id="upload-clear-btn" class="btn btn-ghost btn-sm">Clear Queue</button>
+                        </div>
+                    </div>
+                    <div class="upload-sidebar" style="border-left: 1px solid var(--border-subtle); padding-left: 16px;">
+                        <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">Upload Queue</div>
+                        <div id="upload-queue" style="max-height: 150px; overflow-y: auto; font-size: 0.8rem; display: flex; flex-direction: column; gap: 6px;">
+                            <div class="text-muted" style="font-style: italic;">No files selected.</div>
+                        </div>
+                        <div style="font-weight: 600; font-size: 0.85rem; margin-top: 16px; margin-bottom: 8px;">Recent Problems</div>
+                        <div id="current_problems" style="max-height: 100px; overflow-y: auto; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;">
+                            <div class="text-muted" style="font-style: italic;">No problems.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+
             ${isAdmin ? `
             <div id="lib-selection-bar" class="surface mb-md flex-between" style="display: none; padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--accent);">
                 <div class="flex gap-sm" style="align-items:center">
@@ -73,6 +136,7 @@ export class LibraryView {
                     `).join('')}
                 </div>
             </div>
+            <div id="lib-sentinel" style="height: 20px;"></div>
         `;
 
         const searchInput = document.getElementById('lib-search');
@@ -81,8 +145,20 @@ export class LibraryView {
         }
 
         document.getElementById('lib-sort')?.addEventListener('change', () => this._renderContent());
+        document.getElementById('lib-sort-dir')?.addEventListener('click', (e) => {
+            const btn = e.currentTarget;
+            const isRev = btn.dataset.rev === 'true';
+            btn.dataset.rev = !isRev;
+            btn.textContent = !isRev ? '⬆️' : '⬇️';
+            this._renderContent();
+        });
         document.getElementById('lib-toggle')?.addEventListener('click', () => this._toggleView());
         document.getElementById('lib-play-all')?.addEventListener('click', () => this._playAll());
+
+        if (this._canUpload) {
+            document.getElementById('lib-toggle-upload')?.addEventListener('click', () => this._toggleUploadPanel());
+            this._setupUploadEvents();
+        }
 
         if (isAdmin) {
             document.getElementById('lib-toggle-selection')?.addEventListener('click', () => this._toggleSelectionMode());
@@ -92,7 +168,19 @@ export class LibraryView {
             document.getElementById('lib-bulk-r18')?.addEventListener('click', () => this._bulkAction('r18', true));
             document.getElementById('lib-bulk-unr18')?.addEventListener('click', () => this._bulkAction('r18', false));
         }
+        this._setupInfiniteScroll();
         await this._loadPath(this._currentPath);
+    }
+
+    _setupInfiniteScroll() {
+        this._observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && this._filteredItems && this._renderedCount < this._filteredItems.length) {
+                this._renderNextBatch();
+            }
+        }, { rootMargin: '400px' });
+
+        const sentinel = document.getElementById('lib-sentinel');
+        if (sentinel) this._observer.observe(sentinel);
     }
 
     _renderBreadcrumbs() {
@@ -133,10 +221,32 @@ export class LibraryView {
         localStorage.setItem('lib_current_path', path);
         this._renderBreadcrumbs();
 
+        const pathInput = document.getElementById('upload-path');
+        if (pathInput) {
+            pathInput.value = path;
+        }
+        this._syncDestinationLabel(path);
+
+        const target = document.getElementById('lib-content');
+        if (target) {
+            target.innerHTML = `
+                <div class="skeleton-grid fade-in">
+                    ${Array(8).fill().map(() => `
+                        <div class="skeleton-card">
+                            <div class="skeleton-poster shimmer-bg"></div>
+                            <div class="skeleton-title shimmer-bg"></div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
         try {
-            const res = await api.getFolders(path);
+            const res = await (typeof api.getFolders === 'function' ? api.getFolders(path) : api._fetch(`/media/folders?path=${encodeURIComponent(String(path))}`));
             this._folders = res.folders || [];
             this._items = res.items || [];
+
+            prefetchThumbnails(this._items, 10);
             this._renderContent();
         } catch (err) {
             const target = document.getElementById('lib-content');
@@ -155,6 +265,7 @@ export class LibraryView {
         this._selectionMode = force !== null ? force : !this._selectionMode;
         this._selectedPaths.clear();
         this._selectedMediaIds.clear();
+        this._lastSelectedMediaIndex = null;
 
         document.getElementById('lib-selection-bar').style.display = this._selectionMode ? 'flex' : 'none';
         document.getElementById('lib-toggle-selection').classList.toggle('btn-accent', this._selectionMode);
@@ -169,6 +280,16 @@ export class LibraryView {
 
     async _bulkAction(type, value) {
         if (this._selectedPaths.size === 0 && this._selectedMediaIds.size === 0) return;
+
+        let confirmationMessage = '';
+        if (type === 'r18') {
+            confirmationMessage = `Are you sure you want to mark ${this._selectedPaths.size + this._selectedMediaIds.size} item(s) as R18 / Adult Content?`;
+        } else if (type === 'unr18') {
+            confirmationMessage = `Are you sure you want to mark ${this._selectedPaths.size + this._selectedMediaIds.size} item(s) as Safe Content?`;
+        }
+        if (confirmationMessage && !(await confirm('Bulk Action Confirmation', confirmationMessage))) {
+            return; // User cancelled
+        }
 
         try {
             // Folders
@@ -203,10 +324,32 @@ export class LibraryView {
 
         const q = (document.getElementById('lib-search')?.value || '').toLowerCase();
         const sort = document.getElementById('lib-sort')?.value || 'title';
+        const reverse = document.getElementById('lib-sort-dir')?.dataset.rev === 'true';
 
         // Filter folders and items
         let fFolders = this._folders.filter(f => !q || f.name.toLowerCase().includes(q));
         let fItems = this._items.filter(m => !q || (m.title && m.title.toLowerCase().includes(q)) || (m.filename && m.filename.toLowerCase().includes(q)));
+
+        // Always sort folders alphabetically
+        fFolders.sort((a, b) => a.name.localeCompare(b.name));
+
+        // Apply selected sort to media items
+        if (sort === 'date') {
+            fItems.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        } else if (sort === 'size') {
+            fItems.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
+        } else if (sort === 'duration') {
+            fItems.sort((a, b) => (b.duration_seconds || 0) - (a.duration_seconds || 0));
+        } else {
+            fItems.sort((a, b) => (a.title || a.filename || '').localeCompare(b.title || b.filename || ''));
+        }
+
+        if (reverse) {
+            fItems.reverse();
+            fFolders.reverse();
+        }
+        this._filteredItems = fItems;
+        this._renderedCount = 0;
 
         if (fFolders.length === 0 && fItems.length === 0) {
             const emptyDiv = document.createElement('div');
@@ -226,7 +369,7 @@ export class LibraryView {
         if (fFolders.length > 0) {
             const folderGrid = document.createElement('div');
             folderGrid.className = 'folder-grid mb-lg';
-            
+
             fFolders.forEach(folder => {
                 const cover = folder.cover_media_id ? thumbUrl(folder.cover_media_id) : '';
                 const blurClass = folder.is_locked ? 'blur-sm' : '';
@@ -237,11 +380,17 @@ export class LibraryView {
                 folderCard.className = 'folder-card surface';
                 folderCard.dataset.path = folder.path;
                 folderCard.style.cssText = 'position:relative; cursor:pointer; border: 1px solid var(--border-subtle);';
-                
+
+                if (this._selectionMode && this._selectedPaths.has(folder.path)) {
+                    folderCard.style.opacity = '0.5';
+                    folderCard.style.border = '1px solid var(--accent)';
+                }
+
                 folderCard.innerHTML = `
-                    <div class="folder-cover shimmer-bg ${blurClass}" style="height: 100px; background-image: url('${cover}'); background-size: cover; background-position: center; position:relative; aspect-ratio: 16/9;">
+                    <div class="folder-cover shimmer-bg ${blurClass}" style="height: 100px; position:relative; aspect-ratio: 16/9; overflow: hidden; border-radius: var(--radius) var(--radius) 0 0;">
+                        <img src="${cover || '/static/placeholder.svg'}" loading="lazy" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.parentElement.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.parentElement.classList.remove('shimmer-bg');">
                         ${lockBadge} ${r18Badge}
-                        <div style="position:absolute; bottom:0; left:0; width:100%; padding: 8px 10px; background: linear-gradient(transparent, rgba(0,0,0,0.85));">
+                        <div style="position:absolute; bottom:0; left:0; width:100%; padding: 8px 10px; background: linear-gradient(transparent, rgba(0,0,0,0.85)); z-index: 2;">
                             <h3 style="margin:0; font-size:0.9rem; text-shadow:0 1px 3px #000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff;">📁 ${folder.name}</h3>
                             <div style="font-size:0.7rem; color:#bbb;">${folder.item_count} items</div>
                         </div>
@@ -267,7 +416,7 @@ export class LibraryView {
                     itemEl.className = 'media-card';
                     itemEl.dataset.mediaId = media.id;
                     itemEl.dataset.index = idx;
-                    
+
                     const title = media.title || media.filename;
                     const dur = formatDuration(media.duration_seconds);
                     const thumb = thumbUrl(media);
@@ -276,7 +425,7 @@ export class LibraryView {
 
                     itemEl.innerHTML = `
                         <div class="media-card-poster">
-                            <img src="${thumb}" alt="${title}" class="media-card-thumb" loading="lazy" onerror="this.src='/static/placeholder.svg'">
+                            <img src="${thumb}" alt="${title}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                             ${adultBadge}
                             ${lockBadge}
                             <span class="media-badge duration-badge">${dur}</span>
@@ -285,6 +434,7 @@ export class LibraryView {
                                 <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
                                     ${media.is_favorite ? '❤️' : '♡'}
                                 </button>
+                                <button class="btn-icon btn-download" title="Download">⬇</button>
                             </div>
                         </div>
                         <div class="media-card-info">
@@ -307,7 +457,7 @@ export class LibraryView {
 
                     itemEl.innerHTML = `
                         <div class="table-thumb-wrapper">
-                            <img src="${thumbUrl(media)}" loading="lazy" onerror="this.src='/static/placeholder.svg'">
+                            <img src="${thumbUrl(media)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                         </div>
                         <div class="table-title">
                             ${title}
@@ -318,8 +468,14 @@ export class LibraryView {
                         <div class="table-meta">${size}</div>
                         <div class="table-actions">
                             <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
+                            <button class="btn-icon btn-download" style="width:28px;height:28px;font-size:0.8rem;margin-left:4px" title="Download">⬇</button>
                         </div>
                     `;
+                }
+
+                if (this._selectionMode && this._selectedMediaIds.has(String(media.id))) {
+                    itemEl.style.opacity = '0.5';
+                    itemEl.style.border = '1px solid var(--accent)';
                 }
                 itemsGrid.appendChild(itemEl);
             });
@@ -343,7 +499,7 @@ export class LibraryView {
         return `
             <div class="media-card" data-media-id="${media.id}" data-index="${idx}">
                 <div class="media-card-poster">
-                    <img src="${thumb}" alt="${title}" class="media-card-thumb" loading="lazy" onerror="this.src='/static/placeholder.svg'">
+                    <img src="${thumb}" alt="${title}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                     ${adultBadge}
                     ${lockBadge}
                     <span class="media-badge duration-badge">${dur}</span>
@@ -352,6 +508,7 @@ export class LibraryView {
                         <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
                             ${media.is_favorite ? '❤️' : '♡'}
                         </button>
+                        <button class="btn-icon btn-download" title="Download">⬇</button>
                     </div>
                 </div>
                 <div class="media-card-info">
@@ -366,6 +523,142 @@ export class LibraryView {
         `;
     }
 
+    _setupMediaEventListeners(itemsGrid) {
+        if (!itemsGrid) return;
+        itemsGrid.addEventListener('click', (e) => {
+            const card = e.target.closest('.media-card, .table-row');
+            if (!card) return;
+
+            const mediaId = card.dataset.mediaId;
+            const media = this._filteredItems.find(m => String(m.id) === String(mediaId));
+            if (!media) return;
+
+            if (this._selectionMode) {
+                e.preventDefault();
+                if (this._selectedMediaIds.has(String(media.id))) {
+                    this._selectedMediaIds.delete(String(media.id));
+                    card.style.opacity = '1';
+                    card.style.border = '';
+                } else {
+                    this._selectedMediaIds.add(String(media.id));
+                    card.style.opacity = '0.5';
+                    card.style.border = '1px solid var(--accent)';
+                }
+                this._updateSelectionCount();
+                return;
+            }
+
+            const favBtn = e.target.closest('.btn-fav');
+            if (favBtn) {
+                e.stopPropagation();
+                this._toggleFavorite(media, favBtn);
+                return;
+            }
+
+            const downloadBtn = e.target.closest('.btn-download');
+            if (downloadBtn) {
+                e.stopPropagation();
+                this._downloadMedia(media);
+                return;
+            }
+
+            const playBtn = e.target.closest('.btn-play');
+            if (playBtn) {
+                e.stopPropagation();
+                this._playMedia(mediaId);
+                return;
+            }
+
+            // Click on the card itself (not on a specific button)
+            if (!e.target.closest('.media-card-actions, .table-actions')) {
+                this._playMedia(mediaId);
+            }
+        });
+    }
+
+    _renderNextBatch() {
+        const itemsGrid = document.getElementById('lib-items-grid');
+        if (!itemsGrid || !this._filteredItems) return;
+
+        const fragment = document.createDocumentFragment();
+        const end = Math.min(this._renderedCount + this._pageSize, this._filteredItems.length);
+
+        for (let i = this._renderedCount; i < end; i++) {
+            const media = this._filteredItems[i];
+            const itemEl = document.createElement('div');
+
+            if (this._viewMode === 'grid') {
+                itemEl.className = 'media-card';
+                itemEl.dataset.mediaId = media.id;
+                itemEl.dataset.index = i;
+
+                const title = media.title || media.filename;
+                const dur = formatDuration(media.duration_seconds);
+                const thumb = thumbUrl(media);
+                const adultBadge = media.adult_only ? `<div class="media-badge r18-badge">R18</div>` : '';
+                const lockBadge = media.requires_pin ? `<div class="media-badge lock-badge">🔒</div>` : '';
+
+                itemEl.innerHTML = `
+                    <div class="media-card-poster">
+                        <img src="${thumb}" alt="${title}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
+                        ${adultBadge}
+                        ${lockBadge}
+                        <span class="media-badge duration-badge">${dur}</span>
+                        <div class="media-card-actions">
+                            <button class="btn-icon btn-play" title="Play">▶</button>
+                            <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
+                                ${media.is_favorite ? '❤️' : '♡'}
+                            </button>
+                            <button class="btn-icon btn-download" title="Download">⬇</button>
+                        </div>
+                    </div>
+                    <div class="media-card-info">
+                        <h3 class="media-title" title="${title}">${title}</h3>
+                        <div class="media-meta">
+                            <span>${dur}</span>
+                            <span class="dot">·</span>
+                            <span>${media.video_codec?.toUpperCase() || 'VIDEO'}</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                itemEl.className = 'table-row';
+                itemEl.dataset.mediaId = media.id;
+                itemEl.dataset.index = i;
+
+                const dur = formatDuration(media.duration_seconds);
+                const size = formatBytes(media.file_size);
+                const title = media.title || media.filename;
+
+                itemEl.innerHTML = `
+                    <div class="table-thumb-wrapper">
+                        <img src="${thumbUrl(media)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
+                    </div>
+                    <div class="table-title">
+                        ${title}
+                        ${media.adult_only ? '<span class="badge badge-error" style="font-size:0.6rem;margin-left:6px">R18</span>' : ''}
+                        ${media.requires_pin ? '<span style="color:var(--error);margin-left:4px">🔒</span>' : ''}
+                    </div>
+                    <div class="table-meta">${dur}</div>
+                    <div class="table-meta">${size}</div>
+                    <div class="table-actions">
+                        <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
+                        <button class="btn-icon btn-download" style="width:28px;height:28px;font-size:0.8rem;margin-left:4px" title="Download">⬇</button>
+                    </div>
+                `;
+            }
+
+            if (this._selectionMode && this._selectedMediaIds.has(String(media.id))) {
+                itemEl.style.opacity = '0.5';
+                itemEl.style.border = '1px solid var(--accent)';
+            }
+            fragment.appendChild(itemEl);
+        }
+
+        itemsGrid.appendChild(fragment);
+        this._renderedCount = end;
+    }
+
     _renderTableRow(media, idx) {
         const dur = formatDuration(media.duration_seconds);
         const size = formatBytes(media.file_size);
@@ -374,7 +667,7 @@ export class LibraryView {
         return `
             <div class="table-row" data-media-id="${media.id}" data-index="${idx}">
                 <div class="table-thumb-wrapper">
-                    <img src="${thumbUrl(media)}" loading="lazy" onerror="this.src='/static/placeholder.svg'">
+                    <img src="${thumbUrl(media)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                 </div>
                 <div class="table-title">
                     ${title}
@@ -385,6 +678,7 @@ export class LibraryView {
                 <div class="table-meta">${size}</div>
                 <div class="table-actions">
                     <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
+                    <button class="btn-icon btn-download" style="width:28px;height:28px;font-size:0.8rem;margin-left:4px" title="Download">⬇</button>
                 </div>
             </div>
         `;
@@ -401,8 +695,16 @@ export class LibraryView {
                 if (this._selectionMode) {
                     if (this._selectedPaths.has(path)) this._selectedPaths.delete(path);
                     else this._selectedPaths.add(path);
+                    if (this._selectedPaths.has(path)) {
+                        this._selectedPaths.delete(path);
+                        card.style.opacity = '1';
+                        card.style.border = '1px solid var(--border-subtle)';
+                    } else {
+                        this._selectedPaths.add(path);
+                        card.style.opacity = '0.5';
+                        card.style.border = '1px solid var(--accent)';
+                    }
                     this._updateSelectionCount();
-                    this._renderContent();
                     return;
                 }
 
@@ -451,27 +753,20 @@ export class LibraryView {
                 }
             });
         });
+    }
 
-        // Media Clicks
+    _reapplySelectionVisuals() {
+        const target = document.getElementById('lib-content');
+        if (!target) return;
+
         target.querySelectorAll('.media-card, .table-row').forEach(el => {
-            el.addEventListener('click', (e) => {
-                const id = el.dataset.mediaId;
-
-                if (this._selectionMode) {
-                    if (this._selectedMediaIds.has(id)) this._selectedMediaIds.delete(id);
-                    else this._selectedMediaIds.add(id);
-                    this._updateSelectionCount();
-                    this._renderContent();
-                    return;
-                }
-
-                if (e.target.closest('.btn-fav')) {
-                    const media = this._items.find(m => m.id == id);
-                    if (media) this._toggleFavorite(media, e.target.closest('.btn-fav'));
-                    return;
-                }
-                this._playMedia(id);
-            });
+            if (this._selectedMediaIds.has(el.dataset.mediaId)) {
+                el.style.opacity = '0.5';
+                el.style.border = '1px solid var(--accent)';
+            } else {
+                el.style.opacity = '1';
+                el.style.border = '';
+            }
         });
     }
 
@@ -480,11 +775,26 @@ export class LibraryView {
             const res = await api.toggleFavorite(media.id);
             media.is_favorite = !media.is_favorite;
             btn.classList.toggle('active', media.is_favorite);
-            btn.innerHTML = media.is_favorite ? '?ϋ?' : 'Y?';
+            btn.innerHTML = media.is_favorite ? '❤️' : '♡';
             toast(res.message, 'success');
         } catch (err) {
             toast(err.message, 'error');
         }
+    }
+
+    async _downloadMedia(media) {
+        let url = `/api/media/${media.id}/download`;
+        if (media.requires_pin) {
+            const pin = await showPinDialog("Enter PIN to download this PG-Locked media:");
+            if (!pin) return;
+            url += `?pin=${encodeURIComponent(pin)}`;
+        }
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = media.title || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 
     _isAdmin() {
@@ -632,7 +942,257 @@ export class LibraryView {
         });
     }
 
+    _toggleUploadPanel(force = null) {
+        const panel = document.getElementById('lib-upload-panel');
+        if (!panel) return;
+
+        const nextVal = force !== null ? force : (panel.style.display === 'none');
+        panel.style.display = nextVal ? 'block' : 'none';
+
+        const toggleBtn = document.getElementById('lib-toggle-upload');
+        if (toggleBtn) toggleBtn.classList.toggle('btn-accent', nextVal);
+
+        if (nextVal) {
+            const pathInput = document.getElementById('upload-path');
+            if (pathInput) {
+                pathInput.value = this._currentPath;
+            }
+            this._syncDestinationLabel(this._currentPath);
+            pathInput?.focus();
+        }
+    }
+
+    _setupUploadEvents() {
+        if (!this._canUpload) return;
+
+        const pathInput = document.getElementById('upload-path');
+        const fileInput = document.getElementById('upload-file-input');
+        const startBtn = document.getElementById('upload-start-btn');
+        const clearBtn = document.getElementById('upload-clear-btn');
+        const dropzone = document.getElementById('upload-dropzone');
+        const closeBtn = document.getElementById('upload-close-btn');
+
+        closeBtn?.addEventListener('click', () => this._toggleUploadPanel(false));
+
+        dropzone?.addEventListener('click', (e) => {
+            if (e.target !== fileInput) {
+                fileInput?.click();
+            }
+        });
+
+        pathInput?.addEventListener('input', (event) => {
+            const value = event.target.value.trim();
+            this._syncDestinationLabel(value);
+        });
+
+        fileInput?.addEventListener('change', (event) => {
+            this._setFiles(event.target.files);
+        });
+
+        startBtn?.addEventListener('click', () => {
+            this._startUpload();
+        });
+
+        clearBtn?.addEventListener('click', () => {
+            this._clearSelection();
+        });
+
+        this._onDragEnter = (event) => {
+            event.preventDefault();
+            this._dragDepth += 1;
+            dropzone?.classList.add('is-dragover');
+        };
+
+        this._onDragOver = (event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+        };
+
+        this._onDragLeave = (event) => {
+            event.preventDefault();
+            this._dragDepth = Math.max(0, this._dragDepth - 1);
+            if (this._dragDepth === 0) {
+                dropzone?.classList.remove('is-dragover');
+            }
+        };
+
+        this._onDrop = (event) => {
+            event.preventDefault();
+            this._dragDepth = 0;
+            dropzone?.classList.remove('is-dragover');
+            const files = event.dataTransfer?.files;
+            if (files && files.length > 0) {
+                this._setFiles(files);
+            }
+        };
+
+        dropzone?.addEventListener('dragenter', this._onDragEnter);
+        dropzone?.addEventListener('dragover', this._onDragOver);
+        dropzone?.addEventListener('dragleave', this._onDragLeave);
+        dropzone?.addEventListener('drop', this._onDrop);
+    }
+
+    _setFiles(fileList) {
+        this._queue = Array.from(fileList || []).map((file) => ({
+            file,
+            state: 'ready',
+            detail: 'Ready to upload',
+        }));
+        this._renderQueue();
+    }
+
+    _clearSelection() {
+        this._queue = [];
+        const fileInput = document.getElementById('upload-file-input');
+        if (fileInput) fileInput.value = '';
+        this._renderQueue();
+    }
+
+    _syncDestinationLabel(value) {
+        const label = document.getElementById('upload-dest-display');
+        if (label) {
+            label.textContent = value ? value : 'Root';
+        }
+    }
+
+    _recordProblem(message, kind = 'error') {
+        this._problems.unshift({
+            message,
+            kind,
+            time: new Date().toISOString(),
+        });
+        this._problems = this._problems.slice(0, 6);
+        this._renderProblems();
+    }
+
+    _renderQueue() {
+        const target = document.getElementById('upload-queue');
+        if (!target) return;
+
+        if (this._queue.length === 0) {
+            target.innerHTML = `<div class="text-muted" style="font-style: italic;">No files selected.</div>`;
+            return;
+        }
+
+        target.innerHTML = this._queue.map((item) => {
+            const statusLabel = item.state === 'done'
+                ? 'Done'
+                : item.state === 'error'
+                    ? 'Failed'
+                    : item.state === 'uploading'
+                        ? 'Uploading'
+                        : 'Ready';
+
+            const statusClass = item.state === 'error' ? 'text-error' : item.state === 'done' ? 'text-success' : '';
+
+            return `
+                <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-subtle); padding-bottom: 4px;">
+                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span>
+                    <span class="${statusClass}" style="font-weight: 500;">${statusLabel}</span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    _renderProblems() {
+        const target = document.getElementById('current_problems');
+        if (!target) return;
+
+        if (this._problems.length === 0) {
+            target.innerHTML = `<div class="text-muted" style="font-style: italic;">No problems.</div>`;
+            return;
+        }
+
+        target.innerHTML = this._problems.map((problem) => `
+            <div style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 4px; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(problem.message)}">
+                <div>${escapeHtml(problem.message)}</div>
+            </div>
+        `).join('');
+    }
+
+    async _startUpload() {
+        if (!this._canUpload) {
+            this._recordProblem('Uploads are limited to admin and family accounts.', 'warning');
+            toast('Upload access denied.', 'error');
+            return;
+        }
+
+        if (this._uploading) {
+            return;
+        }
+
+        if (this._queue.length === 0) {
+            this._recordProblem('Choose at least one file before uploading.', 'warning');
+            toast('Pick files first.', 'warning');
+            return;
+        }
+
+        const pathInput = document.getElementById('upload-path');
+        const pinInput = document.getElementById('upload-pin');
+        const ratingInput = document.getElementById('upload-rating');
+        const destination = (pathInput?.value || '').trim();
+        const pin = (pinInput?.value || '').trim();
+        const isAdult = ratingInput?.value === 'nsfw';
+        const fileInput = document.getElementById('upload-file-input');
+        const startBtn = document.getElementById('upload-start-btn');
+
+        this._uploading = true;
+        if (startBtn) {
+            startBtn.disabled = true;
+            startBtn.textContent = 'Uploading...';
+        }
+
+        const pendingItems = this._queue.filter((item) => item.state !== 'done');
+        let successCount = 0;
+        for (const item of pendingItems) {
+            item.state = 'uploading';
+            item.detail = 'Uploading...';
+            this._renderQueue();
+
+            try {
+                await api.upload(destination, item.file, pin, isAdult);
+                item.state = 'done';
+                item.detail = 'Uploaded successfully';
+                successCount += 1;
+                toast(`Uploaded: ${item.file.name}`, 'success');
+            } catch (err) {
+                item.state = 'error';
+                item.detail = err.message || 'Upload failed';
+                this._recordProblem(`${item.file.name}: ${item.detail}`, 'error');
+                toast(`Upload failed: ${item.file.name}`, 'error');
+            }
+
+            this._renderQueue();
+        }
+
+        this._uploading = false;
+        if (startBtn) {
+            startBtn.disabled = !this._canUpload;
+            startBtn.textContent = 'Start Upload';
+        }
+
+        if (this._queue.every((item) => item.state === 'done')) {
+            this._queue = [];
+            if (fileInput) fileInput.value = '';
+            this._renderQueue();
+            if (successCount > 0) {
+                toast(`Uploaded ${successCount} file${successCount === 1 ? '' : 's'}.`, 'success');
+                await this._loadPath(this._currentPath);
+            }
+        } else {
+            this._queue = this._queue.filter((item) => item.state === 'error');
+            this._renderQueue();
+            if (successCount > 0) {
+                await this._loadPath(this._currentPath);
+            }
+        }
+    }
+
     destroy() {
         this._cleanupActivePreview();
+        if (this._observer) {
+            this._observer.disconnect();
+            this._observer = null;
+        }
     }
 }

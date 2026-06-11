@@ -45,6 +45,8 @@ _TABLE_COLUMNS: dict[str, dict[str, str]] = {
         "updated_at": "DATETIME",
         "file_exists": "BOOLEAN DEFAULT 1",
         "last_verified_at": "DATETIME",
+        "likes_count": "INTEGER DEFAULT 0",
+        "is_locked": "BOOLEAN DEFAULT 0",
     },
     "play_events": {
         "event_type": "VARCHAR(20) DEFAULT 'progress'",
@@ -182,20 +184,6 @@ async def self_heal_data_integrity() -> None:
             """))
             if orphan_folder_perms.rowcount:
                 logger.info(f"Self-healing: Removed {orphan_folder_perms.rowcount} orphaned folder permissions.")
-
-            # 7.6. Sync SFW / NSFW categorization based on path
-            sfw_update_nsfw = await session.execute(text("""
-                UPDATE media_metadata
-                SET adult_only = 1
-                WHERE NOT (lower(relative_path) LIKE 'myalbums%' OR lower(relative_path) LIKE '%nyalbums%')
-            """))
-            sfw_update_sfw = await session.execute(text("""
-                UPDATE media_metadata
-                SET adult_only = 0
-                WHERE lower(relative_path) LIKE 'myalbums%' OR lower(relative_path) LIKE '%nyalbums%'
-            """))
-            if sfw_update_nsfw.rowcount or sfw_update_sfw.rowcount:
-                logger.info(f"Self-healing: Synchronized SFW/NSFW status in database.")
 
             # Ensure all admins and super-admins are marked as adults
             admin_adult_update = await session.execute(text("""

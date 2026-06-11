@@ -2,7 +2,7 @@
  * MediaHub — Modern Cinematic Video Player Manager
  */
 import { api } from './app.js';
-import { isAdultApproved, toast, confirm, escapeHtml } from './utils.js';
+import { isAdultApproved, toast, confirm, escapeHtml, showPinDialog } from './utils.js';
 import { themeManager } from './theme-manager.js';
 
 export class PlayerManager {
@@ -108,6 +108,7 @@ export class PlayerManager {
         this.btnBack = document.getElementById('btn-back');
         this.btnSettings = document.getElementById('btn-settings');
         this.btnFavorite = document.getElementById('btn-favorite');
+        this.btnDownload = document.getElementById('btn-download');
         this.btnFullscreen = document.getElementById('btn-fullscreen');
 
         // Queue Sheet & Toast
@@ -160,6 +161,7 @@ export class PlayerManager {
         this.btnBack?.addEventListener('click', (e) => { e.stopPropagation(); this.eject(); });
         this.btnSettings?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleDrawer(); });
         this.btnFavorite?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFavorite(); });
+        this.btnDownload?.addEventListener('click', (e) => { e.stopPropagation(); this.downloadCurrentMedia(); });
         this.btnFullscreen?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFullscreen(); });
 
         this._boundPlay = () => {
@@ -539,7 +541,8 @@ export class PlayerManager {
 
         let playlists = [];
         try {
-            playlists = await api.request('/api/media/playlists');
+            const res = await api.getPlaylists();
+            playlists = Array.isArray(res) ? res : (res?.items || []);
         } catch (e) {
             toast('Failed to load playlists', 'error');
             return;
@@ -589,7 +592,7 @@ export class PlayerManager {
             el.onclick = async () => {
                 const pid = el.dataset.id;
                 try {
-                    await api.request(`/api/media/playlists/${pid}/items`, { method: 'POST', body: JSON.stringify({ media_id: mediaId }) });
+                    await api.addToPlaylist(pid, mediaId);
                     toast('Saved to playlist', 'success');
                     dialog.close();
                 } catch (e) { toast('Failed to save to playlist', 'error'); }
@@ -600,8 +603,8 @@ export class PlayerManager {
             const name = dialog.querySelector('#new-playlist-name').value.trim();
             if (!name) return;
             try {
-                const newPl = await api.request('/api/media/playlists', { method: 'POST', body: JSON.stringify({ title: name, description: "" }) });
-                await api.request(`/api/media/playlists/${newPl.id}/items`, { method: 'POST', body: JSON.stringify({ media_id: mediaId }) });
+                const newPl = await api.createPlaylist(name, "");
+                await api.addToPlaylist(newPl.id, mediaId);
                 toast(`Saved to new playlist '${name}'`, 'success');
                 dialog.close();
             } catch (e) { toast('Failed to create playlist', 'error'); }
@@ -835,12 +838,16 @@ export class PlayerManager {
             maxMaxBufferLength: 90,
         });
 
+        let networkRetryCount = 0;
+
         this.hls.on(Hls.Events.ERROR, (event, data) => {
             if (data.fatal) {
                 console.warn("HLS Fatal Error:", data.type);
                 switch (data.type) {
                     case Hls.ErrorTypes.NETWORK_ERROR:
-                        this.hls.startLoad();
+                        networkRetryCount++;
+                        if (networkRetryCount > 8) this._handleFailover();
+                        else setTimeout(() => { if (this.hls) this.hls.startLoad(); }, 1500);
                         break;
                     case Hls.ErrorTypes.MEDIA_ERROR:
                         this.hls.recoverMediaError();
@@ -1806,5 +1813,21 @@ export class PlayerManager {
     _updateFavoriteButton() {
         if (!this.btnFavorite || !this.currentMedia) return;
         this.btnFavorite.classList.toggle('active', !!this.currentMedia.is_favorite);
+    }
+
+    async downloadCurrentMedia() {
+        if (!this.currentMedia) return;
+        let url = `/api/media/${this.currentMedia.id}/download`;
+        if (this.currentMedia.requires_pin) {
+            const pin = await showPinDialog("Enter PIN to download this PG-Locked media:");
+            if (!pin) return;
+            url += `?pin=${encodeURIComponent(pin)}`;
+        }
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.currentMedia.title || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 }

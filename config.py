@@ -91,6 +91,7 @@ class Settings:
     admin_pin: str
     maintenance_mode: bool
     adult_keywords: str
+    sfw_keywords: str
     pin_keywords: str
     stale_hls_days: int
     redis_url: str
@@ -129,6 +130,7 @@ class Settings:
             admin_pin=os.getenv("ADMIN_PIN", "0000"),
             maintenance_mode=_env_bool("MAINTENANCE_MODE", False),
             adult_keywords=os.getenv("ADULT_KEYWORDS", "18+,adult,xxx,nsfw"),
+            sfw_keywords=os.getenv("SFW_KEYWORDS", "sfw,family,clean,general,safe"),
             pin_keywords=os.getenv("PIN_KEYWORDS", "locked,pin,private"),
             stale_hls_days=_env_int("STALE_HLS_DAYS", 7),
             redis_url=os.getenv("REDIS_URL", ""),
@@ -157,6 +159,10 @@ class Settings:
     @property
     def adult_keyword_set(self) -> set[str]:
         return {item.strip().lower() for item in self.adult_keywords.split(",") if item.strip()}
+
+    @property
+    def sfw_keyword_set(self) -> set[str]:
+        return {item.strip().lower() for item in self.sfw_keywords.split(",") if item.strip()}
 
     @property
     def pin_keyword_set(self) -> set[str]:

@@ -100,19 +100,30 @@ export function thumbUrl(mediaOrId) {
     if (typeof mediaOrId === 'number' || (typeof mediaOrId === 'string' && /^\d+$/.test(mediaOrId))) {
         url = `/api/media/${mediaOrId}/thumbnail`;
     } else if (typeof mediaOrId === 'object') {
-        if (mediaOrId.thumbnail_path) {
+        if (mediaOrId.id != null) {
+            url = `/api/media/${mediaOrId.id}/thumbnail`;
+        } else if (mediaOrId.thumbnail_path) {
             try {
                 const decoded = decodeURIComponent(mediaOrId.thumbnail_path);
                 url = decoded.split('/').map(s => s ? encodeURIComponent(s) : '').join('/');
             } catch {
                 url = mediaOrId.thumbnail_path.split('/').map(s => s ? encodeURIComponent(s) : '').join('/');
             }
-        } else if (mediaOrId.id != null) {
-            url = `/api/media/${mediaOrId.id}/thumbnail`;
         }
     }
 
     return withR18Param(url);
+}
+
+export function prefetchThumbnails(mediaItems, count = 10) {
+    if (!Array.isArray(mediaItems)) return;
+    mediaItems.slice(0, count).forEach(item => {
+        const url = thumbUrl(item);
+        if (url && !url.includes('placeholder.svg')) {
+            const img = new Image();
+            img.src = url;
+        }
+    });
 }
 
 export function homeCacheKey() {
@@ -120,13 +131,12 @@ export function homeCacheKey() {
 }
 
 export function clearContentCaches() {
-    const r18 = sessionStorage.getItem('r18_enabled') || 'false';
     ['true', 'false'].forEach((state) => {
         localStorage.removeItem(`mediahub_home_cache_${state}`);
+        localStorage.removeItem(`mediahub_home_cache_${state}_time`);
     });
     localStorage.removeItem('mediahub_home_cache');
     localStorage.removeItem('mediahub_home_cache_time');
-    localStorage.removeItem(`mediahub_home_cache_${r18}_time`);
 }
 
 export function isNsfwEnabled() {
@@ -136,16 +146,23 @@ export function isNsfwEnabled() {
 export function syncNsfwFromUser(user) {
     if (!user) {
         sessionStorage.setItem('r18_enabled', 'false');
+        sessionStorage.setItem('r18_prompted', 'false');
         return false;
     }
     const isAdult = user.role === 'admin' || user.role === 'super-admin' || user.is_adult === true;
     if (!isAdult) {
         sessionStorage.setItem('r18_enabled', 'false');
+        sessionStorage.setItem('r18_prompted', 'true');
         return false;
     }
     if (sessionStorage.getItem('r18_enabled') === null) {
-        const enabled = user.preferences?.nsfw === true;
-        sessionStorage.setItem('r18_enabled', enabled ? 'true' : 'false');
+        if (user.preferences && user.preferences.nsfw !== undefined && user.preferences.nsfw !== null) {
+            const enabled = user.preferences.nsfw === true;
+            sessionStorage.setItem('r18_enabled', enabled ? 'true' : 'false');
+            sessionStorage.setItem('r18_prompted', 'true');
+        } else {
+            sessionStorage.setItem('r18_enabled', 'false');
+        }
     }
     return sessionStorage.getItem('r18_enabled') === 'true';
 }
@@ -352,7 +369,7 @@ export function showPinDialog(message = "This content is PG-Locked.") {
             if (currentPin.length < 4) {
                 currentPin += val;
                 updateDisplay();
-                
+
                 if (currentPin.length === 4) {
                     setTimeout(() => {
                         cleanup();

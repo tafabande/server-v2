@@ -36,7 +36,12 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  
+
+  // Bypass cache completely for all API endpoints to ensure fresh data and respect headers (e.g. NSFW toggles)
+  if (url.pathname.startsWith('/api/')) {
+    return; // Direct network fetch
+  }
+
   // Handle network-first fallback strategy for /stream and /sprites JSON API endpoints
   if (
     url.pathname.includes('/api/media/') &&

@@ -226,15 +226,20 @@ export class ProfileView {
         document.getElementById('pref-sfw')?.addEventListener('change', async (e) => {
             const sfwOn = e.target.checked;
             const nextNsfw = !sfwOn;
+            console.log(`[ProfileView] SFW toggle changed. SFW mode: ${sfwOn}, Target NSFW: ${nextNsfw}`);
             try {
                 const updatedUser = await persistNsfwPreference(nextNsfw);
+                console.log(`[ProfileView] Successfully persisted NSFW preference: ${nextNsfw}`);
                 const app = appInstance;
                 if (app) {
                     app.store.set({ r18Enabled: nextNsfw, user: updatedUser });
                     app.updateUI();
+                    console.log(`[ProfileView] App UI updated. New state r18Enabled: ${nextNsfw}`);
+                    await app.handleNavigation();
                 }
                 toast(sfwOn ? 'SFW mode on' : 'SFW mode off', 'success');
             } catch (err) {
+                console.error(`[ProfileView] Failed to update SFW preference:`, err);
                 e.target.checked = !sfwOn;
                 toast(err.message || 'Failed to update preference', 'error');
             }

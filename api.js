@@ -75,4 +75,8 @@ export class ApiClient {
     async deleteMedia(mediaId) {
         return this._fetch(`/media/${mediaId}`, { method: 'DELETE' });
     }
+
+    async likeMedia(mediaId) {
+        return this._fetch(`/media/${mediaId}/like`, { method: 'POST' });
+    }
 }

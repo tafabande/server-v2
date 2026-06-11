@@ -2,7 +2,7 @@ import math
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import select, func, and_, or_, delete, exists
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +57,7 @@ router = APIRouter()
 
 @router.get("/library", response_model=PaginatedMediaResponse)
 async def library(
+    request: Request,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=1000),
     sort: str = Query(default="title", pattern="^(title|created_at|duration_seconds|file_size)$"),
@@ -64,12 +65,13 @@ async def library(
     type: str | None = Query(default=None, description="Filter by container type (mp4, mkv, avi, etc.)"),
     category: str | None = Query(default=None, description="Filter by category/folder name"),
     q: str | None = Query(default=None, description="Search title"),
+    adult_only: bool | None = Query(default=None, description="true=NSFW only, false=SFW only, omit=all"),
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> PaginatedMediaResponse:
     """Paginated media library with filters and sorting."""
     stmt = select(MediaMetadata)
-    stmt = await apply_media_security_filters(session, stmt, current_user)
+    stmt = await apply_media_security_filters(session, stmt, current_user, request)
     if type:
         t = type.lower()
         if t == "shorties":
@@ -108,6 +110,10 @@ async def library(
         stmt = stmt.where(MediaMetadata.category == category)
     if q:
         stmt = stmt.where(MediaMetadata.title.ilike(f"%{q}%"))
+    if adult_only is True:
+        stmt = stmt.where(MediaMetadata.adult_only == True)
+    elif adult_only is False:
+        stmt = stmt.where(MediaMetadata.adult_only == False)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total_items = await session.scalar(count_stmt) or 0
@@ -139,6 +145,7 @@ class FolderActionRequest(BaseModel):
 
 @router.get("/folders", response_model=LibraryFolderResponse)
 async def get_folders(
+    request: Request,
     path: str = Query(default=""),
     type: str | None = Query(default=None),
     current_user: User = Depends(get_optional_user),
@@ -150,20 +157,27 @@ async def get_folders(
     # 1. R18 / Adult Filter - Adults only!
     from core.models import FolderSetting
     nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
-    if not current_user or not current_user.is_adult or not nsfw_enabled:
-        adult_folder_exists = exists().where(
-            and_(
-                FolderSetting.is_adult == True,
-                or_(
-                    func.lower(MediaMetadata.relative_path) == func.lower(FolderSetting.path),
-                    func.lower(MediaMetadata.relative_path).like(func.lower(FolderSetting.path) + "/%")
-                )
+    if request.headers.get("X-Disable-R18") == "true":
+        nsfw_enabled = False
+    elif request.headers.get("X-Enable-R18") == "true":
+        nsfw_enabled = True
+        
+    adult_folder_exists = exists().where(
+        and_(
+            FolderSetting.is_adult == True,
+            or_(
+                func.lower(MediaMetadata.relative_path) == func.lower(FolderSetting.path),
+                func.lower(MediaMetadata.relative_path).like(func.lower(FolderSetting.path) + "/%")
             )
         )
-        stmt = stmt.where(and_(
-            MediaMetadata.adult_only == False,
-            ~adult_folder_exists
-        ))
+    )
+    if not current_user or not current_user.is_adult:
+        stmt = stmt.where(and_(MediaMetadata.adult_only == False, ~adult_folder_exists))
+    else:
+        if not nsfw_enabled:
+            stmt = stmt.where(and_(MediaMetadata.adult_only == False, ~adult_folder_exists))
+        else:
+            stmt = stmt.where(or_(MediaMetadata.adult_only == True, adult_folder_exists))
         
     if path:
         stmt = stmt.where(MediaMetadata.relative_path.like(f"{path}/%"))
@@ -332,10 +346,11 @@ async def toggle_folder_r18(
 
 @router.get("/groups", response_model=list[MediaGroup])
 async def library_grouped(
+    request: Request,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaGroup]:
-    groups = await library_groups(session, current_user=current_user)
+    groups = await library_groups(session, current_user=current_user, request=request)
     return [MediaGroup(label=group["label"], items=group["items"]) for group in groups]
 
 
@@ -343,11 +358,12 @@ async def library_grouped(
 
 @router.get("/smart/home", response_model=SmartHomeResponse)
 async def smart_home(
+    request: Request,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> SmartHomeResponse:
     """Get personalized home feed data."""
-    data = await get_smart_home_data(session, current_user)
+    data = await get_smart_home_data(session, current_user, request)
     return SmartHomeResponse(**data)
 
 
@@ -355,6 +371,7 @@ async def smart_home(
 
 @router.get("/recent", response_model=list[MediaRead])
 async def recent_media(
+    request: Request,
     limit: int = Query(default=30, ge=1, le=100),
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
@@ -367,7 +384,7 @@ async def recent_media(
         MediaMetadata.created_at >= cutoff
     ).order_by(MediaMetadata.created_at.desc()).limit(limit)
     
-    stmt = await apply_media_security_filters(session, stmt, current_user)
+    stmt = await apply_media_security_filters(session, stmt, current_user, request)
     
     result = await session.execute(stmt)
     return [MediaRead.model_validate(m) for m in result.scalars()]
@@ -398,6 +415,7 @@ async def rescan(
 
 @router.get("/continue", response_model=list[ContinueWatchingItem])
 async def get_continue_watching(
+    request: Request,
     current_user: Annotated[User, Depends(get_optional_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[ContinueWatchingItem]:
@@ -405,41 +423,36 @@ async def get_continue_watching(
     if current_user.role == "guest":
         return []
 
-    subq = (
-        select(
-            PlayEvent.media_id,
-            func.max(PlayEvent.created_at).label("latest"),
-        )
-        .where(PlayEvent.user_id == current_user.id)
-        .group_by(PlayEvent.media_id)
-        .subquery()
-    )
-
     result = await session.execute(
         select(PlayEvent)
-        .join(subq, and_(
-            PlayEvent.media_id == subq.c.media_id,
-            PlayEvent.created_at == subq.c.latest,
-        ))
         .where(
             PlayEvent.user_id == current_user.id,
-            PlayEvent.completed == False,
             PlayEvent.position_seconds > 10,
         )
         .order_by(PlayEvent.created_at.desc())
-        .limit(20)
+        .limit(200)
     )
 
     items = []
+    seen_media = set()
     from core.media import is_media_accessible
+    
     for event in result.scalars():
+        if event.media_id in seen_media:
+            continue
+        seen_media.add(event.media_id)
+        if event.completed:
+            continue
+            
         media = await session.get(MediaMetadata, event.media_id)
-        if media and await is_media_accessible(session, media, current_user):
+        if media and await is_media_accessible(session, media, current_user, request):
             items.append(ContinueWatchingItem(
                 media=MediaRead.model_validate(media),
                 last_position_seconds=event.position_seconds,
                 updated_at=event.created_at,
             ))
+            if len(items) >= 20:
+                break
     return items
 
 
@@ -447,6 +460,7 @@ async def get_continue_watching(
 
 @router.get("/history", response_model=list[WatchHistoryItem])
 async def get_watch_history(
+    request: Request,
     current_user: Annotated[User, Depends(get_optional_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[WatchHistoryItem]:
@@ -454,39 +468,32 @@ async def get_watch_history(
     if current_user.role == "guest":
         return []
 
-    # Get the latest play event per media for this user
-    subq = (
-        select(
-            PlayEvent.media_id,
-            func.max(PlayEvent.created_at).label("latest"),
-        )
-        .where(PlayEvent.user_id == current_user.id)
-        .group_by(PlayEvent.media_id)
-        .subquery()
-    )
-
     result = await session.execute(
         select(PlayEvent)
-        .join(subq, and_(
-            PlayEvent.media_id == subq.c.media_id,
-            PlayEvent.created_at == subq.c.latest,
-        ))
         .where(PlayEvent.user_id == current_user.id)
         .order_by(PlayEvent.created_at.desc())
-        .limit(50)
+        .limit(300)
     )
 
     items = []
+    seen_media = set()
     from core.media import is_media_accessible
+    
     for event in result.scalars():
+        if event.media_id in seen_media:
+            continue
+        seen_media.add(event.media_id)
+            
         media = await session.get(MediaMetadata, event.media_id)
-        if media and await is_media_accessible(session, media, current_user):
+        if media and await is_media_accessible(session, media, current_user, request):
             items.append(WatchHistoryItem(
                 media=MediaRead.model_validate(media),
                 last_position_seconds=event.position_seconds,
                 completed=event.completed,
                 updated_at=event.created_at,
             ))
+            if len(items) >= 50:
+                break
     return items
 
 
@@ -524,6 +531,7 @@ async def delete_history_item(
 
 @router.get("/search", response_model=list[MediaRead])
 async def search_media(
+    request: Request,
     q: str = Query(..., min_length=1),
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
@@ -538,7 +546,7 @@ async def search_media(
         )
     )
     
-    stmt = await apply_media_security_filters(session, stmt, current_user)
+    stmt = await apply_media_security_filters(session, stmt, current_user, request)
     
     result = await session.execute(stmt.limit(50))
     return [MediaRead.model_validate(m) for m in result.scalars()]
@@ -548,6 +556,7 @@ async def search_media(
 
 @router.get("/favorites", response_model=list[MediaRead])
 async def get_favorites(
+    request: Request,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MediaRead]:
@@ -560,7 +569,7 @@ async def get_favorites(
         .where(Favorite.user_id == current_user.id)
         .order_by(Favorite.created_at.desc())
     )
-    stmt = await apply_media_security_filters(session, stmt, current_user)
+    stmt = await apply_media_security_filters(session, stmt, current_user, request)
     result = await session.execute(stmt)
     items = []
     for m in result.scalars():
@@ -574,42 +583,14 @@ async def get_favorites(
 
 @router.get("/home/hero", response_model=HeroResponse | None)
 async def home_hero(
+    request: Request,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> HeroResponse | None:
     """Return a single featured item for the hero banner."""
-    # Priority: continue watching → trending → recently added
-    cw_stmt = (
-        select(MediaMetadata, PlayEvent.position_seconds)
-        .join(PlayEvent, PlayEvent.media_id == MediaMetadata.id)
-        .where(
-            PlayEvent.user_id == current_user.id,
-            PlayEvent.completed == False,
-            PlayEvent.position_seconds > 10,
-        )
-        .order_by(PlayEvent.created_at.desc())
-        .limit(1)
-    )
-    cw_stmt = await apply_media_security_filters(session, cw_stmt, current_user)
-    cw_res = await session.execute(cw_stmt)
-    cw_row = cw_res.first()
-
-    if cw_row:
-        media, pos = cw_row
-        return HeroResponse(
-            id=media.id,
-            title=media.title,
-            backdrop=f"/api/media/{media.id}/backdrop",
-            synopsis=extract_synopsis_from_nfo(Path(media.path)) or f"Resume watching {media.title}.",
-            year=extract_year_from_metadata(media),
-            duration=media.duration_seconds,
-            resume_position=pos,
-            type="resume",
-        )
-
-    # Fallback: most recently added
+    # Featured: most recently added
     fb_stmt = select(MediaMetadata)
-    fb_stmt = await apply_media_security_filters(session, fb_stmt, current_user)
+    fb_stmt = await apply_media_security_filters(session, fb_stmt, current_user, request)
     fb_stmt = fb_stmt.order_by(MediaMetadata.created_at.desc()).limit(1)
     result = await session.execute(fb_stmt)
     media = result.scalar_one_or_none()
@@ -620,22 +601,23 @@ async def home_hero(
         id=media.id,
         title=media.title,
         backdrop=f"/api/media/{media.id}/backdrop",
-        synopsis=extract_synopsis_from_nfo(Path(media.path)) or f"New in your library: {media.title}.",
+        synopsis=extract_synopsis_from_nfo(Path(media.path)) or f"Featured in your library: {media.title}.",
         year=extract_year_from_metadata(media),
         duration=media.duration_seconds,
         resume_position=0.0,
-        type="new",
+        type="featured",
     )
 
 
 @router.get("/home/rows", response_model=list[HomeRowResponse])
 async def home_rows(
+    request: Request,
     offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[HomeRowResponse]:
     """Return paginated home feed rows for infinite scroll."""
-    data = await get_smart_home_data(session, current_user)
+    data = await get_smart_home_data(session, current_user, request)
 
     def _item(m: MediaMetadata, progress: float | None = None) -> HomeItemRead:
         return HomeItemRead(
@@ -648,22 +630,6 @@ async def home_rows(
 
     all_rows: list[HomeRowResponse] = []
 
-    if data["continue_watching"]:
-        all_rows.append(HomeRowResponse(
-            title="Continue Watching",
-            type="resume",
-            items=[
-                _item(
-                    cw["media"],
-                    progress=(
-                        cw["last_position_seconds"] / cw["media"].duration_seconds
-                        if cw["media"].duration_seconds else None
-                    ),
-                )
-                for cw in data["continue_watching"]
-            ],
-        ))
-
     if data["recently_added"]:
         all_rows.append(HomeRowResponse(
             title="Recently Added",
@@ -671,27 +637,49 @@ async def home_rows(
             items=[_item(m) for m in data["recently_added"]],
         ))
 
-    if data["trending"]:
-        all_rows.append(HomeRowResponse(
-            title="Trending Now",
-            type="trending",
-            items=[_item(m) for m in data["trending"]],
-        ))
-
-    if data["recommendations"]:
-        all_rows.append(HomeRowResponse(
-            title="You Might Like",
-            type="recommended",
-            items=[_item(m) for m in data["recommendations"]],
-        ))
-
     return all_rows[offset: offset + 10]
+
+
+@router.get("/most-liked", response_model=list[MediaRead])
+async def get_most_liked(
+    request: Request,
+    limit: int = Query(default=24, ge=1, le=100),
+    current_user: User = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[MediaRead]:
+    """Get the most liked (most favorited) media items in the system."""
+    from core.models import Favorite
+    
+    stmt = (
+        select(MediaMetadata)
+        .join(Favorite, MediaMetadata.id == Favorite.media_id)
+        .group_by(MediaMetadata.id)
+        .order_by(func.count(Favorite.id).desc(), MediaMetadata.title.asc())
+        .limit(limit)
+    )
+    
+    stmt = await apply_media_security_filters(session, stmt, current_user, request)
+    result = await session.execute(stmt)
+    
+    items = []
+    for m in result.scalars().all():
+        mr = MediaRead.model_validate(m)
+        fav_stmt = select(Favorite).where(
+            Favorite.user_id == current_user.id,
+            Favorite.media_id == m.id
+        )
+        fav_res = await session.execute(fav_stmt)
+        mr.is_favorite = fav_res.scalar_one_or_none() is not None
+        items.append(mr)
+        
+    return items
 
 
 # ── Series Groups & Curator Index ─────────────────────────────────────────────
 
 @router.get("/series-groups", response_model=list[SeriesGroupDetailRead])
 async def get_series_groups(
+    request: Request,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
@@ -709,7 +697,7 @@ async def get_series_groups(
     for g in groups:
         # Get members
         m_stmt = select(MediaMetadata).join(SeriesMember).where(SeriesMember.series_id == g.id).order_by(MediaMetadata.title)
-        m_stmt = await apply_media_security_filters(session, m_stmt, current_user)
+        m_stmt = await apply_media_security_filters(session, m_stmt, current_user, request)
         m_res = await session.execute(m_stmt)
         episodes = m_res.scalars().all()
         if episodes:
@@ -724,6 +712,7 @@ async def get_series_groups(
 
 @router.get("/curator-index")
 async def curator_index(
+    request: Request,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
@@ -741,7 +730,7 @@ async def curator_index(
         SeriesGroup, SeriesMember.series_id == SeriesGroup.id
     ).where(MediaMetadata.file_exists == True)
     
-    query = await apply_media_security_filters(session, query, current_user)
+    query = await apply_media_security_filters(session, query, current_user, request)
     result = await session.execute(query)
 
     schema = {
@@ -792,6 +781,7 @@ async def curator_index(
 
 @router.get("/{media_id}", response_model=MediaRead)
 async def get_media_detail(
+    request: Request,
     media_id: int,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
@@ -803,6 +793,10 @@ async def get_media_detail(
         from core.exceptions import AccessDeniedError
         raise AccessDeniedError("Access to 18+ content denied for this account.")
     
+    from core.media import is_media_accessible
+    from core.exceptions import AccessDeniedError
+    if not await is_media_accessible(session, media, current_user, request):
+        raise AccessDeniedError("Access to this content is denied.")
     media_read = MediaRead.model_validate(media)
     
     # Check favorite status
@@ -822,6 +816,7 @@ async def get_media_detail(
 
 @router.get("/{media_id}/stream", response_model=StreamResponse)
 async def stream(
+    request: Request,
     media_id: int,
     pin: str | None = Query(default=None),
     priority: bool = Query(default=True),
@@ -837,15 +832,16 @@ async def stream(
 
     await ensure_pin_for_path(session, Path(media.path), pin, current_user=current_user)
         
-    if media.adult_only and not current_user.is_adult:
-        from core.exceptions import AccessDeniedError
-        raise AccessDeniedError("Access to 18+ content denied for this account.")
+    from core.media import is_media_accessible
+    if not await is_media_accessible(session, media, current_user, request):
+        raise HTTPException(status_code=403, detail="Access denied for this resource.")
 
     return StreamResponse(**await build_stream_response(session, media, priority=priority))
 
 
 @router.get("/{media_id}/file")
 async def stream_file(
+    request: Request,
     media_id: int,
     pin: str | None = Query(default=None),
     current_user: User = Depends(get_optional_user),
@@ -859,9 +855,9 @@ async def stream_file(
     from pathlib import Path
     await ensure_pin_for_path(session, Path(media.path), pin, current_user=current_user)
         
-    if media.adult_only and not current_user.is_adult:
-        from core.exceptions import AccessDeniedError
-        raise AccessDeniedError("Access to 18+ content denied for this account.")
+    from core.media import is_media_accessible
+    if not await is_media_accessible(session, media, current_user, request):
+        raise HTTPException(status_code=403, detail="Access denied for this resource.")
 
     if not source.exists() or not source.is_file():
         raise HTTPException(status_code=404, detail="Media file not found on disk.")
@@ -877,6 +873,7 @@ async def stream_file(
 
 @router.get("/{media_id}/thumbnail")
 async def get_thumbnail(
+    request: Request,
     media_id: int,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
@@ -884,7 +881,7 @@ async def get_thumbnail(
     """Get the poster/thumbnail image for a media item."""
     media = await get_media(session, media_id)
     from core.media import is_media_accessible
-    if not await is_media_accessible(session, media, current_user):
+    if not await is_media_accessible(session, media, current_user, request, strict=False):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
         
     from pathlib import Path
@@ -929,6 +926,7 @@ async def get_thumbnail(
 
 @router.get("/{media_id}/preview")
 async def get_media_preview(
+    request: Request,
     media_id: int,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
@@ -940,14 +938,13 @@ async def get_media_preview(
     """
     media = await get_media(session, media_id)
     from core.media import is_media_accessible
-    if not await is_media_accessible(session, media, current_user):
+    if not await is_media_accessible(session, media, current_user, request, strict=False):
         raise HTTPException(status_code=403, detail="Access denied.")
 
     if media.stream_mode != "direct":
-        raise HTTPException(
-            status_code=404,
-            detail="Preview not available for this format. Use the HLS stream instead.",
-        )
+        # Return 204 No Content instead of 404 to prevent noisy browser console errors
+        from fastapi import Response
+        return Response(status_code=204)
 
     source = media_source_path(media)
     if not source.exists() or not source.is_file():
@@ -1025,6 +1022,35 @@ async def toggle_favorite(
         
     await session.commit()
     return MessageResponse(message=message)
+
+
+@router.post("/{media_id}/like", response_model=MessageResponse)
+async def add_like(
+    media_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Increment a media item's like count and ensure it is favorited."""
+    media = await get_media(session, media_id)
+    
+    from sqlalchemy import text
+    try:
+        await session.execute(text(f"UPDATE media_metadata SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = {media_id}"))
+    except Exception:
+        pass
+        
+    if current_user and current_user.role != "guest":
+        from core.models import Favorite
+        stmt = select(Favorite).where(
+            Favorite.user_id == current_user.id,
+            Favorite.media_id == media_id
+        )
+        fav = (await session.execute(stmt)).scalar_one_or_none()
+        if not fav:
+            session.add(Favorite(user_id=current_user.id, media_id=media_id))
+            
+    await session.commit()
+    return MessageResponse(message="Like added.")
 
 
 # (GET /favorites moved above /{media_id} to fix FastAPI route-order matching)
@@ -1321,6 +1347,7 @@ async def delete_subtitle(
 
 @router.get("/{media_id}/download")
 async def download_media(
+    request: Request,
     media_id: int,
     pin: str | None = Query(default=None),
     current_user: User = Depends(get_optional_user),
@@ -1332,9 +1359,9 @@ async def download_media(
     from pathlib import Path
     await ensure_pin_for_path(session, Path(media.path), pin, current_user=current_user)
         
-    if media.adult_only and not current_user.is_adult:
-        from core.exceptions import AccessDeniedError
-        raise AccessDeniedError("Access to 18+ content denied for this account.")
+    from core.media import is_media_accessible
+    if not await is_media_accessible(session, media, current_user, request):
+        raise HTTPException(status_code=403, detail="Access denied for this resource.")
         
     source = media_source_path(media)
     if not source.exists() or not source.is_file():
@@ -1398,6 +1425,7 @@ def extract_synopsis_from_nfo(media_path: Path) -> str | None:
 
 @router.get("/{media_id}/backdrop")
 async def get_media_backdrop(
+    request: Request,
     media_id: int,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
@@ -1408,7 +1436,7 @@ async def get_media_backdrop(
     
     media = await get_media(session, media_id)
     from core.media import is_media_accessible
-    if not await is_media_accessible(session, media, current_user):
+    if not await is_media_accessible(session, media, current_user, request, strict=False):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
 
     backdrop_path = settings.temp_folder / "backdrops" / f"{media_id}.jpg"
@@ -1416,7 +1444,7 @@ async def get_media_backdrop(
         from core.media import ffmpeg_available
         if not ffmpeg_available():
             logger.warning(f"FFmpeg not available. Skipping backdrop generation for media ID {media_id}.")
-            return await get_thumbnail(media_id, current_user, session)
+            return await get_thumbnail(request, media_id, current_user, session)
 
         settings.temp_folder.mkdir(parents=True, exist_ok=True)
         (settings.temp_folder / "backdrops").mkdir(parents=True, exist_ok=True)
@@ -1426,8 +1454,6 @@ async def get_media_backdrop(
             raise HTTPException(status_code=404, detail="Media file not found on disk.")
             
         ss_time = 120.0
-        if media.duration_seconds and media.duration_seconds > 200:
-            ss_time = media.duration_seconds * 0.1
         if media.duration_seconds:
             if media.duration_seconds > 200:
                 ss_time = media.duration_seconds * 0.1
@@ -1457,7 +1483,7 @@ async def get_media_backdrop(
             logger.error(f"Failed to generate backdrop for {media_source_path(media)}: {e}")
             
     if not backdrop_path.exists():
-        return await get_thumbnail(media_id, current_user, session)
+        return await get_thumbnail(request, media_id, current_user, session)
         
     return FileResponse(backdrop_path)
 
@@ -1467,6 +1493,7 @@ async def get_media_backdrop(
 
 @router.get("/hls-secure/{media_id}/{filename:path}")
 async def serve_hls_file(
+    request: Request,
     media_id: int,
     filename: str,
     current_user: User = Depends(get_optional_user),
@@ -1474,7 +1501,7 @@ async def serve_hls_file(
 ):
     media = await get_media(session, media_id)
     from core.media import is_media_accessible
-    if not await is_media_accessible(session, media, current_user):
+    if not await is_media_accessible(session, media, current_user, request):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
         
     from core.media import hls_output_dir
@@ -1497,13 +1524,14 @@ async def serve_hls_file(
 
 @router.get("/sprites-secure/{media_id}")
 async def serve_sprites_file(
+    request: Request,
     media_id: int,
     current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     media = await get_media(session, media_id)
     from core.media import is_media_accessible
-    if not await is_media_accessible(session, media, current_user):
+    if not await is_media_accessible(session, media, current_user, request):
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
         
     from core.media import sprite_path_for

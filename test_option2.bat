@@ -7,12 +7,13 @@ set "PYTHON_EXE=python"
 echo [93m[INFO] Generating temp_scan.py...[0m
 echo import sys, asyncio, logging > temp_scan.py
 echo from core.database import init_db, AsyncSessionLocal >> temp_scan.py
-echo from core.bootstrap import self_heal_tables >> temp_scan.py
+echo from core.bootstrap import self_heal_tables, self_heal_columns >> temp_scan.py
 echo from core.media import scan_media_library, get_scan_status >> temp_scan.py
 echo logging.disable(logging.CRITICAL) >> temp_scan.py
 echo async def run(): >> temp_scan.py
 echo     await init_db() >> temp_scan.py
 echo     await self_heal_tables() >> temp_scan.py
+echo     await self_heal_columns() >> temp_scan.py
 echo     async with AsyncSessionLocal() as s: >> temp_scan.py
 echo         task = asyncio.create_task(scan_media_library(s, use_cache=False, force_thumbs=!FORCE_THUMBS!)) >> temp_scan.py
 echo         while not task.done(): >> temp_scan.py

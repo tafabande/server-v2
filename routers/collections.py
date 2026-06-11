@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
@@ -21,6 +21,7 @@ router = APIRouter()
 
 @router.get("", response_model=list[CollectionRead])
 async def list_collections(
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[CollectionRead]:
@@ -36,7 +37,7 @@ async def list_collections(
             .join(MediaMetadata, CollectionItem.media_id == MediaMetadata.id)
             .where(CollectionItem.collection_id == col.id)
         )
-        count_stmt = await apply_media_security_filters(session, count_stmt, current_user)
+        count_stmt = await apply_media_security_filters(session, count_stmt, current_user, request)
         item_count = (await session.execute(count_stmt)).scalar() or 0
         
         output.append(CollectionRead(
@@ -78,6 +79,7 @@ async def create_collection(
 
 @router.get("/{id}", response_model=CollectionDetailRead)
 async def get_collection_detail(
+    request: Request,
     id: int,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
@@ -94,7 +96,7 @@ async def get_collection_detail(
         .order_by(CollectionItem.sort_order, MediaMetadata.title)
     )
     
-    stmt = await apply_media_security_filters(session, stmt, current_user)
+    stmt = await apply_media_security_filters(session, stmt, current_user, request)
         
     result = await session.execute(stmt)
     items = [MediaRead.model_validate(m) for m in result.scalars()]
@@ -111,6 +113,7 @@ async def get_collection_detail(
 
 @router.put("/{id}", response_model=CollectionRead)
 async def update_collection(
+    request: Request,
     id: int,
     payload: CollectionCreate,
     current_user: User = Depends(require_roles("admin", "family")),
@@ -136,7 +139,7 @@ async def update_collection(
         .join(MediaMetadata, CollectionItem.media_id == MediaMetadata.id)
         .where(CollectionItem.collection_id == col.id)
     )
-    count_stmt = await apply_media_security_filters(session, count_stmt, current_user)
+    count_stmt = await apply_media_security_filters(session, count_stmt, current_user, request)
     item_count = (await session.execute(count_stmt)).scalar() or 0
     
     return CollectionRead(

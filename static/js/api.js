@@ -50,6 +50,8 @@ export class ApiClient {
       if (json !== undefined) headers.set("Content-Type", "application/json");
       if (!isNsfwEnabled()) {
         headers.set("X-Disable-R18", "true");
+      } else {
+        headers.set("X-Enable-R18", "true");
       }
 
       if (!isGET && method !== "HEAD") {
@@ -146,6 +148,8 @@ export class ApiClient {
   toggleFavorite(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}/favorite`, { method: "POST" }); }
   toggleLock(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}/lock`, { method: "POST" }); }
   getFavorites() { return this.request("/api/media/favorites"); }
+  getMostLiked(params = {}) { return this.request("/api/media/most-liked", { query: params }); }
+  likeMedia(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}/like`, { method: "POST" }); }
   getCuratorIndex() { return this.request("/api/media/curator-index"); }
   getSeriesGroups() { return this.request("/api/media/series-groups"); }
   async unlockPin(pin) {
@@ -181,9 +185,9 @@ export class ApiClient {
 
   // === Files ===
   browse(path = "", pin = "") { return this.request("/api/files", { query: { path, pin } }); }
-  upload(path, file, pin = "") {
+  upload(path, file, pin = "", isAdult = false) {
     const fd = new FormData(); fd.append("upload_file", file);
-    return this.request("/api/files/upload", { method: "POST", query: { path, pin }, body: fd });
+    return this.request("/api/files/upload", { method: "POST", query: { path, pin, is_adult: isAdult }, body: fd });
   }
   rename(path, newName, pin = "") { return this.request("/api/files/rename", { method: "POST", query: { pin }, json: { path, new_name: newName } }); }
   deleteFile(path, pin = "") { return this.request("/api/files/delete", { method: "POST", query: { pin }, json: { path } }); }
@@ -198,10 +202,11 @@ export class ApiClient {
   // === Playlists ===
   getPlaylists() { return this.request("/api/playlists"); }
   createPlaylist(title, description = "") { return this.request("/api/playlists", { method: "POST", json: { title, description } }); }
+  updatePlaylist(id, title, description) { return this.request(`/api/playlists/${parseInt(id, 10)}`, { method: "PUT", json: { title, description } }); }
   getPlaylist(id) { return this.request(`/api/playlists/${parseInt(id, 10)}`); }
   deletePlaylist(id) { return this.request(`/api/playlists/${parseInt(id, 10)}`, { method: "DELETE" }); }
   addToPlaylist(id, mediaId) { return this.request(`/api/playlists/${parseInt(id, 10)}/items`, { method: "POST", json: { media_id: parseInt(mediaId, 10) } }); }
-  removeFromPlaylist(id, itemId) { return this.request(`/api/playlists/${parseInt(id, 10)}/items/${parseInt(itemId, 10)}`, { method: "DELETE" }); }
+  removeFromPlaylist(id, mediaId) { return this.request(`/api/playlists/${parseInt(id, 10)}/items/${parseInt(mediaId, 10)}`, { method: "DELETE" }); }
 
   // === Users (admin) ===
   getUsers() { return this.request("/api/users"); }

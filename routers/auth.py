@@ -65,6 +65,8 @@ async def login_for_access_token(
             "username": user.username,
             "role": user.role,
             "avatar_url": user.avatar_url,
+            "preferences": user.preferences,
+            "is_adult": user.is_adult,
         }
     }
 

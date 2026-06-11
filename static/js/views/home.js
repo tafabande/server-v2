@@ -4,7 +4,7 @@
  * my list, and categories with horizontal scroll rows and hover previews.
  */
 import { api, player, router } from '../app.js';
-import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog, escapeHtml, homeCacheKey, clearContentCaches } from '../utils.js';
+import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, isNsfwEnabled, showAdultAccessDialog, escapeHtml, homeCacheKey, clearContentCaches, prefetchThumbnails } from '../utils.js';
 
 export class HomeView {
     constructor(container) {
@@ -13,11 +13,21 @@ export class HomeView {
         this.loadingMore = false;
         this.hoverTimeout = null;
         this.previewVideo = null;
+
+        // Videos pagination state
+        this.videosPage = 1;
+        this.videosLoading = false;
+        this.hasMoreVideos = true;
+        this.videosList = [];
     }
 
     async render() {
         this.rowsOffset = 0;
         this.loadingMore = false;
+        this.videosPage = 1;
+        this.videosLoading = false;
+        this.hasMoreVideos = true;
+        this.videosList = [];
 
         this.container.innerHTML = `
             <div class="view-header flex-between mb-lg" style="position: relative; z-index: 10;">
@@ -70,17 +80,13 @@ export class HomeView {
                         `).join('')}
                     </div>
                 </div>
-                <div class="skeleton-row">
-                    <div class="skeleton-row-title shimmer-bg"></div>
-                    <div class="skeleton-row-items">
-                        ${Array(4).fill().map(() => `
-                            <div class="skeleton-row-card">
-                                <div class="skeleton-poster shimmer-bg"></div>
-                                <div class="skeleton-title shimmer-bg"></div>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
+            </div>
+
+            <!-- Flat Videos Grid -->
+            <div id="home-videos-section" class="mt-lg" style="display:none;">
+                <h2 class="row-title mb-md">Videos</h2>
+                <div id="home-videos-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;"></div>
+                <div id="home-videos-sentinel" style="height:20px; margin-top:20px;"></div>
             </div>
         `;
 
@@ -124,7 +130,7 @@ export class HomeView {
 
             target.innerHTML = results.slice(0, 8).map(m => `
                 <div class="suggestion-item" data-id="${m.id}">
-                    <img src="${thumbUrl(m)}" class="suggestion-thumb" onerror="this.src='/static/placeholder.svg'">
+                    <img src="${thumbUrl(m)}" class="suggestion-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                     <div class="suggestion-info">
                         <div class="suggestion-title">${escapeHtml(m.title)}</div>
                         <div class="suggestion-meta">${m.duration_seconds ? formatDuration(m.duration_seconds) + ' · ' : ''}${escapeHtml(m.video_codec || 'VIDEO')}</div>
@@ -142,7 +148,7 @@ export class HomeView {
                         if (media.adult_only && !isAdultApproved()) {
                             showAdultAccessDialog();
                         } else {
-                            player.play(media);
+                            player.play([media], 0);
                         }
                     }
                     target.classList.remove('active');
@@ -260,7 +266,7 @@ export class HomeView {
             try {
                 const parsed = JSON.parse(cachedData);
                 hero = parsed.hero;
-                rows = parsed.rows;
+                rows = parsed.rows || [];
                 this.rowsOffset = rows.length;
                 console.log('Loading home feed from cache');
             } catch (e) {
@@ -275,7 +281,7 @@ export class HomeView {
                     api.getHomeRows(0)
                 ]);
                 hero = heroData;
-                rows = rowsData;
+                rows = rowsData || [];
                 this.rowsOffset = rows.length;
 
                 localStorage.setItem(cacheKey, JSON.stringify({ hero, rows }));
@@ -287,50 +293,68 @@ export class HomeView {
             }
         }
 
+        // Prefetch Hero backdrop and top row items for instant visual feedback
+        if (hero) {
+            const img = new Image();
+            img.src = thumbUrl(hero.id);
+        }
+        if (rows.length > 0) {
+            prefetchThumbnails(rows[0].items, 10);
+        }
+
         if (hero) {
             this._renderHero(hero);
         }
 
-        if (!rows.length) {
+        target.innerHTML = '';
+        if (rows.length > 0) {
+            const rowsContainer = document.createElement('div');
+            rowsContainer.className = 'rows-container';
+            rowsContainer.id = 'rows-container';
+            target.appendChild(rowsContainer);
+
+            for (const row of rows) {
+                rowsContainer.appendChild(this._createRow(row));
+            }
+
+            this._bindRowClickHandlers(rowsContainer, rows);
+        }
+
+        // Show flat videos section and load videos
+        const vSec = document.getElementById('home-videos-section');
+        if (vSec) vSec.style.display = 'block';
+        await this._loadVideos();
+
+        // Verify if completely empty after videos are loaded
+        if (!rows.length && this.videosList.length === 0) {
             target.innerHTML = `
-                <div class="empty-state">
+                <div class="empty-state" style="margin-top: 40px;">
                     <div class="empty-icon">📂</div>
                     <h3>No media detected</h3>
-                    <p>We couldn't find any media in your library. Add files to your shared folder and trigger a scan.</p>
+                    <p>We couldn't find any media in your library. Automatically scanning your folders in the background...</p>
                     <div class="flex-center gap-md mt-lg">
-                        <button class="btn btn-accent" id="home-rescan-btn">Scan Library</button>
+                        <button class="btn btn-accent" id="home-rescan-btn" disabled>Scanning Library in Background...</button>
                         <button class="btn btn-ghost" onclick="location.reload()">Refresh Page</button>
                     </div>
                 </div>
             `;
-            document.getElementById('home-rescan-btn')?.addEventListener('click', async (e) => {
-                e.currentTarget.disabled = true;
-                e.currentTarget.textContent = 'Scanning...';
-                try {
-                    await api.rescan();
-                    toast('Scan triggered successfully!', 'success');
-                    localStorage.removeItem(cacheKey);
-                    setTimeout(() => this._loadSmartHome(), 2000);
-                } catch (err) {
-                    toast(err.message, 'error');
-                    e.currentTarget.disabled = false;
-                    e.currentTarget.textContent = 'Scan Library';
+            if (vSec) vSec.style.display = 'none';
+
+            // Auto trigger scan
+            api.rescan().then(() => {
+                toast('Library indexed automatically!', 'success');
+                clearContentCaches();
+                setTimeout(() => location.reload(), 1500);
+            }).catch(err => {
+                const btn = document.getElementById('home-rescan-btn');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Retry Scan';
+                    btn.onclick = () => location.reload();
                 }
+                toast(err.message, 'error');
             });
-            return;
         }
-
-        target.innerHTML = '';
-        const rowsContainer = document.createElement('div');
-        rowsContainer.className = 'rows-container';
-        rowsContainer.id = 'rows-container';
-        target.appendChild(rowsContainer);
-
-        for (const row of rows) {
-            rowsContainer.appendChild(this._createRow(row));
-        }
-
-        this._bindRowClickHandlers(rowsContainer, rows);
     }
 
     _renderHero(hero) {
@@ -349,7 +373,7 @@ export class HomeView {
 
         const badgeType = heroDiv.querySelector('#hero-badge-type');
         if (badgeType) {
-            badgeType.textContent = hero.type === 'resume' ? 'Continue Watching' : 'New Release';
+            badgeType.textContent = 'Featured';
         }
 
         const playBtn = heroDiv.querySelector('.hero-play-btn');
@@ -429,7 +453,7 @@ export class HomeView {
         return `
             <div class="home-card" data-id="${item.id}" data-title="${escapeHtml(item.title)}" style="will-change: transform;">
                 <div class="card-poster" style="aspect-ratio: 16/9;">
-                    <img src="/static/placeholder.svg" data-src="${thumbUrl(item.id)}" alt="${escapeHtml(item.title)}" class="lazy-poster" onerror="this.onerror=null;this.src='/static/placeholder.svg'">
+                    <img src="${thumbUrl(item.id)}" alt="${escapeHtml(item.title)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                     ${progressHtml}
                     ${duration ? `<span class="media-badge duration-badge">${duration}</span>` : ''}
                     <div class="card-hover-info">
@@ -445,27 +469,6 @@ export class HomeView {
     }
 
     _bindRowClickHandlers(container, rows) {
-        const lazyImages = container.querySelectorAll('.lazy-poster');
-        if ('IntersectionObserver' in window) {
-            const observer = new IntersectionObserver((entries) => {
-                entries.forEach(entry => {
-                    if (entry.isIntersecting) {
-                        const img = entry.target;
-                        img.addEventListener('error', () => {
-                            img.onerror = null;
-                            img.src = '/static/placeholder.svg';
-                        }, { once: true });
-                        img.src = img.dataset.src;
-                        img.classList.remove('lazy-poster');
-                        observer.unobserve(img);
-                    }
-                });
-            });
-            lazyImages.forEach(img => observer.observe(img));
-        } else {
-            lazyImages.forEach(img => img.src = img.dataset.src);
-        }
-
         container.querySelectorAll('.home-row').forEach((rowEl, rowIdx) => {
             const rowData = rows.at(rowIdx);
             rowEl.querySelectorAll('.home-card').forEach((card, cardIdx) => {
@@ -481,11 +484,8 @@ export class HomeView {
     }
 
     _setupHoverPreviews() {
-        const smartSections = document.getElementById('smart-sections');
-        if (!smartSections) return;
-
-        smartSections.addEventListener('mouseenter', (e) => {
-            const card = e.target.closest('.home-card');
+        this.container.addEventListener('mouseenter', (e) => {
+            const card = e.target.closest('.home-card, .media-card');
             if (!card) return;
 
             if (this.hoverTimeout) {
@@ -494,8 +494,9 @@ export class HomeView {
             this._cleanupPreview();
 
             this.hoverTimeout = setTimeout(() => {
-                const mediaId = card.dataset.id;
+                const mediaId = card.dataset.id || card.dataset.mediaId;
                 const posterImg = card.querySelector('img');
+                if (!mediaId) return;
                 const previewUrl = `/api/media/${mediaId}/preview`;
 
                 this.previewVideo = document.createElement('video');
@@ -521,7 +522,7 @@ export class HomeView {
                     zIndex: '2',
                 });
 
-                const posterContainer = card.querySelector('.card-poster');
+                const posterContainer = card.querySelector('.card-poster, .media-card-poster');
                 if (posterContainer) {
                     posterContainer.style.position = 'relative';
                     posterContainer.appendChild(this.previewVideo);
@@ -572,49 +573,119 @@ export class HomeView {
         if (posterImg) {
             posterImg.style.opacity = '1';
         } else {
-            document.querySelectorAll('.home-card img').forEach(img => {
+            document.querySelectorAll('.home-card img, .media-card img').forEach(img => {
                 img.style.opacity = '1';
             });
         }
     }
 
     _attachScrollListeners() {
-        const scrollHandler = debounce(async () => {
-            if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 400) {
-                await this._loadMoreRows();
+        this._observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && !this.videosLoading && this.hasMoreVideos) {
+                this._loadVideos();
             }
-        }, 150);
-        window.addEventListener('scroll', scrollHandler);
-        this._scrollHandler = scrollHandler;
+        }, { rootMargin: '400px' });
+
+        const sentinel = document.getElementById('home-videos-sentinel');
+        if (sentinel) this._observer.observe(sentinel);
     }
 
-    async _loadMoreRows() {
-        if (this.loadingMore) return;
-        this.loadingMore = true;
+    async _loadVideos() {
+        if (this.videosLoading || !this.hasMoreVideos) return;
+        this.videosLoading = true;
+
+        const grid = document.getElementById('home-videos-grid');
+        if (grid && this.videosPage === 1) {
+            grid.innerHTML = `
+                ${Array(10).fill().map(() => `
+                    <div class="skeleton-card" style="width: 100%;">
+                        <div class="skeleton-poster shimmer-bg" style="aspect-ratio: 16/9;"></div>
+                        <div class="skeleton-title shimmer-bg"></div>
+                    </div>
+                `).join('')}
+            `;
+        }
 
         try {
-            const moreRows = await api.getHomeRows(this.rowsOffset);
-            if (moreRows && moreRows.length > 0) {
-                const rowsContainer = document.getElementById('rows-container');
-                if (rowsContainer) {
-                    for (const row of moreRows) {
-                        rowsContainer.appendChild(this._createRow(row));
-                    }
-                    this.rowsOffset += moreRows.length;
+            const res = await api.getLibrary({
+                page: this.videosPage,
+                per_page: 48,
+                sort: 'created_at',
+                order: 'desc'
+            });
 
-                    const cacheKey = homeCacheKey();
-                    const cached = JSON.parse(localStorage.getItem(cacheKey) || '{"rows":[]}');
-                    const mergedRows = [...cached.rows, ...moreRows];
-                    this._bindRowClickHandlers(rowsContainer, mergedRows);
-
-                    localStorage.setItem(cacheKey, JSON.stringify({ hero: cached.hero, rows: mergedRows }));
-                    localStorage.setItem(`${cacheKey}_time`, Date.now().toString());
-                }
+            const videos = res.items || [];
+            if (this.videosPage === 1 && grid) {
+                grid.innerHTML = '';
             }
-        } catch (e) {
-            console.error("Failed to load more rows on infinite scroll", e);
+
+            if (videos.length === 0) {
+                this.hasMoreVideos = false;
+                if (this.videosPage === 1 && grid) {
+                    grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;"><p>No videos found.</p></div>';
+                }
+                this.videosLoading = false;
+                return;
+            }
+
+            const startIndex = this.videosList.length;
+            this.videosList.push(...videos);
+
+            const fragment = document.createDocumentFragment();
+            videos.forEach((video, index) => {
+                const globalIndex = startIndex + index;
+                const card = document.createElement('div');
+                card.className = 'home-card';
+                card.dataset.id = video.id;
+                card.dataset.index = globalIndex;
+                card.style.willChange = 'transform';
+                card.style.width = '100%';
+                card.style.margin = '0';
+
+                const title = video.title || video.filename;
+                const dur = video.duration_seconds ? this._formatDuration(video.duration_seconds) : '';
+                const thumb = thumbUrl(video);
+
+                card.innerHTML = `
+                    <div class="card-poster" style="aspect-ratio: 16/9; position: relative;">
+                        <img src="${thumb}" alt="${escapeHtml(title)}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease; width:100%; height:100%; object-fit:cover;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
+                        ${dur ? `<span class="media-badge duration-badge">${dur}</span>` : ''}
+                        <div class="card-hover-info">
+                            <button class="card-play-btn">▶</button>
+                        </div>
+                    </div>
+                    <div class="media-card-info" style="padding-top: 8px;">
+                        <h3 class="media-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
+                        ${video.year ? `<div class="media-meta"><span>${escapeHtml(String(video.year))}</span></div>` : ''}
+                    </div>
+                `;
+
+                card.addEventListener('click', () => {
+                    if (video.adult_only && !isAdultApproved()) {
+                        showAdultAccessDialog();
+                        return;
+                    }
+                    const list = this.videosList.map(item => ({ id: item.id, title: item.title || item.filename, duration_seconds: item.duration_seconds }));
+                    player.play(list, globalIndex);
+                });
+
+                fragment.appendChild(card);
+            });
+
+            grid.appendChild(fragment);
+
+            if (videos.length < 48) {
+                this.hasMoreVideos = false;
+            } else {
+                this.videosPage++;
+            }
+        } catch (err) {
+            console.error("Failed to load flat videos grid", err);
+            if (this.videosPage === 1 && grid) {
+                grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;"><p>Error loading videos: ${escapeHtml(err.message)}</p></div>`;
+            }
         } finally {
-            this.loadingMore = false;
+            this.videosLoading = false;
         }
     }
 
@@ -622,15 +693,18 @@ export class HomeView {
         const q = query.toLowerCase().trim();
         const target = document.getElementById('smart-sections');
         const hero = document.getElementById('hero-banner');
+        const vSec = document.getElementById('home-videos-section');
         if (!target) return;
 
         if (!q) {
             if (hero) hero.style.display = 'block';
+            if (vSec) vSec.style.display = 'block';
             await this._loadSmartHome();
             return;
         }
 
         if (hero) hero.style.display = 'none';
+        if (vSec) vSec.style.display = 'none';
         target.innerHTML = `
             <div class="skeleton-grid">
                 ${Array(8).fill().map(() => `
@@ -657,7 +731,7 @@ export class HomeView {
                         ${results.map((m) => `
                             <div class="media-card" data-id="${m.id}" data-title="${escapeHtml(m.title)}">
                                 <div class="media-card-poster">
-                                    <img class="media-card-thumb" src="${thumbUrl(m)}" alt="${escapeHtml(m.title)}" onerror="this.src='/static/placeholder.svg'">
+                                    <img class="media-card-thumb shimmer-bg" src="${thumbUrl(m)}" alt="${escapeHtml(m.title)}" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
                                     ${m.duration_seconds ? `<span class="media-badge duration-badge">${formatDuration(m.duration_seconds)}</span>` : ''}
                                     <div class="media-card-actions">
                                         <button class="btn-icon btn-play">▶</button>
@@ -678,6 +752,11 @@ export class HomeView {
 
             target.querySelectorAll('.media-card').forEach((card, idx) => {
                 card.addEventListener('click', () => {
+                    const m = results[idx];
+                    if (m && m.adult_only && !isAdultApproved()) {
+                        showAdultAccessDialog();
+                        return;
+                    }
                     const list = results.map(item => ({ id: item.id, title: item.title, duration_seconds: item.duration_seconds }));
                     player.play(list, idx);
                 });
@@ -701,8 +780,9 @@ export class HomeView {
     }
 
     destroy() {
-        if (this._scrollHandler) {
-            window.removeEventListener('scroll', this._scrollHandler);
+        if (this._observer) {
+            this._observer.disconnect();
+            this._observer = null;
         }
         if (this.previewVideo) {
             this.previewVideo.pause();

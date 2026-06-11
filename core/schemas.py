@@ -62,6 +62,8 @@ class MediaRead(BaseModel):
     intro_start: float | None = None
     intro_end: float | None = None
     is_favorite: bool = False
+    likes_count: int = 0
+    year: int | None = None
     created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -214,6 +216,12 @@ class UserManageRead(BaseModel):
 class PlaylistCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=1000)
+
+
+class PlaylistUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+
 
 
 class PlaylistRead(BaseModel):

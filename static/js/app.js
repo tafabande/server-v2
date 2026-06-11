@@ -10,7 +10,7 @@ import { SocketClient } from './socket-client.js';
 import { PlayerManager } from './player-manager.js';
 import { Router } from './router.js';
 import { themeManager } from './theme-manager.js';
-import { toast, persistNsfwPreference } from './utils.js';
+import { toast, persistNsfwPreference, syncNsfwFromUser, prefetchThumbnails, clearContentCaches } from './utils.js';
 
 import { HomeView } from './views/home.js';
 import { LibraryView } from './views/library.js';
@@ -20,6 +20,7 @@ import { ProfileView } from './views/profile.js';
 import { LoginView } from './views/login.js';
 import { UploadView } from './views/upload.js';
 import { FavoritesView } from './views/favorites.js';
+import { PlaylistsView } from './views/playlists.js';
 import { ShortiesView } from './views/shorties.js';
 
 class ObservableState {
@@ -46,9 +47,13 @@ class App {
         this.user = JSON.parse(localStorage.getItem('mediahub_user') || 'null');
         this.token = localStorage.getItem('mediahub_token');
 
+        if (this.user) {
+            syncNsfwFromUser(this.user);
+        }
+
         this.store = new ObservableState({
-            user: JSON.parse(localStorage.getItem('mediahub_user') || 'null'),
-            token: localStorage.getItem('mediahub_token'),
+            user: this.user,
+            token: this.token,
             r18Enabled: sessionStorage.getItem('r18_enabled') === 'true'
         });
 
@@ -58,18 +63,13 @@ class App {
         this.store.subscribe(state => {
             this.user = state.user;
             this.token = state.token;
+            if (this.els) {
+                this.updateUI();
+            }
         });
 
         if (this.token) {
             this.api.setToken(this.token);
-        }
-
-        // Default to disabled while the prompt is open to secure the background view
-        if (this.token && this.user) {
-            if (sessionStorage.getItem('r18_enabled') === null) {
-                sessionStorage.setItem('r18_enabled', 'false');
-                this.store.set({ r18Enabled: false });
-            }
         }
 
         themeManager.init(this.user, this.api);
@@ -83,6 +83,10 @@ class App {
         window.addEventListener('mediahub-unauthorized', () => {
             this.logout();
         });
+
+        // Global Error Boundaries
+        window.addEventListener('error', (e) => this._handleGlobalError(e.error || e.message));
+        window.addEventListener('unhandledrejection', (e) => this._handleGlobalError(e.reason));
 
         const makeLibView = (fmt, options = {}) => class extends LibraryView {
             constructor(c) {
@@ -122,12 +126,31 @@ class App {
                 localStorage.setItem(`lib_${this._modeKey}_current_path`, path);
                 this._renderBreadcrumbs();
 
+                const target = document.getElementById('lib-content');
+                if (target) {
+                    target.innerHTML = `
+                        <div class="skeleton-grid fade-in">
+                            ${Array(8).fill().map(() => `
+                                <div class="skeleton-card">
+                                    <div class="skeleton-poster shimmer-bg"></div>
+                                    <div class="skeleton-title shimmer-bg"></div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+
                 try {
-                    const res = await api.request("/api/media/folders", {
-                        query: { path: String(path), type: this._mediaType() }
-                    });
+                    let endpoint = `/media/folders?path=${encodeURIComponent(String(path))}`;
+                    const type = this._mediaType();
+                    if (type) endpoint += `&type=${encodeURIComponent(type)}`;
+
+                    const res = await (typeof api.request === 'function' ? api.request("/api/media/folders", { query: { path: String(path), type: type } }) : api._fetch(endpoint));
                     this._folders = res.folders || [];
                     this._items = res.items || [];
+
+                    prefetchThumbnails(this._items, 10);
+
                     this._renderContent();
                 } catch (err) {
                     const target = document.getElementById('lib-content');
@@ -194,15 +217,12 @@ class App {
 
         const routes = [
             { path: '/', view: async () => HomeView, requiresAuth: true },
-            { path: '/favorites', view: async () => FavoritesView, requiresAuth: true },
+            { path: '/playlists', view: async () => PlaylistsView, requiresAuth: true },
             { path: '/shorties', view: async () => ShortiesView, requiresAuth: true },
-            { path: '/movies', view: async () => makeLibView('movies_series', { title: 'Movies', initialFilter: 'all' }), requiresAuth: true },
-            { path: '/series', view: async () => makeLibView('movies_series', { title: 'Movies', initialFilter: 'series', forceInitialFilter: true }), requiresAuth: true },
-            { path: '/videos', view: async () => makeLibView('videos', { title: 'Videos' }), requiresAuth: true },
             { path: '/library', view: async () => LibraryView, requiresAuth: true }, // General Library view
             { path: '/history', view: async () => HistoryView, requiresAuth: true },
-            { path: '/upload', view: async () => UploadView, requiresAuth: true },
-            { path: '/explorer', view: async () => UploadView, requiresAuth: true },
+            { path: '/upload', view: async () => LibraryView, requiresAuth: true },
+            { path: '/explorer', view: async () => LibraryView, requiresAuth: true },
             { path: '/admin', view: async () => AdminView, requiresAuth: true },
             { path: '/profile', view: async () => ProfileView, requiresAuth: true },
             { path: '/login', view: async () => LoginView, requiresAuth: false },
@@ -260,6 +280,27 @@ class App {
         if (this.token) this.initSocket();
 
         // Nav
+        if (this.token) {
+            try {
+                const freshUser = await this.api.me();
+                localStorage.setItem('mediahub_user', JSON.stringify(freshUser));
+                this.store.set({ user: freshUser });
+                syncNsfwFromUser(freshUser);
+            } catch (err) {
+                console.error("Failed to refresh user profile:", err);
+            }
+
+        // Auto-scan if library is entirely empty
+        try {
+            const libCheck = await this.api.getLibrary({ per_page: 1 });
+            if (!libCheck || !libCheck.items || libCheck.items.length === 0) {
+                this.api.rescan().then(() => {
+                    clearContentCaches();
+                }).catch(() => {});
+            }
+        } catch (e) {}
+        }
+
         this.checkR18SessionPrompt();
         await this.handleNavigation();
 
@@ -341,9 +382,10 @@ class App {
             try {
                 const user = await persistNsfwPreference(nextNsfw);
                 this.store.set({ r18Enabled: nextNsfw, user });
+                clearContentCaches();
                 this.updateUI();
 
-                toast(sfwOn ? 'SFW mode on — 18+ hidden' : 'SFW mode off — 18+ visible', 'success');
+                toast(sfwOn ? 'SFW Mode: Showing Safe Content Only' : 'NSFW Mode: Showing All Content', 'success');
 
                 await this.handleNavigation();
             } catch (err) {
@@ -384,12 +426,9 @@ class App {
 
             linkMap['/'] = createLink('/', '🏠', 'Home');
             linkMap['/library'] = createLink('/library', '📚', 'Library');
-            linkMap['/movies'] = createLink('/movies', '🎥', 'Movies');
-            linkMap['/videos'] = createLink('/videos', '📼', 'Videos');
             linkMap['/shorties'] = createLink('/shorties', '📱', 'Shorties');
-            linkMap['/favorites'] = createLink('/favorites', '❤️', 'Favorites');
+            linkMap['/playlists'] = createLink('/playlists', '🗂️', 'Playlists');
             linkMap['/history'] = createLink('/history', '⏱️', 'History');
-            linkMap['/upload'] = createLink('/upload', '📤', 'Upload');
             linkMap['/admin'] = createLink('/admin', '📊', 'Analytics', 'admin-only');
             linkMap['/profile'] = createLink('/profile', '👤', 'Profile');
 
@@ -418,8 +457,8 @@ class App {
 
             navContainer.innerHTML = '';
 
-            navContainer.appendChild(renderGroup('Discover', ['/', 'nsfw-toggle', '/movies', '/videos', '/shorties']));
-            navContainer.appendChild(renderGroup('My Media', ['/library', '/favorites', '/upload']));
+            navContainer.appendChild(renderGroup('Discover', ['/', 'nsfw-toggle', '/shorties']));
+            navContainer.appendChild(renderGroup('My Media', ['/library', '/playlists']));
             navContainer.appendChild(renderGroup('Activity & Analytics', ['/history', '/admin']));
             navContainer.appendChild(renderGroup('Settings', ['/profile']));
 
@@ -466,6 +505,7 @@ class App {
                         currentUser.is_adult = true;
                         localStorage.setItem('mediahub_user', JSON.stringify(currentUser));
                         this.store.set({ user: currentUser });
+                        clearContentCaches(); // Clear home cache when user's adult status changes
                         this.updateUI();
                     }
 
@@ -581,15 +621,19 @@ class App {
             // Handle NSFW sidebar button visibility and text state
             const isAdult = this.user.is_adult === true || this.user.is_adult === 1 || isAdmin;
             if (this.els.btnNsfwToggle) {
+                const wrap = document.getElementById('nsfw-toggle-wrap');
                 if (isAdult) {
-                    this.els.btnNsfwToggle.style.display = 'flex';
+                    if (wrap) wrap.style.display = 'flex';
+                    else this.els.btnNsfwToggle.style.display = 'flex';
+
                     const isNsfwEnabled = sessionStorage.getItem('r18_enabled') === 'true';
                     if (this.els.nsfwToggleLabel) {
-                        this.els.nsfwToggleLabel.textContent = isNsfwEnabled ? 'NSFW: On' : 'NSFW: Off';
+                        this.els.nsfwToggleLabel.textContent = isNsfwEnabled ? 'NSFW Only' : 'SFW Only';
                     }
-                    this.els.btnNsfwToggle.classList.toggle('active', isNsfwEnabled);
+                    this.els.btnNsfwToggle.checked = !isNsfwEnabled;
                 } else {
-                    this.els.btnNsfwToggle.style.display = 'none';
+                    if (wrap) wrap.style.display = 'none';
+                    else this.els.btnNsfwToggle.style.display = 'none';
                 }
             }
         }
@@ -605,8 +649,8 @@ class App {
 
         // Update Dynamic Title
         const titleMap = {
-            '/': 'Watch', '/library': 'Library', '/upload': 'Upload', '/explorer': 'Upload', '/admin': 'Insights', '/history': 'History', '/profile': 'Profile',
-            '/movies': 'Movies', '/series': 'Movies', '/videos': 'Videos', '/shorties': 'Shorties'
+            '/': 'Home', '/library': 'Library', '/upload': 'Upload', '/explorer': 'Upload', '/admin': 'Insights', '/history': 'History', '/profile': 'Profile',
+            '/series': 'Movies', '/videos': 'Videos', '/shorties': 'Shorties', '/playlists': 'Playlists'
         };
         if (this.els.pageTitle) { // The title for /upload will be handled by UploadView
             this.els.pageTitle.textContent = titleMap[path] || 'Watch';
@@ -718,6 +762,7 @@ class App {
             sessionStorage.setItem('r18_enabled', 'false');
             sessionStorage.setItem('r18_prompted', 'true');
             this.store.set({ r18Enabled: false });
+            clearContentCaches();
             dialog.close();
         };
 
@@ -725,6 +770,7 @@ class App {
             sessionStorage.setItem('r18_enabled', 'true');
             sessionStorage.setItem('r18_prompted', 'true');
             this.store.set({ r18Enabled: true });
+            clearContentCaches();
             dialog.close();
         };
 
@@ -764,6 +810,24 @@ class App {
         } catch (e) {
             // Silently back off on network/server errors to prevent console spam
             this._scanTimer = setTimeout(() => this.pollScanStatus(), 10000);
+        }
+    }
+
+    _handleGlobalError(error) {
+        console.error('[Global Error Boundary]', error);
+        const viewTarget = document.getElementById('view-target');
+        if (viewTarget) {
+            viewTarget.innerHTML = `
+                <div class="empty-state" style="margin-top: 10vh;">
+                    <div class="empty-icon" style="font-size: 3rem; margin-bottom: 16px;">💥</div>
+                    <h3 style="margin-bottom: 8px;">UI Crash Detected</h3>
+                    <p class="text-muted text-sm" style="margin-bottom: 24px; max-width: 500px; margin-left: auto; margin-right: auto; word-break: break-word;">
+                        ${error?.message || error || 'An unexpected error prevented this page from rendering.'}
+                    </p>
+                    <button class="btn btn-accent" onclick="window.location.href = '/'">Return Home</button>
+                    <button class="btn btn-ghost" style="margin-left: 8px;" onclick="window.location.reload()">Reload Page</button>
+                </div>
+            `;
         }
     }
 }

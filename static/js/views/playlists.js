@@ -1,148 +1,379 @@
 /**
  * MediaHub — Playlists View
+ * Simple playlist list with Favorites pre-loaded.
+ * Add button in top-right corner, no descriptions.
  */
 import { api, player } from '../app.js';
-import { toast, confirm, formatDuration, thumbUrl } from '../utils.js';
+import { toast, confirm, formatDuration, thumbUrl, showPinDialog, escapeHtml } from '../utils.js';
 
 export class PlaylistsView {
-    constructor(container) { this.container = container; this._activePlaylist = null; }
+    constructor(container) {
+        this.container = container;
+        this._activePlaylistId = null;
+        this._playlists = [];
+        this.hoverTimeout = null;
+        this.previewVideo = null;
+    }
 
     async render() {
         this.container.innerHTML = `
-            <div class="flex-between mb-md">
-                <div>
-                    <h1 class="page-title">Playlists</h1>
-                    <p class="page-subtitle">Organize your media</p>
+            <div class="view-header flex-between mb-lg" style="position: relative; z-index: 10; align-items: center;">
+                <h1 class="page-title">Playlists</h1>
+                <button id="btn-add-playlist" class="btn btn-accent btn-sm" style="display:flex;align-items:center;gap:6px;">
+                    <span style="font-size:1.1rem;line-height:1;">＋</span> New Playlist
+                </button>
+            </div>
+
+            <!-- Inline create form (hidden by default) -->
+            <div id="create-playlist-panel" style="display:none; margin-bottom: 16px;">
+                <div class="surface" style="padding:16px; border-radius: var(--radius); border: 1px solid var(--border-subtle);">
+                    <div class="form-group" style="margin-bottom:10px">
+                        <input id="pl-title-input" class="input" placeholder="Playlist name..." required style="width:100%;">
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:flex-end;">
+                        <button id="btn-cancel-create" class="btn btn-ghost btn-sm">Cancel</button>
+                        <button id="btn-confirm-create" class="btn btn-accent btn-sm">Create</button>
+                    </div>
                 </div>
             </div>
-            <div class="flex gap-md" style="align-items: flex-start;">
-                <div style="min-width: 260px; max-width: 300px;">
-                    <form id="create-playlist-form" class="surface mb-md">
-                        <div class="form-group" style="margin-bottom:8px">
-                            <input id="pl-title" class="input" placeholder="New playlist name..." required>
-                        </div>
-                        <button type="submit" class="btn btn-accent btn-sm" style="width:100%">Create Playlist</button>
-                    </form>
-                    <div id="playlists-list">
-                        <div class="loading-state"><div class="spinner"></div></div>
-                    </div>
+
+            <div style="display:flex;gap:20px;align-items:flex-start;">
+                <!-- Playlist sidebar list -->
+                <div id="playlists-sidebar" style="min-width:240px;max-width:260px;width:100%;">
+                    <div class="loading-state"><div class="spinner"></div></div>
                 </div>
-                <div style="flex:1">
-                    <div id="playlist-detail">
-                        <div class="empty-state"><p>Select a playlist</p></div>
-                    </div>
+                <!-- Playlist detail panel -->
+                <div id="playlist-detail" style="flex:1; min-width:0;">
+                    <div class="empty-state"><p>Select a playlist to view its contents</p></div>
                 </div>
             </div>
         `;
 
-        document.getElementById('create-playlist-form').addEventListener('submit', (e) => this._createPlaylist(e));
+        document.getElementById('btn-add-playlist')?.addEventListener('click', () => {
+            const panel = document.getElementById('create-playlist-panel');
+            if (panel) { panel.style.display = 'block'; document.getElementById('pl-title-input')?.focus(); }
+        });
+
+        document.getElementById('btn-cancel-create')?.addEventListener('click', () => {
+            const panel = document.getElementById('create-playlist-panel');
+            if (panel) { panel.style.display = 'none'; document.getElementById('pl-title-input').value = ''; }
+        });
+
+        document.getElementById('btn-confirm-create')?.addEventListener('click', () => this._createPlaylist());
+
+        document.getElementById('pl-title-input')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this._createPlaylist();
+            if (e.key === 'Escape') document.getElementById('btn-cancel-create')?.click();
+        });
+
         await this._loadPlaylists();
+        this._setupHoverPreviews();
     }
 
-    async _loadPlaylists() {
+    async _createPlaylist() {
+        const input = document.getElementById('pl-title-input');
+        const title = input?.value.trim();
+        if (!title) { toast('Playlist name is required', 'warning'); return; }
+
         try {
-            const res = await api.getPlaylists();
-            const playlists = Array.isArray(res) ? res : (res?.items || []);
-            const list = document.getElementById('playlists-list');
-
-            if (!playlists || playlists.length === 0) {
-                list.innerHTML = '<p class="text-muted text-sm" style="padding:8px">No playlists yet</p>';
-                return;
-            }
-
-            list.innerHTML = playlists.map(pl => `
-                <div class="nav-link" data-pl-id="${pl.id}" style="margin-bottom:2px">
-                    <span class="nav-icon">☰</span>
-                    <span class="nav-label">
-                        <strong>${pl.title}</strong>
-                        <span class="text-muted text-sm"> · ${pl.item_count} items</span>
-                    </span>
-                </div>
-            `).join('');
-
-            list.querySelectorAll('[data-pl-id]').forEach(el => {
-                el.addEventListener('click', () => this._viewPlaylist(parseInt(el.dataset.plId)));
-            });
+            const pl = await api.createPlaylist(title, '');
+            input.value = '';
+            document.getElementById('create-playlist-panel').style.display = 'none';
+            toast('Playlist created', 'success');
+            await this._loadPlaylists();
+            this._selectPlaylist(pl.id);
         } catch (err) {
             toast(err.message, 'error');
         }
     }
 
-    async _viewPlaylist(id) {
-        this._activePlaylist = id;
+    async _loadPlaylists() {
+        const sidebar = document.getElementById('playlists-sidebar');
+        if (!sidebar) return;
+
+        try {
+            let playlists = await api.getPlaylists();
+            playlists = Array.isArray(playlists) ? playlists : (playlists?.items || []);
+
+            // Ensure "Favorites" playlist exists as the first entry
+            let favPl = playlists.find(p => p.title === 'Favorites');
+            if (!favPl) {
+                favPl = await api.createPlaylist('Favorites', '');
+                playlists.unshift(favPl);
+            } else {
+                // Ensure Favorites is first
+                playlists = [favPl, ...playlists.filter(p => p.id !== favPl.id)];
+            }
+
+            this._playlists = playlists;
+
+            sidebar.innerHTML = playlists.map(pl => `
+                <div class="playlist-list-item nav-link ${this._activePlaylistId === pl.id ? 'active' : ''}"
+                     data-pl-id="${pl.id}"
+                     style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:var(--radius);margin-bottom:4px;cursor:pointer;transition:background 0.15s;">
+                    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                        <span style="font-size:1.1rem;">${pl.title === 'Favorites' ? '❤️' : '📁'}</span>
+                        <div style="min-width:0;">
+                            <div style="font-weight:600;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(pl.title)}</div>
+                            <div class="text-muted text-xs">${pl.item_count ?? 0} items</div>
+                        </div>
+                    </div>
+                    ${pl.title !== 'Favorites' ? `<button class="btn-icon btn-delete-pl" data-pl-id="${pl.id}" title="Delete" style="color:var(--text-muted);font-size:0.85rem;opacity:0.6;padding:4px 6px;flex-shrink:0;">✕</button>` : ''}
+                </div>
+            `).join('');
+
+            sidebar.querySelectorAll('[data-pl-id]').forEach(el => {
+                // Only trigger select on non-delete-button clicks
+                el.addEventListener('click', (e) => {
+                    if (e.target.closest('.btn-delete-pl')) return;
+                    this._selectPlaylist(parseInt(el.dataset.plId));
+                });
+            });
+
+            sidebar.querySelectorAll('.btn-delete-pl').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const id = parseInt(btn.dataset.plId);
+                    const pl = this._playlists.find(p => p.id === id);
+                    const yes = await confirm('Delete Playlist', `Delete "${pl?.title}"?`);
+                    if (!yes) return;
+                    try {
+                        await api.deletePlaylist(id);
+                        toast('Playlist deleted', 'success');
+                        if (this._activePlaylistId === id) {
+                            this._activePlaylistId = null;
+                            const detail = document.getElementById('playlist-detail');
+                            if (detail) detail.innerHTML = '<div class="empty-state"><p>Select a playlist to view its contents</p></div>';
+                        }
+                        await this._loadPlaylists();
+                    } catch (err) { toast(err.message, 'error'); }
+                });
+            });
+
+            // Auto-select first playlist (Favorites)
+            if (!this._activePlaylistId && this._playlists.length > 0) {
+                this._selectPlaylist(this._playlists[0].id);
+            } else if (this._activePlaylistId) {
+                this._selectPlaylist(this._activePlaylistId);
+            }
+
+        } catch (err) {
+            sidebar.innerHTML = `<div class="empty-state"><p>Error loading playlists: ${escapeHtml(err.message)}</p></div>`;
+        }
+    }
+
+    async _selectPlaylist(id) {
+        this._activePlaylistId = id;
+
+        // Highlight active in sidebar
+        document.querySelectorAll('.playlist-list-item').forEach(el => {
+            el.classList.toggle('active', parseInt(el.dataset.plId) === id);
+        });
+
         const detail = document.getElementById('playlist-detail');
+        if (!detail) return;
         detail.innerHTML = '<div class="loading-state"><div class="spinner"></div></div>';
 
         try {
             const pl = await api.getPlaylist(id);
+
             detail.innerHTML = `
-                <div class="surface">
-                    <div class="flex-between mb-md">
-                        <div>
-                            <h2 style="font-size:1.2rem; font-weight:700">${pl.title}</h2>
-                            ${pl.description ? `<p class="text-muted text-sm">${pl.description}</p>` : ''}
+                <div class="surface" style="padding:16px;border-radius:var(--radius);">
+                    <div class="flex-between mb-md" style="align-items:center;">
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <span style="font-size:1.4rem;">${pl.title === 'Favorites' ? '❤️' : '📁'}</span>
+                            <div>
+                                <h2 style="font-size:1.1rem;font-weight:700;margin:0;">${escapeHtml(pl.title)}</h2>
+                                <div class="text-muted text-xs">${pl.items?.length ?? 0} items</div>
+                            </div>
                         </div>
-                        <div class="flex gap-sm">
-                            <button id="play-all-btn" class="btn btn-accent btn-sm">▶ Play All</button>
-                            <button id="delete-pl-btn" class="btn btn-danger btn-sm">Delete</button>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            ${pl.items?.length > 0 ? `<button id="btn-play-all" class="btn btn-accent btn-sm">▶ Play All</button>` : ''}
+                            ${pl.title !== 'Favorites' ? `<button id="btn-rename-pl" class="btn btn-ghost btn-sm">Rename</button>` : ''}
                         </div>
                     </div>
-                    ${pl.items.length === 0 ?
-                    '<div class="empty-state"><p>Empty playlist — add media from the library</p></div>' :
-                    `<div class="gallery-grid">${pl.items.map(m => `
-                            <div class="media-card" data-media='${JSON.stringify(m).replace(/'/g, "&#39;")}'>
-                                <img class="media-card-thumb" src="${thumbUrl(m)}" alt="" loading="lazy" onerror="this.style.display='none'">
-                                <div class="media-card-body">
-                                    <div class="media-card-title">${m.title}</div>
-                                    <div class="media-card-meta">${formatDuration(m.duration_seconds)}</div>
-                                </div>
-                            </div>
-                        `).join('')}</div>`
-                }
+
+                    <!-- Rename inline form -->
+                    <div id="rename-pl-panel" style="display:none;margin-bottom:12px;">
+                        <div style="display:flex;gap:8px;">
+                            <input id="rename-pl-input" class="input input-sm" value="${escapeHtml(pl.title)}" style="flex:1;">
+                            <button id="btn-save-rename" class="btn btn-accent btn-sm">Save</button>
+                            <button id="btn-cancel-rename" class="btn btn-ghost btn-sm">Cancel</button>
+                        </div>
+                    </div>
+
+                    ${pl.items?.length === 0
+                        ? '<div class="empty-state" style="padding:40px 0;"><p>No items in this playlist yet.<br>Add media from your Library.</p></div>'
+                        : `<div class="yt-grid-8" id="pl-items-grid">
+                            ${pl.items.map((m, idx) => this._renderCard(m, idx, pl.id)).join('')}
+                           </div>`
+                    }
                 </div>
             `;
 
-            detail.querySelectorAll('.media-card').forEach((card, index) => {
-                card.addEventListener('click', () => {
-                    try { player.play(pl.items, index); }
+            document.getElementById('btn-play-all')?.addEventListener('click', () => {
+                if (pl.items?.length > 0) player.play(pl.items, 0);
+            });
+
+            document.getElementById('btn-rename-pl')?.addEventListener('click', () => {
+                document.getElementById('rename-pl-panel').style.display = 'block';
+                document.getElementById('rename-pl-input')?.focus();
+            });
+
+            document.getElementById('btn-cancel-rename')?.addEventListener('click', () => {
+                document.getElementById('rename-pl-panel').style.display = 'none';
+            });
+
+            document.getElementById('btn-save-rename')?.addEventListener('click', async () => {
+                const newTitle = document.getElementById('rename-pl-input')?.value.trim();
+                if (!newTitle) { toast('Name required', 'warning'); return; }
+                try {
+                    await api.updatePlaylist(id, newTitle, '');
+                    toast('Playlist renamed', 'success');
+                    await this._loadPlaylists();
+                } catch (err) { toast(err.message, 'error'); }
+            });
+
+            // Bind card events
+            detail.querySelectorAll('.pl-media-card').forEach(card => {
+                card.addEventListener('click', async (e) => {
+                    const idx = parseInt(card.dataset.index);
+                    const media = pl.items[idx];
+
+                    if (e.target.closest('.btn-remove')) {
+                        e.stopPropagation();
+                        try {
+                            await api.removeFromPlaylist(id, media.id);
+                            toast('Removed from playlist', 'success');
+                            await this._selectPlaylist(id);
+                            await this._loadPlaylists();
+                        } catch (err) { toast(err.message, 'error'); }
+                        return;
+                    }
+
+                    if (e.target.closest('.btn-download')) {
+                        e.stopPropagation();
+                        this._download(media);
+                        return;
+                    }
+
+                    if (e.target.closest('.btn-fav')) {
+                        e.stopPropagation();
+                        try {
+                            const res = await api.toggleFavorite(media.id);
+                            const isFav = res.status === 'added';
+                            media.is_favorite = isFav;
+                            const btn = e.target.closest('.btn-fav');
+                            btn.classList.toggle('active', isFav);
+                            btn.innerHTML = isFav ? '❤️' : '♡';
+                            toast(res.message, 'success');
+                        } catch (err) { toast(err.message, 'error'); }
+                        return;
+                    }
+
+                    try { player.play(pl.items, idx); }
                     catch { toast('Could not play', 'error'); }
                 });
             });
 
-            document.getElementById('play-all-btn')?.addEventListener('click', () => {
-                if (pl.items.length > 0) player.play(pl.items, 0);
-            });
-
-            document.getElementById('delete-pl-btn')?.addEventListener('click', async () => {
-                const yes = await confirm('Delete Playlist', `Delete "${pl.title}"?`);
-                if (!yes) return;
-                try {
-                    await api.deletePlaylist(id);
-                    toast('Playlist deleted', 'success');
-                    detail.innerHTML = '<div class="empty-state"><p>Select a playlist</p></div>';
-                    await this._loadPlaylists();
-                } catch (err) { toast(err.message, 'error'); }
-            });
         } catch (err) {
-            detail.innerHTML = `<div class="empty-state"><p>${err.message}</p></div>`;
+            detail.innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(err.message)}</p></div>`;
         }
     }
 
-    async _createPlaylist(e) {
-        e.preventDefault();
-        const titleInput = document.getElementById('pl-title');
-        const title = titleInput.value.trim();
-        if (!title) return;
+    _renderCard(m, index, playlistId) {
+        const title = m.title || m.filename;
+        const dur = formatDuration(m.duration_seconds);
+        const thumb = thumbUrl(m);
+        const isFav = m.is_favorite;
 
-        try {
-            await api.createPlaylist(title);
-            titleInput.value = '';
-            toast('Playlist created', 'success');
-            await this._loadPlaylists();
-        } catch (err) {
-            toast(err.message, 'error');
-        }
+        return `
+            <div class="pl-media-card media-card" data-index="${index}" data-media-id="${m.id}" style="will-change:transform;">
+                <div class="media-card-poster" style="aspect-ratio:16/9;position:relative;">
+                    <img src="${thumb}" alt="${escapeHtml(title)}" class="media-card-thumb shimmer-bg" loading="lazy"
+                         style="opacity:0;transition:opacity 0.3s ease;width:100%;height:100%;object-fit:cover;"
+                         onload="this.style.opacity=1;this.classList.remove('shimmer-bg');"
+                         onerror="this.onerror=null;this.src='/static/placeholder.svg';this.style.opacity=1;this.classList.remove('shimmer-bg');">
+                    ${m.adult_only ? '<div class="media-badge r18-badge">R18</div>' : ''}
+                    <span class="media-badge duration-badge">${dur}</span>
+                    <div class="media-card-actions">
+                        <button class="btn-icon btn-play" title="Play">▶</button>
+                        <button class="btn-icon btn-fav ${isFav ? 'active' : ''}" title="Favorite">${isFav ? '❤️' : '♡'}</button>
+                        <button class="btn-icon btn-download" title="Download">⬇</button>
+                        <button class="btn-icon btn-remove" title="Remove" style="color:var(--error);">✕</button>
+                    </div>
+                </div>
+                <div class="media-card-info">
+                    <h3 class="media-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
+                    <div class="media-meta"><span>${dur}</span><span class="dot">·</span><span>${escapeHtml(m.video_codec?.toUpperCase() || 'VIDEO')}</span></div>
+                </div>
+            </div>
+        `;
     }
 
-    destroy() { }
+    async _download(media) {
+        let url = `/api/media/${media.id}/download`;
+        if (media.requires_pin) {
+            const pin = await showPinDialog('Enter PIN to download:');
+            if (!pin) return;
+            url += `?pin=${encodeURIComponent(pin)}`;
+        }
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = media.title || 'download';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    _setupHoverPreviews() {
+        this.container.addEventListener('mouseenter', (e) => {
+            const card = e.target.closest('.pl-media-card');
+            if (!card) return;
+            if (this.hoverTimeout) clearTimeout(this.hoverTimeout);
+            this._cleanupPreview();
+
+            this.hoverTimeout = setTimeout(() => {
+                const mediaId = card.dataset.mediaId;
+                const posterImg = card.querySelector('img');
+                if (!mediaId) return;
+
+                this.previewVideo = document.createElement('video');
+                this.previewVideo.src = `/api/media/${mediaId}/preview`;
+                this.previewVideo.muted = true;
+                this.previewVideo.autoplay = true;
+                this.previewVideo.loop = true;
+                this.previewVideo.className = 'card-preview-video';
+                this.previewVideo.addEventListener('error', () => this._cleanupPreview());
+                Object.assign(this.previewVideo.style, {
+                    position: 'absolute', top: '0', left: '0', width: '100%', height: '100%',
+                    objectFit: 'cover', borderRadius: 'var(--radius)', zIndex: '2'
+                });
+
+                const poster = card.querySelector('.media-card-poster');
+                if (poster) { poster.style.position = 'relative'; poster.appendChild(this.previewVideo); }
+                if (posterImg) posterImg.style.opacity = '0.1';
+                this.previewVideo.play().catch(() => {});
+
+                card.addEventListener('mouseleave', () => { this._cleanupPreview(); if (posterImg) posterImg.style.opacity = '1'; }, { once: true });
+            }, 500);
+
+            card.addEventListener('mouseleave', () => {
+                if (this.hoverTimeout) { clearTimeout(this.hoverTimeout); this.hoverTimeout = null; }
+            }, { once: true });
+        }, true);
+    }
+
+    _cleanupPreview() {
+        if (this.hoverTimeout) { clearTimeout(this.hoverTimeout); this.hoverTimeout = null; }
+        if (this.previewVideo) {
+            try { this.previewVideo.pause(); this.previewVideo.src = ''; this.previewVideo.remove(); } catch (e) {}
+            this.previewVideo = null;
+        }
+        document.querySelectorAll('.card-preview-video').forEach(v => {
+            try { v.pause(); v.src = ''; v.remove(); } catch (e) {}
+        });
+    }
+
+    destroy() { this._cleanupPreview(); }
 }
