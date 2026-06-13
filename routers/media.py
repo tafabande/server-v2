@@ -1053,7 +1053,7 @@ async def rename_media(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Rename a media metadata title and physical file."""
+    """Rename a media metadata title and physical file (ACID-compliant)."""
     media = await get_media(session, media_id)
     old_source = media_source_path(media)
     
@@ -1063,7 +1063,9 @@ async def rename_media(
     import os
     from pathlib import Path
     
-    # Check if we should rename the file on disk
+    # Track filesystem changes for rollback
+    fs_changes = []  # list of (old_path, new_path) tuples
+    
     if payload.title != media.title:
         safe_name = Path(payload.title.replace("\\", "/").replace("..", "")).name
         if old_source.exists() and safe_name:
@@ -1071,22 +1073,23 @@ async def rename_media(
             if new_source != old_source:
                 if new_source.exists():
                     raise HTTPException(status_code=409, detail="A file with the new name already exists.")
+                
+                # Step 1: Physical rename (file-first)
                 try:
                     os.rename(old_source, new_source)
+                    fs_changes.append((new_source, old_source))  # rollback: new -> old
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"Failed to physically rename file: {e}")
                 
-                # Update DB paths
+                # Step 2: Update DB paths
                 media.path = str(new_source.resolve())
-                
-                # We also need to update relative_path based on new filename
                 old_rel = media.relative_path
                 if "/" in old_rel:
                     media.relative_path = f"{old_rel.rsplit('/', 1)[0]}/{new_source.name}"
                 else:
                     media.relative_path = new_source.name
                     
-                # Handle thumbnail renaming if it exists
+                # Step 3: Rename thumbnail if it exists
                 from config import get_settings
                 settings = get_settings()
                 if media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
@@ -1097,16 +1100,26 @@ async def rename_media(
                         new_thumb = settings.thumbs_folder / new_thumb_name
                         try:
                             os.rename(old_thumb, new_thumb)
+                            fs_changes.append((new_thumb, old_thumb))  # rollback
                             media.thumbnail_path = f"/thumbs/{new_thumb_name}"
                         except Exception as e:
                             logger.error(f"Failed to rename thumbnail: {e}")
 
     media.title = payload.title
-    await session.commit()
     
-    # Broadcast that the library was updated
+    # Step 4: Commit DB — if this fails, roll back ALL filesystem changes
+    try:
+        await session.commit()
+    except Exception as e:
+        logger.error(f"DB commit failed during rename, rolling back filesystem: {e}")
+        for current_path, original_path in reversed(fs_changes):
+            try:
+                os.rename(current_path, original_path)
+            except Exception as rollback_err:
+                logger.critical(f"FILESYSTEM ROLLBACK FAILED: {current_path} -> {original_path}: {rollback_err}")
+        raise HTTPException(status_code=500, detail="Database update failed. File changes have been rolled back.")
+    
     await broadcast_library_updated(0)
-    
     return MessageResponse(message="Media renamed successfully.")
 
 @router.delete("/{media_id}", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
@@ -1115,37 +1128,51 @@ async def delete_media(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Permanently delete a media item from the database and disk."""
+    """Permanently delete a media item (ACID-compliant: DB first, then disk)."""
     media = await get_media(session, media_id, allow_missing=True)
     
-    source = media_source_path(media)
     import os
-    if source.exists():
-        try:
-            os.remove(source)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to delete physical file: {e}")
-            
-    # Insert Tombstone
+    source = media_source_path(media)
+    resolved_path = str(source.resolve())
+    
+    # Step 1: Create tombstone + delete DB record atomically
     from core.models import DeletedMediaTombstone
     from datetime import datetime, timedelta, UTC
     
     try:
-        resolved_path = str(source.resolve())
         tombstone = DeletedMediaTombstone(
             path=resolved_path,
             expires_at=datetime.now(UTC) + timedelta(hours=24)
         )
         session.add(tombstone)
+        await session.execute(delete(MediaMetadata).where(MediaMetadata.id == media_id))
+        await session.commit()
     except Exception as e:
-        logger.error(f"Failed to create tombstone for {source}: {e}")
-            
-    await session.execute(delete(MediaMetadata).where(MediaMetadata.id == media_id))
-    await session.commit()
+        logger.error(f"DB transaction failed during delete: {e}")
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Database deletion failed: {e}")
     
-    # Trigger a broadcast so clients refresh their library
-    await broadcast_library_updated(0) 
+    # Step 2: Physical file deletion (post-commit — safe because tombstone prevents resurrection)
+    if source.exists():
+        try:
+            os.remove(source)
+        except Exception as e:
+            # Non-fatal: tombstone prevents scanner from re-indexing this file
+            logger.warning(f"Physical file deletion failed (tombstoned): {source} — {e}")
     
+    # Step 3: Clean up thumbnail
+    from config import get_settings
+    settings = get_settings()
+    if media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
+        from pathlib import Path
+        thumb_file = settings.thumbs_folder / Path(media.thumbnail_path.replace(chr(92), "/")).name
+        if thumb_file.exists():
+            try:
+                os.remove(thumb_file)
+            except Exception:
+                pass  # Non-critical
+    
+    await broadcast_library_updated(0)
     return MessageResponse(message="Media deleted successfully.")
 
 # ── Sprites ───────────────────────────────────────────────────────────────────

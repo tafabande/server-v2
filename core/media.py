@@ -641,7 +641,7 @@ def validate_media(path: Path) -> bool:
     except Exception:
         return False
 
-async def scan_media_library(session: AsyncSession, use_cache: bool = True, force_thumbs: bool = False) -> int:
+async def scan_media_library(session: AsyncSession, use_cache: bool = True, force_thumbs: bool = False, build_all: bool = False) -> int:
     logger.info("Starting media library discovery and indexing...")
     _scan_state["scanning"] = True
     _scan_state["files_scanned"] = 0
@@ -978,6 +978,68 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                         logger.info(f"Scan cleanup: Stale media '{media.title}' (ID {media.id}) deleted.")
 
     await session.commit()
+
+    if build_all:
+        logger.info("Starting aggressive preparation of thumbnails and sprite sheets...")
+        result = await session.execute(
+            select(MediaMetadata).where(
+                MediaMetadata.file_exists == True,
+                MediaMetadata.hls_status != "corrupted"
+            )
+        )
+        active_items = result.scalars().all()
+        total_prep = len(active_items)
+        _scan_state["files_total"] = total_prep
+        _scan_state["files_scanned"] = 0
+        _scan_state["current_folder"] = "Preparing assets..."
+        
+        sem = asyncio.Semaphore(4)
+        prep_scanned = 0
+        
+        async def prep_single(media_item):
+            nonlocal prep_scanned
+            async with sem:
+                target_path = Path(media_item.path)
+                if target_path.exists():
+                    try:
+                        if force_thumbs:
+                            thumb_dest = thumbnail_path_for(media_item.relative_path).with_suffix(".jpg")
+                            if thumb_dest.exists():
+                                try:
+                                    thumb_dest.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                        await asyncio.to_thread(
+                            build_thumbnail,
+                            target_path,
+                            media_item.relative_path,
+                            media_item.title,
+                            media_item.duration_seconds
+                        )
+                    except Exception as e:
+                        logger.error(f"Error preparing thumbnail for {media_item.title}: {e}")
+                    
+                    try:
+                        if force_thumbs:
+                            sprite_dest = sprite_path_for(media_item.id)
+                            if sprite_dest.exists():
+                                try:
+                                    sprite_dest.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                        await asyncio.to_thread(
+                            build_sprite_sheet,
+                            target_path,
+                            media_item.id,
+                            media_item.duration_seconds
+                        )
+                    except Exception as e:
+                        logger.error(f"Error preparing sprite sheet for {media_item.title}: {e}")
+                
+                prep_scanned += 1
+                _scan_state["files_scanned"] = prep_scanned
+                
+        await asyncio.gather(*[prep_single(item) for item in active_items])
 
     # Run classification & series detection after indexing
     try:

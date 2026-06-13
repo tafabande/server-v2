@@ -140,6 +140,29 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 @app.middleware("http")
+async def add_csp_header(request: Request, call_next):
+    """Content Security Policy — restrict resource origins for LAN security."""
+    response = await call_next(request)
+    # Skip CSP for API responses (JSON) to avoid overhead
+    content_type = response.headers.get("content-type", "")
+    if "text/html" in content_type:
+        csp = "; ".join([
+            "default-src 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",        # unsafe-inline needed for dynamic player styles
+            "font-src 'self'",
+            "img-src 'self' data: blob: https://api.dicebear.com",  # dicebear for fallback avatars
+            "media-src 'self' blob:",                    # blob: required for HLS.js segments
+            "connect-src 'self' ws: wss:",               # WebSocket support
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ])
+        response.headers["Content-Security-Policy"] = csp
+    return response
+
+@app.middleware("http")
 async def global_recovery_middleware(request: Request, call_next):
     try:
         return await call_next(request)

@@ -10,7 +10,10 @@ import { SocketClient } from './socket-client.js';
 import { PlayerManager } from './player-manager.js';
 import { Router } from './router.js';
 import { themeManager } from './theme-manager.js';
-import { toast, persistNsfwPreference, syncNsfwFromUser, prefetchThumbnails, clearContentCaches } from './utils.js';
+import { toast, persistNsfwPreference, syncNsfwFromUser, prefetchThumbnails, clearContentCaches, showModal } from './utils.js';
+
+import { getSidebarHTML, getDialogsHTML } from './components/uiElements.js';
+import { getPlayerHTML } from './components/playerUI.js';
 
 import { HomeView } from './views/home.js';
 import { LibraryView } from './views/library.js';
@@ -41,6 +44,7 @@ class ObservableState {
 
 class App {
     constructor() {
+        window.appInstance = this;
         this.api = new ApiClient();
         this.socket = null;
         this.player = null;
@@ -73,12 +77,6 @@ class App {
         }
 
         themeManager.init(this.user, this.api);
-
-        // Setup Document Environment Safely for new design schema
-        const fontLink = document.createElement('link');
-        fontLink.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap';
-        fontLink.rel = 'stylesheet';
-        document.head.appendChild(fontLink);
 
         window.addEventListener('mediahub-unauthorized', () => {
             this.logout();
@@ -234,6 +232,21 @@ class App {
     }
 
     async init() {
+        // --- UI Injection ---
+        // Inject sidebar inside #app-root right before #main-area
+        const mainArea = document.getElementById('main-area');
+        if (mainArea && !document.getElementById('sidebar')) {
+            mainArea.insertAdjacentHTML('beforebegin', getSidebarHTML());
+        }
+        // Inject overlays and dialogs at the end of body
+        if (!document.getElementById('sidebar-overlay')) {
+            document.body.insertAdjacentHTML('beforeend', getDialogsHTML());
+        }
+        // Inject player modal at the end of body
+        if (!document.getElementById('player-modal')) {
+            document.body.insertAdjacentHTML('beforeend', getPlayerHTML());
+        }
+
         this.els = {
             sidebar: document.getElementById('sidebar'),
             sidebarOverlay: document.getElementById('sidebar-overlay'),
@@ -374,6 +387,14 @@ class App {
 
         // Share QR
         this.els.btnShareQr?.addEventListener('click', () => this._showShareQR());
+        document.getElementById('btn-share-close')?.addEventListener('click', () => {
+            document.getElementById('share-dialog')?.close();
+        });
+
+        // Mobile Search trigger
+        document.getElementById('mobile-search-trigger')?.addEventListener('click', () => {
+            document.getElementById('global-search-input')?.focus();
+        });
 
         // SFW mode toggle (on = hide 18+ content)
         this.els.btnNsfwToggle?.addEventListener('change', async () => {
@@ -690,6 +711,46 @@ class App {
         this.socket.connect();
     }
 
+    async onLoginSuccess(token, user) {
+        localStorage.setItem('mediahub_token', token);
+        localStorage.setItem('mediahub_user', JSON.stringify(user));
+        this.token = token;
+        this.user = user;
+        this.api.setToken(token);
+        this.store.set({ token, user });
+
+        if (token) this.initSocket();
+
+        // Refresh user profile in background
+        try {
+            const freshUser = await this.api.me();
+            localStorage.setItem('mediahub_user', JSON.stringify(freshUser));
+            this.store.set({ user: freshUser });
+            syncNsfwFromUser(freshUser);
+        } catch (err) {
+            console.error("Failed to refresh user profile:", err);
+        }
+
+        // Auto-scan if library is entirely empty
+        try {
+            const libCheck = await this.api.getLibrary({ per_page: 1 });
+            if (!libCheck || !libCheck.items || libCheck.items.length === 0) {
+                this.api.rescan().then(() => {
+                    clearContentCaches();
+                }).catch(() => {});
+            }
+        } catch (e) {}
+
+        this.checkR18SessionPrompt();
+
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) sidebar.hidden = false;
+        const mainArea = document.getElementById('main-area');
+        if (mainArea) mainArea.style.marginLeft = '';
+
+        this.router.navigate('/');
+    }
+
     logout() {
         localStorage.removeItem('mediahub_token');
         localStorage.removeItem('mediahub_user');
@@ -824,15 +885,22 @@ class App {
                     <p class="text-muted text-sm" style="margin-bottom: 24px; max-width: 500px; margin-left: auto; margin-right: auto; word-break: break-word;">
                         ${error?.message || error || 'An unexpected error prevented this page from rendering.'}
                     </p>
-                    <button class="btn btn-accent" onclick="window.location.href = '/'">Return Home</button>
-                    <button class="btn btn-ghost" style="margin-left: 8px;" onclick="window.location.reload()">Reload Page</button>
+                    <button class="btn btn-accent" id="btn-crash-home">Return Home</button>
+                    <button class="btn btn-ghost" style="margin-left: 8px;" id="btn-crash-reload">Reload Page</button>
                 </div>
             `;
+            document.getElementById('btn-crash-home')?.addEventListener('click', () => {
+                window.location.href = '/';
+            });
+            document.getElementById('btn-crash-reload')?.addEventListener('click', () => {
+                window.location.reload();
+            });
         }
     }
 }
 
 const appInstance = new App();
+window.appInstance = appInstance;
 api = appInstance.api;
 player = appInstance.player;
 router = appInstance.router;

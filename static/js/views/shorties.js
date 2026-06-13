@@ -134,7 +134,7 @@ export class ShortiesView {
             errorDiv.className = 'empty-state';
             errorDiv.innerHTML = `
                 <div class="empty-icon">❌</div>
-                <p>Failed to load short videos: ${err.message}</p>
+                <p>Failed to load short videos: ${escapeHtml(err.message)}</p>
             `;
             feed.replaceChildren(errorDiv);
         }
@@ -196,8 +196,8 @@ export class ShortiesView {
 
                 <!-- Bottom Info Overlay -->
                 <div class="shorty-overlay-bottom">
-                    <h4 class="shorty-title">${v.title}</h4>
-                    <p class="shorty-desc">📁 ${v.category || 'Shorts'}</p>
+                    <h4 class="shorty-title">${escapeHtml(v.title)}</h4>
+                    <p class="shorty-desc">📁 ${escapeHtml(v.category || 'Shorts')}</p>
                 </div>
 
                 <!-- Floating Action Buttons -->

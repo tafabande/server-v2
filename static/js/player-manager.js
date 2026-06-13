@@ -103,12 +103,12 @@ export class PlayerManager {
         this.btnPlay = document.getElementById('btn-play');
         this.btnPrev = document.getElementById('btn-prev');
         this.btnNext = document.getElementById('btn-next');
-        this.btnShuffle = document.getElementById('btn-shuffle');
+        this.btnShuffle = document.getElementById('item-shuffle');
         this.btnQueueToggle = document.getElementById('btn-queue-toggle');
         this.btnBack = document.getElementById('btn-back');
         this.btnSettings = document.getElementById('btn-settings');
-        this.btnFavorite = document.getElementById('btn-favorite');
-        this.btnDownload = document.getElementById('btn-download');
+        this.btnFavorite = document.getElementById('item-favorite');
+        this.btnDownload = document.getElementById('item-download');
         this.btnFullscreen = document.getElementById('btn-fullscreen');
 
         // Queue Sheet & Toast
@@ -156,12 +156,9 @@ export class PlayerManager {
         this.btnPlay?.addEventListener('click', (e) => { e.stopPropagation(); this.togglePlay(); });
         this.btnPrev?.addEventListener('click', (e) => { e.stopPropagation(); this.previous(); });
         this.btnNext?.addEventListener('click', (e) => { e.stopPropagation(); this.next(); });
-        this.btnShuffle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleShuffle(); });
         this.btnQueueToggle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleQueueSheet(); });
         this.btnBack?.addEventListener('click', (e) => { e.stopPropagation(); this.eject(); });
         this.btnSettings?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleDrawer(); });
-        this.btnFavorite?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFavorite(); });
-        this.btnDownload?.addEventListener('click', (e) => { e.stopPropagation(); this.downloadCurrentMedia(); });
         this.btnFullscreen?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleFullscreen(); });
 
         this._boundPlay = () => {
@@ -320,6 +317,18 @@ export class PlayerManager {
                 if (item.id === 'item-delete') {
                     this.toggleDrawer(false);
                     this._onDeleteClick();
+                }
+                if (item.id === 'item-shuffle') {
+                    this.toggleDrawer(false);
+                    this.toggleShuffle();
+                }
+                if (item.id === 'item-favorite') {
+                    this.toggleDrawer(false);
+                    this.toggleFavorite();
+                }
+                if (item.id === 'item-download') {
+                    this.toggleDrawer(false);
+                    this.downloadCurrentMedia();
                 }
             });
         });
@@ -738,6 +747,7 @@ export class PlayerManager {
 
         this._cleanup();
         this.currentMedia = media;
+        this.video.poster = `/api/media/${media.id}/thumbnail`;
 
         // Update UI
         if (this.tapeTitle) this.tapeTitle.textContent = media.title || 'Untitled';

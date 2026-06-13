@@ -2,6 +2,7 @@
  * MediaHub — Login View
  */
 import { api, router } from '../app.js';
+import { escapeHtml } from '../utils.js';
 
 export class LoginView {
     constructor(container) { 
@@ -55,9 +56,9 @@ export class LoginView {
                     
                     <div class="user-grid" id="user-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 16px; margin-bottom: 24px;">
                         ${users.map(u => `
-                            <div class="user-profile flex flex-col items-center gap-2 cursor-pointer hover:scale-105 transition-transform" data-username="${u.username}">
-                                <img src="${u.avatar_url}" alt="${u.username}" class="w-20 h-20 rounded-full border-2 border-transparent hover:border-primary object-cover bg-surface-variant">
-                                <span class="text-on-surface font-medium">${u.username}</span>
+                            <div class="user-profile flex flex-col items-center gap-2 cursor-pointer hover:scale-105 transition-transform" data-username="${escapeHtml(u.username)}">
+                                <img src="${escapeHtml(u.avatar_url)}" alt="${escapeHtml(u.username)}" class="w-20 h-20 rounded-full border-2 border-transparent hover:border-primary object-cover bg-surface-variant">
+                                <span class="text-on-surface font-medium">${escapeHtml(u.username)}</span>
                             </div>
                         `).join('')}
                     </div>
@@ -221,12 +222,8 @@ export class LoginView {
     }
 
     async _saveSession(data) {
-        localStorage.setItem('mediahub_token', data.access_token);
-        localStorage.setItem('mediahub_user', JSON.stringify(data.user));
-        
         try {
-            await window.appInstance.init();
-            router.navigate('/');
+            await window.appInstance.onLoginSuccess(data.access_token, data.user);
         } catch (err) {
             localStorage.removeItem('mediahub_token');
             localStorage.removeItem('mediahub_user');
