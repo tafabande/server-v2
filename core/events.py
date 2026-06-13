@@ -1,5 +1,8 @@
 from fastapi import WebSocket
 
+from core.logging import get_logger
+
+logger = get_logger("core.events")
 
 class ConnectionManager:
     def __init__(self) -> None:
@@ -26,21 +29,21 @@ class ConnectionManager:
         for websocket in self._connections:
             try:
                 await websocket.send_json(payload)
-            except RuntimeError:
+            except RuntimeError as e:
+                session = self._active_sessions.get(websocket)
+                user_info = f"user {session.get('user_id')}" if session and 'user_id' in session else "unknown user"
+                logger.warning("Connection lost for %s: %s", user_info, e)
                 stale.append(websocket)
         for websocket in stale:
             self.disconnect(websocket)
 
-
 socket_manager = ConnectionManager()
-
 
 async def broadcast_library_updated(count: int | None = None) -> None:
     payload = {"type": "library-updated"}
     if count is not None:
         payload["count"] = count
     await socket_manager.broadcast(payload)
-
 
 async def broadcast_settings_updated() -> None:
     await socket_manager.broadcast({"type": "settings-updated"})

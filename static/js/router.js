@@ -45,12 +45,11 @@ export class Router {
             this.currentView = new ViewClass(this.container);
 
             if (typeof this.currentView.render === 'function') {
-                const renderPromise = this.currentView.render();
-                if (renderPromise instanceof Promise) {
-                    renderPromise.catch(err => {
-                        console.error('Rendering error:', err);
-                        this.container.innerHTML = `<div class="empty-state"><p>Failed to load page: ${escapeHtml(err.message)}</p></div>`;
-                    });
+                try {
+                    await this.currentView.render();
+                } catch (err) {
+                    console.error('Rendering error:', err);
+                    this.container.innerHTML = `<div class="empty-state"><p>Failed to load page: ${escapeHtml(err.message)}</p></div>`;
                 }
             }
         };
@@ -78,6 +77,7 @@ export class Router {
             this.container.innerHTML = `<div class="empty-state"><p>Failed to load page: ${err.message}</p></div>`;
         } finally {
             this._transitioning = false;
+            window.dispatchEvent(new CustomEvent('route-loaded', { detail: { path } }));
         }
     }
 }

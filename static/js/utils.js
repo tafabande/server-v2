@@ -2,6 +2,12 @@
  * MediaHub — Shared Utilities
  */
 
+export function showModal(dialog) {
+    if (dialog && !dialog.open && typeof dialog.showModal === 'function') {
+        dialog.showModal();
+    }
+}
+
 export function toast(message, type = 'info', action = null) {
     const container = document.getElementById('toast-container');
     if (!container) return;
@@ -127,7 +133,7 @@ export function prefetchThumbnails(mediaItems, count = 10) {
 }
 
 export function homeCacheKey() {
-    return `mediahub_home_cache_${sessionStorage.getItem('r18_enabled') || 'false'}`;
+    return `mediahub_home_cache_${isNsfwEnabled()}`;
 }
 
 export function clearContentCaches() {
@@ -140,49 +146,50 @@ export function clearContentCaches() {
 }
 
 export function isNsfwEnabled() {
-    return sessionStorage.getItem('r18_enabled') === 'true';
+    const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
+    return user?.preferences?.nsfw === true;
 }
 
 export function syncNsfwFromUser(user) {
-    if (!user) {
-        sessionStorage.setItem('r18_enabled', 'false');
-        sessionStorage.setItem('r18_prompted', 'false');
-        return false;
-    }
+    if (!user) return false;
     const isAdult = user.role === 'admin' || user.role === 'super-admin' || user.is_adult === true;
-    if (!isAdult) {
-        sessionStorage.setItem('r18_enabled', 'false');
-        sessionStorage.setItem('r18_prompted', 'true');
-        return false;
-    }
-    if (sessionStorage.getItem('r18_enabled') === null) {
-        if (user.preferences && user.preferences.nsfw !== undefined && user.preferences.nsfw !== null) {
-            const enabled = user.preferences.nsfw === true;
-            sessionStorage.setItem('r18_enabled', enabled ? 'true' : 'false');
-            sessionStorage.setItem('r18_prompted', 'true');
-        } else {
-            sessionStorage.setItem('r18_enabled', 'false');
-        }
-    }
-    return sessionStorage.getItem('r18_enabled') === 'true';
+    if (!isAdult) return false;
+    return user?.preferences?.nsfw === true;
 }
 
 export async function persistNsfwPreference(enabled) {
+    const { api } = await import('./app.js');
+    await api.updatePreferences({ nsfw: enabled });
+
     const user = JSON.parse(localStorage.getItem('mediahub_user') || '{}');
     user.preferences = user.preferences || {};
     user.preferences.nsfw = enabled;
-    sessionStorage.setItem('r18_enabled', enabled ? 'true' : 'false');
-    localStorage.setItem('mediahub_user', JSON.stringify(user));
-    clearContentCaches();
 
-    const { api } = await import('./app.js');
-    await api.updateProfile({ preferences: user.preferences });
+    localStorage.setItem('mediahub_user', JSON.stringify(user));
+    document.cookie = "nsfw_enabled=" + (enabled ? "true" : "false") + "; path=/; max-age=31536000";
     return user;
 }
 
 export function confirm(title, message) {
     return new Promise((resolve) => {
-        const dialog = document.getElementById('confirm-dialog');
+        let confirmDialog = document.getElementById('confirm-dialog');
+        if (!confirmDialog) {
+            confirmDialog = document.createElement('dialog');
+            confirmDialog.id = 'confirm-dialog';
+            confirmDialog.className = 'glass-modal';
+            confirmDialog.innerHTML = `
+                <div class="dialog-card text-center">
+                    <h3 id="confirm-title"></h3>
+                    <p id="confirm-message" class="text-muted"></p>
+                    <div class="dialog-actions">
+                        <button class="btn btn-ghost" id="confirm-cancel">Cancel</button>
+                        <button class="btn btn-accent" id="confirm-accept">Confirm</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(confirmDialog);
+        }
+
         document.getElementById('confirm-title').textContent = title;
         document.getElementById('confirm-message').textContent = message;
 
@@ -192,7 +199,7 @@ export function confirm(title, message) {
         const cleanup = () => {
             accept.removeEventListener('click', onAccept);
             cancel.removeEventListener('click', onCancel);
-            dialog.close();
+            confirmDialog.close();
         };
 
         const onAccept = () => { cleanup(); resolve(true); };
@@ -200,7 +207,66 @@ export function confirm(title, message) {
 
         accept.addEventListener('click', onAccept);
         cancel.addEventListener('click', onCancel);
-        dialog.showModal();
+        showModal(confirmDialog);
+    });
+}
+
+export function prompt(title, message, defaultValue = '') {
+    return new Promise((resolve) => {
+        let promptDialog = document.getElementById('prompt-dialog');
+        if (!promptDialog) {
+            promptDialog = document.createElement('dialog');
+            promptDialog.id = 'prompt-dialog';
+            promptDialog.className = 'glass-modal';
+            promptDialog.innerHTML = `
+                <div class="dialog-card text-center">
+                    <h3 id="prompt-title"></h3>
+                    <p id="prompt-message" class="text-muted" style="margin-bottom: 12px;"></p>
+                    <input type="text" id="prompt-input" class="input" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(255, 255, 255, 0.05); color: #fff; font-size: 0.95rem; margin-bottom: 20px; box-sizing: border-box;" autocomplete="off">
+                    <div class="dialog-actions">
+                        <button class="btn btn-ghost" id="prompt-cancel">Cancel</button>
+                        <button class="btn btn-accent" id="prompt-accept">Submit</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(promptDialog);
+        }
+
+        document.getElementById('prompt-title').textContent = title;
+        document.getElementById('prompt-message').textContent = message;
+
+        const input = document.getElementById('prompt-input');
+        input.value = defaultValue;
+
+        const accept = document.getElementById('prompt-accept');
+        const cancel = document.getElementById('prompt-cancel');
+
+        const cleanup = () => {
+            accept.removeEventListener('click', onAccept);
+            cancel.removeEventListener('click', onCancel);
+            input.removeEventListener('keydown', onKeydown);
+            promptDialog.close();
+        };
+
+        const onAccept = () => { cleanup(); resolve(input.value); };
+        const onCancel = () => { cleanup(); resolve(null); };
+        const onKeydown = (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                onAccept();
+            }
+        };
+
+        accept.addEventListener('click', onAccept);
+        cancel.addEventListener('click', onCancel);
+        input.addEventListener('keydown', onKeydown);
+
+        showModal(promptDialog);
+
+        setTimeout(() => {
+            input.focus();
+            input.select();
+        }, 50);
     });
 }
 
@@ -235,7 +301,7 @@ export async function showAdultAccessDialog() {
             <p class="text-muted text-sm">Checking access request status...</p>
         </div>
     `;
-    dialog.showModal();
+    showModal(dialog);
 
     let latestReq = null;
     try {
@@ -428,6 +494,6 @@ export function showPinDialog(message = "This content is PG-Locked.") {
         // Initialize state
         currentPin = "";
         updateDisplay();
-        dialog.showModal();
+        showModal(dialog);
     });
 }

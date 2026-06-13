@@ -14,15 +14,46 @@ from core.models import AuditLog, SystemSetting, User
 from core.schemas import AuditLogRead, MessageResponse, PaginatedAuditResponse, SystemSettingsRead, SystemSettingsUpdate
 from core.security import get_current_user, require_roles
 from core.system import get_settings_map
-
+from pydantic import BaseModel
 
 router = APIRouter()
 
+class ClientLogCreate(BaseModel):
+    level: str
+    message: str
+    context: dict | None = None
+
+@router.post("/logs", response_model=MessageResponse)
+async def create_client_log(
+    payload: ClientLogCreate,
+) -> MessageResponse:
+    """Receive and log errors from the frontend."""
+    from core.logging import get_logger
+    logger = get_logger("client")
+    
+    user_str = "anonymous"
+    if payload.context and "user" in payload.context:
+        user_str = payload.context["user"]
+        
+    msg = f"[Frontend - {user_str}] {payload.message}"
+    if payload.context:
+        ctx = {k: v for k, v in payload.context.items() if k != "user"}
+        if ctx:
+            msg += f" | Context: {ctx}"
+            
+    level = payload.level.upper()
+    if level == "ERROR":
+        logger.error(msg)
+    elif level == "WARNING":
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+        
+    return MessageResponse(message="Log recorded")
 
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": "mediahub"}
-
 
 @router.get("/metrics", dependencies=[Depends(get_current_user)])
 async def get_metrics(current_user: User = Depends(require_roles("admin", "super-admin"))) -> dict:
@@ -74,13 +105,11 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
         "ecc_ram": ecc_status,
     }
 
-
 @router.get("/sessions", dependencies=[Depends(get_current_user)])
 async def get_active_sessions(current_user: User = Depends(require_roles("admin", "super-admin"))) -> list:
     """Get list of active streaming sessions."""
     # This would typically come from Redis or an in-memory session manager
     return socket_manager.get_active_sessions()
-
 
 @router.get("/settings", response_model=SystemSettingsRead)
 async def settings(
@@ -89,6 +118,14 @@ async def settings(
 ) -> SystemSettingsRead:
     return SystemSettingsRead(settings=await get_settings_map(session))
 
+@router.get("/public-settings", response_model=SystemSettingsRead)
+async def public_settings(
+    session: AsyncSession = Depends(get_db),
+) -> SystemSettingsRead:
+    settings = await get_settings_map(session)
+    public_keys = {"login_video_url", "server_name"}
+    public_settings_map = {k: v for k, v in settings.items() if k in public_keys}
+    return SystemSettingsRead(settings=public_settings_map)
 
 @router.put("/settings", response_model=MessageResponse)
 async def update_settings(
@@ -106,7 +143,6 @@ async def update_settings(
     await session.commit()
     await broadcast_settings_updated()
     return MessageResponse(message="Settings updated.")
-
 
 @router.get("/audit", response_model=PaginatedAuditResponse)
 async def audit_log(
@@ -140,7 +176,6 @@ async def audit_log(
         pages=max(1, math.ceil(total / per_page)),
     )
 
-
 @router.post("/shutdown", response_model=MessageResponse)
 async def shutdown_server(
     current_user: User = Depends(require_roles("admin", "super-admin")),
@@ -160,7 +195,6 @@ async def shutdown_server(
     asyncio.create_task(delayed_shutdown())
     return MessageResponse(message="Server shutdown initiated. Goodbye.")
 
-
 @router.post("/optimize", response_model=MessageResponse)
 async def optimize_system(
     current_user: User = Depends(require_roles("admin", "super-admin")),
@@ -174,7 +208,6 @@ async def optimize_system(
         return MessageResponse(message="Database optimized successfully. Unused disk space reclaimed.")
     except Exception as e:
         return MessageResponse(message=f"Optimization completed with warnings: {str(e)}")
-
 
 @router.post("/clear-hls", response_model=MessageResponse)
 async def clear_hls_cache(
@@ -198,7 +231,6 @@ async def clear_hls_cache(
                 pass
     return MessageResponse(message=f"HLS Transcoding cache cleared successfully. Purged {count} HLS stream elements.")
 
-
 @router.post("/clear-thumbs", response_model=MessageResponse)
 async def clear_thumbs_cache(
     current_user: User = Depends(require_roles("admin", "super-admin")),
@@ -217,7 +249,6 @@ async def clear_thumbs_cache(
             except Exception:
                 pass
     return MessageResponse(message=f"Thumbnail generation cache cleared successfully. Purged {count} cached files.")
-
 
 @router.get("/recent-errors")
 async def get_recent_errors(
@@ -244,7 +275,6 @@ async def get_recent_errors(
     else:
         recent_errors.append("No active logs file discovered yet.")
     return recent_errors
-
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import re
 
@@ -17,7 +17,6 @@ from core.security import get_current_user, require_roles
 from core.media import apply_media_security_filters
 
 router = APIRouter()
-
 
 @router.get("", response_model=list[CollectionRead])
 async def list_collections(
@@ -50,7 +49,6 @@ async def list_collections(
         ))
     return output
 
-
 @router.post("", response_model=CollectionRead)
 async def create_collection(
     payload: CollectionCreate,
@@ -75,7 +73,6 @@ async def create_collection(
         item_count=0,
         created_at=col.created_at
     )
-
 
 @router.get("/{id}", response_model=CollectionDetailRead)
 async def get_collection_detail(
@@ -109,7 +106,6 @@ async def get_collection_detail(
         items=items,
         created_at=col.created_at
     )
-
 
 @router.put("/{id}", response_model=CollectionRead)
 async def update_collection(
@@ -151,7 +147,6 @@ async def update_collection(
         created_at=col.created_at
     )
 
-
 @router.delete("/{id}", response_model=MessageResponse)
 async def delete_collection(
     id: int,
@@ -166,7 +161,6 @@ async def delete_collection(
     await session.delete(col)
     await session.commit()
     return MessageResponse(message="Collection deleted successfully.")
-
 
 @router.post("/{id}/items", response_model=MessageResponse)
 async def add_collection_item(
@@ -202,7 +196,6 @@ async def add_collection_item(
     await session.commit()
     return MessageResponse(message="Media added to collection.")
 
-
 @router.delete("/{id}/items/{media_id}", response_model=MessageResponse)
 async def remove_collection_item(
     id: int,
@@ -223,7 +216,6 @@ async def remove_collection_item(
     await session.delete(item)
     await session.commit()
     return MessageResponse(message="Item removed from collection.")
-
 
 @router.post("/auto-group", response_model=MessageResponse)
 async def auto_group_endpoint(

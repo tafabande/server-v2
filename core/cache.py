@@ -5,14 +5,12 @@ from typing import Any
 
 from config import get_settings
 
-
 settings = get_settings()
 
 try:
     import redis.asyncio as redis
 except ImportError:  # pragma: no cover
     redis = None
-
 
 class MemoryCache:
     def __init__(self) -> None:
@@ -49,7 +47,6 @@ class MemoryCache:
     async def ping(self) -> bool:
         return True
 
-
 class CacheBackend:
     def __init__(self) -> None:
         self._fallback = MemoryCache()
@@ -82,6 +79,5 @@ class CacheBackend:
         if not self._client:
             return await self._fallback.ping()
         return bool(await self._client.ping())
-
 
 cache = CacheBackend()

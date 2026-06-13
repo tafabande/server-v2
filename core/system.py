@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import get_settings
 from core.models import SystemSetting
 
-
 from core.logging import get_logger
 logger = get_logger("system_config")
 
@@ -27,7 +26,6 @@ DEFAULT_SYSTEM_SETTINGS: dict[str, Any] = {
     ],
 }
 
-
 async def ensure_system_settings(session: AsyncSession) -> None:
     result = await session.execute(select(SystemSetting))
     existing = {setting.key: setting for setting in result.scalars()}
@@ -41,11 +39,9 @@ async def ensure_system_settings(session: AsyncSession) -> None:
                 existing[key].value = value
     await session.commit()
 
-
 async def get_settings_map(session: AsyncSession) -> dict[str, Any]:
     result = await session.execute(select(SystemSetting))
     return {setting.key: setting.value for setting in result.scalars()}
-
 
 async def get_setting(session: AsyncSession, key: str, default: Any = None) -> Any:
     result = await session.execute(select(SystemSetting).where(SystemSetting.key == key))

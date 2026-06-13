@@ -1,4 +1,3 @@
-import os
 import secrets
 import string
 from pathlib import Path

@@ -5,7 +5,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import Base
 
-
 class User(Base):
     __tablename__ = "users"
 
@@ -27,7 +26,6 @@ class User(Base):
     access_requests: Mapped[list["AccessRequest"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     permissions: Mapped[list["Permission"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     favorites: Mapped[list["Favorite"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-
 
 class MediaMetadata(Base):
     __tablename__ = "media_metadata"
@@ -72,7 +70,6 @@ class MediaMetadata(Base):
     ratings: Mapped[list["Rating"]] = relationship(back_populates="media", cascade="all, delete-orphan")
     collection_items: Mapped[list["CollectionItem"]] = relationship(back_populates="media", cascade="all, delete-orphan")
 
-
 class PlayEvent(Base):
     __tablename__ = "play_events"
 
@@ -87,7 +84,6 @@ class PlayEvent(Base):
     user: Mapped[User] = relationship(back_populates="play_events")
     media: Mapped[MediaMetadata] = relationship(back_populates="play_events")
 
-
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -100,7 +96,6 @@ class AuditLog(Base):
 
     user: Mapped[User | None] = relationship(back_populates="audit_logs")
 
-
 class SystemSetting(Base):
     __tablename__ = "system_settings"
 
@@ -112,7 +107,6 @@ class SystemSetting(Base):
         onupdate=func.now(),
     )
 
-
 # --- New models per rebuild plan §1.1 ---
 
 class Playlist(Base):
@@ -122,11 +116,11 @@ class Playlist(Base):
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_adult: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     owner: Mapped[User] = relationship(back_populates="playlists")
     items: Mapped[list["PlaylistItem"]] = relationship(back_populates="playlist", cascade="all, delete-orphan")
-
 
 class PlaylistItem(Base):
     __tablename__ = "playlist_items"
@@ -138,7 +132,6 @@ class PlaylistItem(Base):
 
     playlist: Mapped[Playlist] = relationship(back_populates="items")
     media: Mapped[MediaMetadata] = relationship(back_populates="playlist_items")
-
 
 class Permission(Base):
     __tablename__ = "permissions"
@@ -152,7 +145,6 @@ class Permission(Base):
     user: Mapped[User] = relationship(back_populates="permissions")
     media: Mapped[MediaMetadata] = relationship(back_populates="permissions")
 
-
 class ServerStatus(Base):
     __tablename__ = "server_status"
 
@@ -163,7 +155,6 @@ class ServerStatus(Base):
     status: Mapped[str] = mapped_column(String(20), default="offline", nullable=False)
     media_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
 
 class FolderSetting(Base):
     __tablename__ = "folder_settings"
@@ -178,7 +169,6 @@ class FolderSetting(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-
 
 class AccessRequest(Base):
     __tablename__ = "access_requests"
@@ -198,7 +188,6 @@ class AccessRequest(Base):
 
     user: Mapped[User] = relationship(back_populates="access_requests")
 
-
 class Webhook(Base):
     __tablename__ = "webhooks"
 
@@ -213,7 +202,6 @@ class Webhook(Base):
     last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failure_count: Mapped[int] = mapped_column(Integer, default=0)
 
-
 class Favorite(Base):
     __tablename__ = "favorites"
 
@@ -224,7 +212,6 @@ class Favorite(Base):
 
     user: Mapped[User] = relationship(back_populates="favorites")
     media: Mapped[MediaMetadata] = relationship(back_populates="favorites")
-
 
 class Subtitle(Base):
     __tablename__ = "subtitles"
@@ -238,7 +225,6 @@ class Subtitle(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     media: Mapped[MediaMetadata] = relationship(back_populates="subtitles")
-
 
 class Rating(Base):
     __tablename__ = "ratings"
@@ -255,7 +241,6 @@ class Rating(Base):
     user: Mapped[User] = relationship(backref="ratings")
     media: Mapped[MediaMetadata] = relationship(back_populates="ratings")
 
-
 class Collection(Base):
     __tablename__ = "collections"
 
@@ -266,7 +251,6 @@ class Collection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     items: Mapped[list["CollectionItem"]] = relationship(back_populates="collection", cascade="all, delete-orphan")
-
 
 class CollectionItem(Base):
     __tablename__ = "collection_items"
@@ -279,7 +263,6 @@ class CollectionItem(Base):
     collection: Mapped[Collection] = relationship(back_populates="items")
     media: Mapped[MediaMetadata] = relationship(back_populates="collection_items")
 
-
 class IdempotentRequest(Base):
     __tablename__ = "idempotent_requests"
 
@@ -287,7 +270,6 @@ class IdempotentRequest(Base):
     response_code: Mapped[int] = mapped_column(Integer, nullable=False)
     response_body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
 
 class FolderPermission(Base):
     __tablename__ = "folder_permissions"
@@ -297,7 +279,6 @@ class FolderPermission(Base):
     folder_path: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     can_view: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
 
 from sqlalchemy import UniqueConstraint
 
@@ -314,7 +295,6 @@ class Tag(Base):
         UniqueConstraint("video_id", "tag", name="uq_video_tag"),
     )
 
-
 class SeriesGroup(Base):
     __tablename__ = "series_groups"
 
@@ -323,7 +303,6 @@ class SeriesGroup(Base):
     canonical_title: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     members: Mapped[list["SeriesMember"]] = relationship(back_populates="series", cascade="all, delete-orphan")
-
 
 class SeriesMember(Base):
     __tablename__ = "series_members"
@@ -336,5 +315,10 @@ class SeriesMember(Base):
     media: Mapped["MediaMetadata"] = relationship(backref="series_membership")
     series: Mapped[SeriesGroup] = relationship(back_populates="members")
 
+class DeletedMediaTombstone(Base):
+    __tablename__ = "deleted_media_tombstones"
 
-
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    path: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

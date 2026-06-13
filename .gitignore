@@ -38,3 +38,13 @@ venv/
 *.db
 *.db-shm
 *.db-wal
+# Node / Frontend Build
+node_modules/
+package-lock.json
+package.json
+tailwindcss.exe
+tailwind.config.js
+
+# Temporary Scripts & Build Artifacts
+static/css/tailwind*
+static/css/input.css

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,22 +22,31 @@ from core.media import is_media_accessible
 
 router = APIRouter()
 
-
 @router.get("", response_model=list[PlaylistRead])
 async def list_playlists(
+    request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[PlaylistRead]:
     """List playlists owned by the current user. Favorites is always first."""
+    nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
+    if request.headers.get("X-Disable-R18") == "true":
+        nsfw_enabled = False
+    elif request.headers.get("X-Enable-R18") == "true":
+        nsfw_enabled = True
+
     result = await session.execute(
-        select(Playlist).where(Playlist.owner_user_id == current_user.id).order_by(Playlist.created_at.asc())
+        select(Playlist).where(
+            Playlist.owner_user_id == current_user.id,
+            Playlist.is_adult == nsfw_enabled
+        ).order_by(Playlist.created_at.asc())
     )
     playlists = list(result.scalars().all())
 
     # Ensure Favorites exists
-    fav_pl = next((p for p in playlists if p.title == "Favorites"), None)
+    fav_pl = next((p for p in playlists if p.title == "Favorites" and p.is_adult == nsfw_enabled), None)
     if not fav_pl:
-        fav_pl = Playlist(owner_user_id=current_user.id, title="Favorites", description=None)
+        fav_pl = Playlist(owner_user_id=current_user.id, title="Favorites", description=None, is_adult=nsfw_enabled)
         session.add(fav_pl)
         await session.commit()
         await session.refresh(fav_pl)
@@ -62,12 +71,12 @@ async def list_playlists(
             id=pl.id,
             title=pl.title,
             description=pl.description,
+            is_adult=pl.is_adult,
             item_count=count,
             owner_username=current_user.username,
             created_at=pl.created_at,
         ))
     return out
-
 
 @router.post("", response_model=PlaylistRead)
 async def create_playlist(
@@ -80,6 +89,7 @@ async def create_playlist(
         owner_user_id=current_user.id,
         title=payload.title,
         description=payload.description or None,
+        is_adult=payload.is_adult,
     )
     session.add(playlist)
     await session.commit()
@@ -88,11 +98,11 @@ async def create_playlist(
         id=playlist.id,
         title=playlist.title,
         description=playlist.description,
+        is_adult=playlist.is_adult,
         item_count=0,
         owner_username=current_user.username,
         created_at=playlist.created_at,
     )
-
 
 @router.get("/{playlist_id}", response_model=PlaylistDetailRead)
 async def get_playlist(
@@ -126,11 +136,11 @@ async def get_playlist(
         id=playlist.id,
         title=playlist.title,
         description=playlist.description,
+        is_adult=playlist.is_adult,
         items=media_items,
-        owner_username=owner.username if owner else "unknown",
+        owner_username=owner.username if owner else "Unknown",
         created_at=playlist.created_at,
     )
-
 
 @router.delete("/{playlist_id}", response_model=MessageResponse)
 async def delete_playlist(
@@ -150,7 +160,6 @@ async def delete_playlist(
     await session.delete(playlist)
     await session.commit()
     return MessageResponse(message="Playlist deleted.")
-
 
 @router.put("/{playlist_id}", response_model=PlaylistRead)
 async def update_playlist(
@@ -194,8 +203,6 @@ async def update_playlist(
         created_at=playlist.created_at,
     )
 
-
-
 @router.post("/{playlist_id}/items", response_model=MessageResponse)
 async def add_item_to_playlist(
     playlist_id: int,
@@ -225,7 +232,6 @@ async def add_item_to_playlist(
     await session.commit()
     return MessageResponse(message=f"Added '{media.title}' to playlist.")
 
-
 @router.delete("/{playlist_id}/items/{media_id}", response_model=MessageResponse)
 async def remove_item_from_playlist(
     playlist_id: int,
@@ -253,8 +259,6 @@ async def remove_item_from_playlist(
     await session.commit()
     return MessageResponse(message="Item removed from playlist.")
 
-
-
 @router.put("/{playlist_id}/reorder", response_model=MessageResponse)
 async def reorder_playlist(
     playlist_id: int,
@@ -276,7 +280,6 @@ async def reorder_playlist(
 
     await session.commit()
     return MessageResponse(message="Playlist reordered.")
-
 
 @router.post("/{playlist_id}/play", response_model=PlaylistPlayResponse)
 async def play_playlist(

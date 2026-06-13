@@ -15,14 +15,12 @@ from core.models import Webhook
 
 logger = get_logger("webhooks")
 
-
 async def trigger_webhook(event: str, data: dict):
     """
     Triggers all active webhooks subscribed to the given event.
     Runs as a non-blocking background task.
     """
     asyncio.create_task(_process_webhooks(event, data))
-
 
 async def _process_webhooks(event: str, data: dict):
     # Ensure data is JSON serializable (handling datetimes, etc.)
@@ -77,7 +75,6 @@ async def _process_webhooks(event: str, data: dict):
                 else:
                     logger.warning(f"Webhook {db_hook.url} failed (status: {status_code})")
         await session.commit()
-
 
 async def _send_with_retry(
     client: httpx.AsyncClient, 

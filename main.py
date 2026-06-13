@@ -38,13 +38,11 @@ from core.exceptions import MediaHubError
 from core.logging import setup_logging, get_logger
 from routers import auth, files, media, playlists, requests, system, users, webhooks, admin, collections
 
-
 # Initialize logging before settings are even fetched to ensure startup is logged
 setup_logging()
 logger = get_logger("main")
 
 settings = get_settings()
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -94,7 +92,6 @@ async def lifespan(_: FastAPI):
     except Exception:
         pass
 
-
 app = FastAPI(
     title=settings.app_name,
     description="Minimalist LAN media server.",
@@ -132,7 +129,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal server error occurred. Please contact the administrator."},
     )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -142,7 +138,6 @@ app.add_middleware(
 )
 
 app.add_middleware(GZipMiddleware, minimum_size=500)
-
 
 @app.middleware("http")
 async def global_recovery_middleware(request: Request, call_next):
@@ -154,7 +149,6 @@ async def global_recovery_middleware(request: Request, call_next):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "A critical system error occurred. Our engineers have been notified."},
         )
-
 
 @app.middleware("http")
 async def idempotency_middleware(request: Request, call_next):
@@ -224,7 +218,6 @@ async def idempotency_middleware(request: Request, call_next):
 
     return await call_next(request)
 
-
 @app.middleware("http")
 async def add_cache_control_header(request: Request, call_next):
     response = await call_next(request)
@@ -240,11 +233,9 @@ async def add_cache_control_header(request: Request, call_next):
 async def serve_sw():
     return FileResponse(Path("static/sw.js"), media_type="application/javascript")
 
-
 @app.get("/manifest.json", include_in_schema=False)
 async def serve_manifest():
     return FileResponse(Path("static/manifest.json"), media_type="application/json")
-
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -258,7 +249,6 @@ app.include_router(requests.router, prefix="/api/requests", tags=["requests"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(collections.router, prefix="/api/collections", tags=["collections"])
-
 
 # Catch-all route to support SPA frontend routing
 @app.get("/{full_path:path}", include_in_schema=False)

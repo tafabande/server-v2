@@ -1,11 +1,9 @@
 import logging
-import sys
 from logging.handlers import RotatingFileHandler
 
 from config import BASE_DIR, get_settings
 
 settings = get_settings()
-
 
 def _is_inside_path(path, root) -> bool:
     try:
@@ -14,7 +12,6 @@ def _is_inside_path(path, root) -> bool:
         return resolved_path == resolved_root or resolved_root in resolved_path.parents
     except (OSError, RuntimeError):
         return False
-
 
 def _safe_log_dir():
     log_dir = settings.logs_folder
@@ -27,7 +24,6 @@ def _safe_log_dir():
         fallback = shared_root.parent / "mediahub_logs"
 
     return fallback
-
 
 def setup_logging():
     """Configures the logging system for the application."""

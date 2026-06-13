@@ -106,7 +106,7 @@ export class UIManager {
     if (!control) return;
 
     if (busy) {
-      if (!control.dataset.idleLabel) {
+      if (!control.hasAttribute("data-idle-label")) {
         control.dataset.idleLabel = control.textContent || "";
       }
       control.disabled = true;
@@ -117,7 +117,7 @@ export class UIManager {
 
     control.disabled = false;
     control.removeAttribute("aria-busy");
-    if (control.dataset.idleLabel) {
+    if (control.hasAttribute("data-idle-label")) {
       control.textContent = control.dataset.idleLabel;
     }
   }

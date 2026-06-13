@@ -13,7 +13,6 @@ from core.models import FolderSetting, MediaMetadata, User
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 settings = get_settings()
 logger = get_logger("storage")
 MEDIA_EXTENSIONS = {
@@ -22,10 +21,8 @@ MEDIA_EXTENSIONS = {
     ".asf", ".3gp", ".3g2"
 }
 
-
 def is_media_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS
-
 
 import subprocess
 import time
@@ -46,7 +43,6 @@ def resolve_shortcut(lnk_path: Path) -> Path | None:
     except Exception:
         pass
     return None
-
 
 import threading
 
@@ -82,7 +78,6 @@ def get_shortcut_mappings() -> list[tuple[Path, Path]]:
         _shortcut_cache_time = now
         return _shortcut_cache
 
-
 def relative_shared_path(path: Path) -> str:
     path_resolved = path.resolve()
     base_resolved = settings.shared_folder.resolve()
@@ -98,7 +93,6 @@ def relative_shared_path(path: Path) -> str:
                 continue
         # Safe fallback
         return path_resolved.name
-
 
 def resolve_shared_path(raw_path: str | None = None) -> Path:
     base = settings.shared_folder.resolve()
@@ -147,11 +141,9 @@ def resolve_shared_path(raw_path: str | None = None) -> Path:
         
     return current
 
-
 def _relative_text_for_path(path: Path) -> str:
     candidate = path if path.exists() else path.parent / path.name
     return relative_shared_path(candidate).lower()
-
 
 async def is_path_locked(session: AsyncSession, path: Path) -> bool:
     rel_path = _relative_text_for_path(path)
@@ -170,7 +162,6 @@ async def is_path_locked(session: AsyncSession, path: Path) -> bool:
     stmt = select(FolderSetting.is_locked).where(func.lower(FolderSetting.path).in_(search_paths), FolderSetting.is_locked == True)
     return (await session.execute(stmt)).scalar() is not None
 
-
 async def is_path_adult(session: AsyncSession, path: Path) -> bool:
     rel_path = _relative_text_for_path(path)
     if any(piece in settings.adult_keyword_set for piece in rel_path.split("/") if piece):
@@ -186,7 +177,6 @@ async def is_path_adult(session: AsyncSession, path: Path) -> bool:
     from sqlalchemy import func
     stmt = select(FolderSetting.is_adult).where(func.lower(FolderSetting.path).in_(search_paths), FolderSetting.is_adult == True)
     return (await session.execute(stmt)).scalar() is not None
-
 
 async def ensure_pin_for_path(
     session: AsyncSession,
@@ -228,7 +218,6 @@ async def ensure_pin_for_path(
                 return
 
         raise AccessDeniedError("Valid PIN required for this resource.")
-
 
 async def list_directory(raw_path: str | None = None, session: AsyncSession | None = None) -> tuple[str, str | None, list[dict]]:
     directory = resolve_shared_path(raw_path)
@@ -329,7 +318,6 @@ async def list_directory(raw_path: str | None = None, session: AsyncSession | No
 
     return relative_path, parent, items
 
-
 async def save_upload(raw_path: str | None, upload: UploadFile) -> Path:
     directory = resolve_shared_path(raw_path)
     directory.mkdir(parents=True, exist_ok=True)
@@ -346,7 +334,6 @@ async def save_upload(raw_path: str | None, upload: UploadFile) -> Path:
     await upload.close()
     return destination
 
-
 def rename_path(raw_path: str, new_name: str) -> Path:
     target = resolve_shared_path(raw_path)
     if not target.exists():
@@ -362,7 +349,6 @@ def rename_path(raw_path: str, new_name: str) -> Path:
     logger.info(f"Renaming {raw_path} -> {new_name}")
     target.rename(destination)
     return destination
-
 
 def delete_path(raw_path: str) -> Path:
     target = resolve_shared_path(raw_path)

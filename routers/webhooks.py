@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from core.models import User, Webhook
 from core.schemas import MessageResponse, WebhookCreate, WebhookRead, WebhookUpdate
-from core.security import get_current_user, require_roles
+from core.security import require_roles
 
 router = APIRouter()
 
@@ -16,7 +16,6 @@ async def list_webhooks(
 ) -> list[WebhookRead]:
     result = await session.execute(select(Webhook).order_by(Webhook.created_at.desc()))
     return [WebhookRead.model_validate(w) for w in result.scalars()]
-
 
 @router.post("/", response_model=WebhookRead, status_code=status.HTTP_201_CREATED)
 async def create_webhook(
@@ -29,7 +28,6 @@ async def create_webhook(
     await session.commit()
     await session.refresh(webhook)
     return WebhookRead.model_validate(webhook)
-
 
 @router.patch("/{webhook_id}", response_model=WebhookRead)
 async def update_webhook(
@@ -48,7 +46,6 @@ async def update_webhook(
     await session.commit()
     await session.refresh(webhook)
     return WebhookRead.model_validate(webhook)
-
 
 @router.delete("/{webhook_id}", response_model=MessageResponse)
 async def delete_webhook(

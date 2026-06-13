@@ -1,5 +1,5 @@
 import { api, player } from '../app.js';
-import { toast, isAdultApproved, isNsfwEnabled, showAdultAccessDialog, confirm } from '../utils.js';
+import { toast, isAdultApproved, isNsfwEnabled, showAdultAccessDialog, confirm, showModal, escapeHtml } from '../utils.js';
 
 export class ShortiesView {
     constructor(container) {
@@ -19,43 +19,6 @@ export class ShortiesView {
             player.video.pause();
         }
 
-        // Inject custom animations for the floating heart
-        if (!document.getElementById('shorties-custom-styles')) {
-            const style = document.createElement('style');
-            style.id = 'shorties-custom-styles';
-            style.textContent = `
-                @keyframes floatUpHeart {
-                    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
-                    15% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
-                    30% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-                    100% { transform: translate(-50%, -150px) scale(1.5); opacity: 0; }
-                }
-                .floating-heart {
-                    position: absolute;
-                    font-size: 5rem;
-                    pointer-events: none;
-                    z-index: 100;
-                    animation: floatUpHeart 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-                    filter: drop-shadow(0 4px 10px rgba(0,0,0,0.3));
-                }
-                .shorty-progress-bar:hover, .shorty-progress-bar:active {
-                    height: 8px !important;
-                }
-                .shorty-video-wrapper {
-                    height: 100%;
-                    max-height: calc(100vh - 120px);
-                    display: flex;
-                    justify-content: center;
-                    background: #000;
-                    position: relative;
-                }
-                .shorty-video {
-                    max-height: 100%;
-                    object-fit: contain;
-                }
-            `;
-            document.head.appendChild(style);
-        }
 
         this.container.innerHTML = `
             <div class="view-header flex-between mb-lg">
@@ -111,6 +74,12 @@ export class ShortiesView {
                 const allItems = Array.isArray(allRes) ? allRes : (allRes?.items || []);
                 items = allItems.filter(v => v.duration_seconds > 0 && v.duration_seconds < 300);
             }
+
+            // Ensure video previews/trailers are not displayed as separate videos in the Shorties feed
+            items = items.filter(v => {
+                const title = (v.title || v.filename || '').toLowerCase();
+                return !title.includes('preview') && !title.includes('trailer');
+            });
 
             this._allVideos = items;
 
@@ -196,8 +165,8 @@ export class ShortiesView {
         let deleteBtnHtml = '';
         if (this._isAdmin()) {
             deleteBtnHtml = `
-                <div style="display: flex; flex-direction: column; align-items: center; margin-top: 12px;">
-                    <button class="shorty-action-btn delete-btn" data-id="${v.id}" style="background: rgba(220, 38, 38, 0.6); border-color: rgba(220, 38, 38, 0.4);">
+                <div class="shorty-action-group" style="margin-top: 12px;">
+                    <button class="shorty-action-btn delete-btn" data-id="${v.id}">
                         <i class="v-icon icon-delete"></i>
                     </button>
                     <span class="shorty-action-label">Delete</span>
@@ -212,6 +181,7 @@ export class ShortiesView {
                        data-src="${videoSrc}"
                        poster="${posterUrl}"
                        playsinline 
+                       webkit-playsinline
                        preload="none" 
                        ${this._isMuted ? 'muted' : ''}>
                 </video>
@@ -220,33 +190,33 @@ export class ShortiesView {
                     <span class="shorty-play-feedback-icon">▶</span>
                 </div>
 
-                <div class="shorty-speed-indicator" style="position: absolute; top: 12%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); color: #fff; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 700; display: flex; align-items: center; gap: 4px; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 15; backdrop-filter: blur(4px);">
+                <div class="shorty-speed-indicator">
                     <span>⚡ 2x Speed</span>
                 </div>
 
                 <!-- Bottom Info Overlay -->
-                <div class="shorty-overlay-bottom" style="padding-bottom: 12px;">
+                <div class="shorty-overlay-bottom">
                     <h4 class="shorty-title">${v.title}</h4>
                     <p class="shorty-desc">📁 ${v.category || 'Shorts'}</p>
                 </div>
 
                 <!-- Floating Action Buttons -->
-                <div class="shorty-overlay-right" style="display: flex; flex-direction: column; align-items: center;">
-                    <div style="display: flex; flex-direction: column; align-items: center;">
+                <div class="shorty-overlay-right">
+                    <div class="shorty-action-group">
                         <button class="shorty-action-btn fav-btn ${activeFavClass}" data-id="${v.id}">
                             ${favoriteIcon}
                         </button>
                         <span class="shorty-action-label like-count-label" data-id="${v.id}">${v.likes_count > 0 ? v.likes_count : 'Like'}</span>
                     </div>
                     
-                    <div style="display: flex; flex-direction: column; align-items: center;">
+                    <div class="shorty-action-group">
                         <button class="shorty-action-btn save-btn" data-id="${v.id}">
                             <i class="v-icon icon-playlist">➕</i>
                         </button>
                         <span class="shorty-action-label">Save</span>
                     </div>
 
-                    <div style="display: flex; flex-direction: column; align-items: center;">
+                    <div class="shorty-action-group">
                         <button class="shorty-action-btn mute-btn ${activeMuteClass}" data-id="${v.id}">
                             ${muteIcon}
                         </button>
@@ -256,8 +226,8 @@ export class ShortiesView {
                 </div>
 
                 <!-- Progress Bar -->
-                <div class="shorty-progress-bar" style="position: absolute; bottom: 0; left: 0; right: 0; z-index: 20; overflow: hidden; cursor: pointer; height: 4px; background: rgba(255,255,255,0.3); transition: height 0.2s ease;">
-                    <div class="shorty-progress-fill" style="width: 0%; height: 100%; background: var(--player-accent); transition: width 0.1s linear;"></div>
+                <div class="shorty-progress-bar">
+                    <div class="shorty-progress-fill"></div>
                 </div>
             </div>
         `;
@@ -287,6 +257,9 @@ export class ShortiesView {
             if (this._observer) {
                 this._observer.observe(cardEl);
             }
+            if (this._virtualizationObserver) {
+                this._virtualizationObserver.observe(cardEl);
+            }
             this._bindCardEvents(cardEl);
         });
 
@@ -296,6 +269,9 @@ export class ShortiesView {
     _setupIntersectionObserver() {
         if (this._observer) {
             this._observer.disconnect();
+        }
+        if (this._virtualizationObserver) {
+            this._virtualizationObserver.disconnect();
         }
 
         const options = {
@@ -307,24 +283,67 @@ export class ShortiesView {
             entries.forEach(entry => {
                 const card = entry.target;
                 const video = card.querySelector('.shorty-video');
-                if (!video) return;
 
                 if (entry.isIntersecting) {
-                    this._playVideo(video);
+                    if (video) this._playVideo(video);
 
-                    // Pre-fetch/render next 50 items when user reaches 40th card (10 items before end of rendered list)
+                    // Pre-fetch/render next 50 items when user reaches 40th card
                     const index = parseInt(card.dataset.index);
                     if (index >= this._videos.length - 10) {
                         this._renderMoreShorties(50);
                     }
                 } else {
-                    this._pauseVideo(video);
+                    if (video) this._pauseVideo(video);
                 }
             });
         }, options);
 
+        const virtOptions = {
+            root: document.getElementById('shorties-feed'),
+            rootMargin: '3000px 0px',
+            threshold: 0
+        };
+
+        this._virtualizationObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                const card = entry.target;
+                
+                if (entry.isIntersecting) {
+                    // Re-render if empty
+                    if (!card.innerHTML.trim()) {
+                        const globalIdx = parseInt(card.dataset.index);
+                        const v = this._allVideos[globalIdx];
+                        if (v) {
+                            card.innerHTML = this._renderShortyCardInner(v, globalIdx);
+                            this._bindCardEvents(card);
+                            
+                            // Check if it should be playing right now (in case it skipped the playback observer)
+                            const rect = card.getBoundingClientRect();
+                            const feedRect = document.getElementById('shorties-feed').getBoundingClientRect();
+                            const visibleRatio = (Math.min(rect.bottom, feedRect.bottom) - Math.max(rect.top, feedRect.top)) / rect.height;
+                            
+                            if (visibleRatio >= 0.6) {
+                                const newVideo = card.querySelector('.shorty-video');
+                                if (newVideo) this._playVideo(newVideo);
+                            }
+                        }
+                    }
+                } else {
+                    // Empty DOM to save memory, but explicitly lock height first
+                    const video = card.querySelector('.shorty-video');
+                    if (video) this._pauseVideo(video);
+                    
+                    if (card.offsetHeight > 0 && !card.style.height) {
+                        card.style.height = `${card.offsetHeight}px`;
+                    }
+                    card.innerHTML = '';
+                }
+            });
+        }, virtOptions);
+
         document.querySelectorAll('.shorty-card').forEach(card => {
             this._observer.observe(card);
+            this._virtualizationObserver.observe(card);
         });
     }
 
@@ -334,34 +353,46 @@ export class ShortiesView {
         }
 
         this._activeVideoEl = video;
-        video.muted = this._isMuted;
+        
+        if (this._activeVideoEl === video) {
+            video.muted = this._isMuted;
 
-        if (!video.src) {
-            video.src = video.dataset.src;
-            video.load();
-        }
+            if (!video.src) {
+                video.src = video.dataset.src;
+                video.load();
+            }
 
-        const playPromise = video.play();
-        if (playPromise !== undefined) {
-            playPromise.then(() => {
-                this._resetFocusTimeout?.();
-            }).catch(err => {
-                console.log('Playback prevented or interrupted:', err.message);
-                video.addEventListener('canplay', () => {
+            const playPromise = video.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
                     if (this._activeVideoEl === video) {
-                        video.play().then(() => {
-                            this._resetFocusTimeout?.();
-                        }).catch(e => console.log('Retry play failed:', e));
+                        this._resetFocusTimeout?.();
+                    } else {
+                        video.pause();
                     }
-                }, { once: true });
-            });
+                }).catch(err => {
+                    console.log('Playback prevented or interrupted:', err.message);
+                    video.addEventListener('canplay', () => {
+                        if (this._activeVideoEl === video) {
+                            video.play().then(() => {
+                                if (this._activeVideoEl === video) {
+                                    this._resetFocusTimeout?.();
+                                } else {
+                                    video.pause();
+                                }
+                            }).catch(e => console.log('Retry play failed:', e));
+                        }
+                    }, { once: true });
+                });
+            }
         }
     }
 
     _pauseVideo(video) {
         try {
             video.pause();
-            video.currentTime = 0;
+            video.removeAttribute('src');
+            video.load();
             if (this._focusTimeout) {
                 clearTimeout(this._focusTimeout);
             }
@@ -562,14 +593,13 @@ export class ShortiesView {
         feed.addEventListener('mousemove', clearFocusMode, { passive: true });
         feed.addEventListener('pointerdown', clearFocusMode, { passive: true });
 
-        // Augment keydown to also clear focus mode
-        const originalKeydown = this._keydownHandler;
-        this._keydownHandler = (e) => {
+        if (this._focusKeydownHandler) {
+            document.removeEventListener('keydown', this._focusKeydownHandler);
+        }
+        this._focusKeydownHandler = (e) => {
             clearFocusMode();
-            if (originalKeydown) originalKeydown(e);
         };
-        document.removeEventListener('keydown', originalKeydown);
-        document.addEventListener('keydown', this._keydownHandler);
+        document.addEventListener('keydown', this._focusKeydownHandler);
 
         this._resetFocusTimeout = () => {
             if (this._focusTimeout) clearTimeout(this._focusTimeout);
@@ -784,7 +814,7 @@ export class ShortiesView {
             </div>
         `;
 
-        dialog.showModal();
+        showModal(dialog);
         dialog.querySelector('#shorty-playlist-cancel').onclick = () => dialog.close();
 
         dialog.querySelectorAll('.playlist-option').forEach(el => {
@@ -879,10 +909,18 @@ export class ShortiesView {
     destroy() {
         if (this._keydownHandler) {
             document.removeEventListener('keydown', this._keydownHandler);
+            this._keydownHandler = null;
+        }
+        if (this._focusKeydownHandler) {
+            document.removeEventListener('keydown', this._focusKeydownHandler);
+            this._focusKeydownHandler = null;
         }
 
         if (this._observer) {
             this._observer.disconnect();
+        }
+        if (this._virtualizationObserver) {
+            this._virtualizationObserver.disconnect();
         }
 
         if (this._focusTimeout) {

@@ -65,11 +65,16 @@ export function formatDateLabel(value) {
 
 export function summarizeLibrary(groups = []) {
   const items = flattenLibrary(groups);
-  const totalRuntimeSeconds = items.reduce((sum, item) => sum + (item.duration_seconds || 0), 0);
-  const directCount = items.filter((item) => item.stream_mode === "direct").length;
-  const hlsCount = items.filter((item) => item.stream_mode === "hls").length;
-  const lockedCount = items.filter((item) => item.requires_pin).length;
-  const adultCount = items.filter((item) => item.adult_only).length;
+  
+  const stats = items.reduce((acc, item) => {
+    acc.runtime += (item.duration_seconds || 0);
+    if (item.stream_mode === "direct") acc.direct++;
+    if (item.stream_mode === "hls") acc.hls++;
+    if (item.requires_pin) acc.locked++;
+    if (item.adult_only) acc.adult++;
+    return acc;
+  }, { runtime: 0, direct: 0, hls: 0, locked: 0, adult: 0 });
+
   const topCategories = [...groups]
     .sort((left, right) => right.items.length - left.items.length)
     .slice(0, 4)
@@ -78,12 +83,12 @@ export function summarizeLibrary(groups = []) {
   return {
     itemCount: items.length,
     groupCount: groups.length,
-    totalRuntimeSeconds,
-    runtimeLabel: formatRuntimeHours(totalRuntimeSeconds),
-    lockedCount,
-    adultCount,
-    directCount,
-    hlsCount,
+    totalRuntimeSeconds: stats.runtime,
+    runtimeLabel: formatRuntimeHours(stats.runtime),
+    lockedCount: stats.locked,
+    adultCount: stats.adult,
+    directCount: stats.direct,
+    hlsCount: stats.hls,
     topCategories,
   };
 }

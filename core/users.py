@@ -5,7 +5,6 @@ from copy import deepcopy
 from core.models import User
 from core.schemas import UserRead
 
-
 USER_PREFERENCE_DEFAULTS: dict[str, object] = {
     "display_name": "",
     "avatar_url": "",
@@ -15,14 +14,12 @@ USER_PREFERENCE_DEFAULTS: dict[str, object] = {
     "concurrent_device_limit": 2,
 }
 
-
 def merged_preferences(user: User) -> dict:
     preferences = deepcopy(USER_PREFERENCE_DEFAULTS)
     preferences.update(user.preferences or {})
     if not preferences.get("display_name"):
         preferences["display_name"] = user.username
     return preferences
-
 
 def build_user_read(user: User) -> UserRead:
     preferences = merged_preferences(user)
@@ -38,7 +35,6 @@ def build_user_read(user: User) -> UserRead:
         concurrent_device_limit=int(preferences.get("concurrent_device_limit") or 2),
     )
 
-
 def apply_profile_updates(user: User, updates: dict) -> None:
     preferences = merged_preferences(user)
     for key, value in updates.items():
@@ -46,7 +42,6 @@ def apply_profile_updates(user: User, updates: dict) -> None:
             continue
         preferences[key] = value
     user.preferences = preferences
-
 
 def concurrent_device_limit(user: User) -> int:
     preferences = merged_preferences(user)

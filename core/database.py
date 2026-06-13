@@ -5,7 +5,6 @@ from sqlalchemy.orm import DeclarativeBase
 
 from config import get_settings
 
-
 settings = get_settings()
 engine = create_async_engine(
     settings.database_url,
@@ -25,10 +24,8 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
-
 class Base(DeclarativeBase):
     pass
-
 
 async def get_db() -> AsyncIterator[AsyncSession]:
     async with AsyncSessionLocal() as session:
@@ -37,7 +34,6 @@ async def get_db() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
-
 
 async def init_db() -> None:
     from core import models  # noqa: F401

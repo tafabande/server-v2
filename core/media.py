@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import difflib
 import json
 import os
 import re
@@ -10,8 +9,7 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import HTTPException, status
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +17,7 @@ from config import BASE_DIR, get_settings
 from core.exceptions import FileOperationError, ResourceNotFoundError
 from core.logging import get_logger
 from core.models import AuditLog, FolderSetting, MediaMetadata, PlayEvent, SeriesGroup, SeriesMember, Tag, User
-from core.storage import is_media_file, is_path_adult, is_path_locked, relative_shared_path, resolve_shared_path
-
+from core.storage import is_media_file, relative_shared_path
 
 settings = get_settings()
 logger = get_logger("media")
@@ -34,7 +31,6 @@ _active_processes: dict[int, asyncio.subprocess.Process] = {}
 # Concurrency limit for heavy FFmpeg sprite sheet generation
 _sprite_semaphore = asyncio.Semaphore(2)
 
-
 # Scan progress tracking
 _scan_state = {
     "scanning": False,
@@ -43,7 +39,6 @@ _scan_state = {
     "current_folder": "",
     "last_scan_at": None,
 }
-
 
 def get_scan_status() -> dict:
     """Return current scan progress."""
@@ -58,7 +53,6 @@ def get_scan_status() -> dict:
         "current_folder": _scan_state.get("current_folder", ""),
         "last_scan_at": _scan_state.get("last_scan_at", None),
     }
-
 
 def clean_title(path: Path) -> str:
     # Check for local NFO first
@@ -87,11 +81,9 @@ def clean_title(path: Path) -> str:
     title = raw.replace(".", " ").replace("_", " ").replace("-", " ")
     return " ".join(part for part in title.split() if part).title()
 
-
 def media_category(path: Path) -> str:
     relative = relative_shared_path(path)
     return relative.split("/", 1)[0] if "/" in relative else "Recently Added"
-
 
 def thumbnail_path_for(relative_path: str) -> Path:
     # Replace slashes with double underscores for a flat thumbs directory
@@ -100,22 +92,17 @@ def thumbnail_path_for(relative_path: str) -> Path:
     safe_name = safe_name.replace("#", "_").replace("?", "_").replace("%", "_").replace("&", "_")
     return settings.thumbs_folder / f"{safe_name}.svg"
 
-
 def hls_output_dir(media_id: int) -> Path:
     return settings.hls_folder / str(media_id)
-
 
 def detect_stream_mode(path: Path) -> str:
     return "direct" if path.suffix.lower() in DIRECT_STREAM_EXTENSIONS else "hls"
 
-
 def ffmpeg_available() -> bool:
     return shutil.which(settings.ffmpeg_path) is not None
 
-
 def ffprobe_available() -> bool:
     return shutil.which(settings.ffprobe_path) is not None
-
 
 def write_placeholder_thumbnail(destination: Path, title: str) -> None:
     import hashlib
@@ -161,7 +148,6 @@ def write_placeholder_thumbnail(destination: Path, title: str) -> None:
 </svg>
 """
     destination.write_text(svg, encoding="utf-8")
-
 
 def build_thumbnail(source_path: Path, relative_path: str, title: str, duration: float | None = None) -> tuple[str, bool]:
     destination = thumbnail_path_for(relative_path)
@@ -232,7 +218,7 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
             # ffmpeg -fflags +genpts -i input.mp4 -c copy fixed.mp4
             # This rewrites the container with a clean moov atom.
             logger.warning(f"Thumbnail generation failed for {relative_path}. Attempting to remux and repair the container once...")
-            temp_fixed = source_path.parent / f".fixed_{source_path.name}"
+            temp_fixed = settings.temp_folder / f".fixed_{source_path.name}"
             remux_command = [
                 settings.ffmpeg_path,
                 "-y",
@@ -285,17 +271,14 @@ def build_thumbnail(source_path: Path, relative_path: str, title: str, duration:
     write_placeholder_thumbnail(destination, title)
     return f"/thumbs/{destination.name}", was_repaired
 
-
 # ── Sprite Sheet (Hover Preview Thumbnails) ────────────────────────────────────
 SPRITE_THUMB_W = 160
 SPRITE_THUMB_H = 90
 SPRITE_COLUMNS = 10
 SPRITE_INTERVAL = 5   # seconds between frames
 
-
 def sprite_path_for(media_id: int) -> Path:
     return settings.sprites_folder / f"sprite_{media_id}.jpg"
-
 
 def build_sprite_sheet(source_path: Path, media_id: int, duration: float | None = None) -> dict | None:
     """
@@ -373,7 +356,6 @@ def build_sprite_sheet(source_path: Path, media_id: int, duration: float | None 
         logger.error(f"Unexpected error during sprite sheet generation for media {media_id}: {e}")
     return None
 
-
 def _sprite_meta(path: Path, media_id: int) -> dict:
     return {
         "url": f"/api/media/sprites-secure/{media_id}",
@@ -383,7 +365,6 @@ def _sprite_meta(path: Path, media_id: int) -> dict:
         "interval": SPRITE_INTERVAL,
     }
 
-
 async def build_sprite_sheet_queued(source_path: Path, media_id: int, duration: float | None = None) -> dict | None:
     """
     Generate a tiled JPEG sprite sheet for hover-preview thumbnails,
@@ -392,15 +373,12 @@ async def build_sprite_sheet_queued(source_path: Path, media_id: int, duration: 
     async with _sprite_semaphore:
         return await asyncio.to_thread(build_sprite_sheet, source_path, media_id, duration)
 
-
-
 def get_sprite_info(media_id: int) -> dict | None:
     """Return sprite metadata if the sheet already exists, else None."""
     path = sprite_path_for(media_id)
     if path.exists():
         return _sprite_meta(path, media_id)
     return None
-
 
 def probe_media(path: Path) -> dict:
     if not ffprobe_available():
@@ -459,7 +437,6 @@ def probe_media(path: Path) -> dict:
         "audio_codec": audio_stream.get("codec_name"),
     }
 
-
 def resolve_shortcut(lnk_path: Path) -> Path | None:
     try:
         command = f"""
@@ -475,7 +452,6 @@ def resolve_shortcut(lnk_path: Path) -> Path | None:
         pass
     return None
 
-
 def _path_is_inside(path: Path, root: Path | None) -> bool:
     if root is None:
         return False
@@ -486,7 +462,6 @@ def _path_is_inside(path: Path, root: Path | None) -> bool:
         return False
     return resolved_path == resolved_root or resolved_root in resolved_path.parents
 
-
 def _configured_log_dir_candidates() -> list[Path]:
     candidates = [settings.logs_folder]
     raw_log_dir = os.getenv("LOGS_FOLDER")
@@ -494,7 +469,6 @@ def _configured_log_dir_candidates() -> list[Path]:
         raw_path = Path(raw_log_dir)
         candidates.append(raw_path if raw_path.is_absolute() else BASE_DIR / raw_path)
     return candidates
-
 
 def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = True) -> list[tuple[Path, str]]:
     logger.info(f"Configured scan root: {root}")
@@ -647,7 +621,6 @@ def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = T
 
     return items
 
-
 def validate_media(path: Path) -> bool:
     if not ffprobe_available():
         return False
@@ -668,7 +641,6 @@ def validate_media(path: Path) -> bool:
     except Exception:
         return False
 
-
 async def scan_media_library(session: AsyncSession, use_cache: bool = True, force_thumbs: bool = False) -> int:
     logger.info("Starting media library discovery and indexing...")
     _scan_state["scanning"] = True
@@ -685,12 +657,29 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
     fs_result = await session.execute(select(FolderSetting))
     folder_settings_map = {s.path.lower(): s for s in fs_result.scalars() if s.path}
 
+    from core.models import DeletedMediaTombstone
+    tomb_result = await session.execute(select(DeletedMediaTombstone).where(DeletedMediaTombstone.expires_at > datetime.now(UTC)))
+    tombstone_paths = {t.path for t in tomb_result.scalars()}
+
     media_files = await asyncio.to_thread(get_all_media_files, settings.shared_folder, "", use_cache)
     _scan_state["files_total"] = len(media_files)
 
     for target_path, virtual_rel in media_files:
         _scan_state["current_folder"] = target_path.parent.name or "Root"
         logger.debug(f"Processing file during scan: {target_path.name}")
+        
+        try:
+            resolved_target_str = str(target_path.resolve())
+            if resolved_target_str in tombstone_paths:
+                logger.warning(f"File {target_path.name} was tombstoned. Deleting physical file.")
+                try:
+                    target_path.unlink()
+                except Exception as e:
+                    logger.error(f"Failed to delete tombstoned file {target_path.name}: {e}")
+                continue
+        except Exception:
+            pass
+            
         media = existing_map.get(virtual_rel)
         try:
             stat = target_path.stat()
@@ -782,7 +771,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
             
             if not is_valid:
                 logger.warning(f"Validation failed for {virtual_rel}. Attempting to remux and repair the container once...")
-                temp_fixed = target_path.parent / f".fixed_{target_path.name}"
+                temp_fixed = settings.temp_folder / f".fixed_{target_path.name}"
                 remux_command = [
                     settings.ffmpeg_path,
                     "-y",
@@ -1005,7 +994,6 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
     await trigger_webhook("library.updated", {"indexed_count": indexed})
     return indexed
 
-
 # ── Classification & Series Detection Pipeline ─────────────────────────────────
 
 # Regex patterns for episode detection
@@ -1015,7 +1003,6 @@ _EPISODE_RE = re.compile(
 )
 _TRAILING_NUM_RE = re.compile(r"\b(\d+)\s*$")
 
-
 def _normalize_title(title: str) -> str:
     """Lowercase, strip extensions, replace punctuation with spaces, collapse whitespace."""
     t = title.lower()
@@ -1024,7 +1011,6 @@ def _normalize_title(title: str) -> str:
     # Replace punctuation with spaces
     t = re.sub(r"[^\w\s]", " ", t)
     return " ".join(t.split())
-
 
 def jaro_winkler(s1: str, s2: str, p: float = 0.1, max_l: int = 4) -> float:
     if s1 == s2:
@@ -1073,7 +1059,6 @@ def jaro_winkler(s1: str, s2: str, p: float = 0.1, max_l: int = 4) -> float:
             
     return jaro + prefix * p * (1 - jaro)
 
-
 def _extract_episode_info(title: str) -> tuple[str, int | None]:
     """
     Extract the base name and episode number from a title.
@@ -1095,7 +1080,6 @@ def _extract_episode_info(title: str) -> tuple[str, int | None]:
         return base if base else normalized, ep_num
 
     return normalized, None
-
 
 async def run_classification_pipeline(session: AsyncSession) -> None:
     """
@@ -1222,7 +1206,6 @@ async def run_classification_pipeline(session: AsyncSession) -> None:
     await session.commit()
     logger.info(f"Classification pipeline complete. Detected {series_count} series groups.")
 
-
 async def library_groups(session: AsyncSession, current_user: User, request=None) -> list[dict]:
     query = select(MediaMetadata).order_by(MediaMetadata.category, MediaMetadata.title)
     query = await apply_media_security_filters(session, query, current_user, request)
@@ -1232,7 +1215,6 @@ async def library_groups(session: AsyncSession, current_user: User, request=None
     for media in result.scalars():
         groups.setdefault(media.category, []).append(media)
     return [{"label": label, "items": items} for label, items in groups.items()]
-
 
 async def get_media(session: AsyncSession, media_id: int, allow_missing: bool = False) -> MediaMetadata:
     result = await session.execute(select(MediaMetadata).where(MediaMetadata.id == media_id))
@@ -1245,18 +1227,15 @@ async def get_media(session: AsyncSession, media_id: int, allow_missing: bool = 
         raise ResourceNotFoundError(f"Media with ID {media_id} is missing.")
     return media
 
-
 def media_source_path(media: MediaMetadata) -> Path:
     from core.storage import resolve_shared_path
     return resolve_shared_path(media.relative_path)
-
 
 async def detect_intro_for_media(media_path: Path) -> tuple[float, float]:
     """
     Detect intro start and end using FFmpeg scene detection on the first 3 minutes.
     Falls back to a default range (30.0, 90.0) if detection fails or finds no clear intro.
     """
-    import subprocess
     import re
     
     if not ffmpeg_available():
@@ -1299,7 +1278,6 @@ async def detect_intro_for_media(media_path: Path) -> tuple[float, float]:
     except Exception as e:
         logger.warning(f"Intro detection failed for {media_path}: {e}. Using fallback.")
         return 30.0, 90.0
-
 
 def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict], media: MediaMetadata) -> list[str]:
     # Check for Hardware Acceleration
@@ -1391,7 +1369,6 @@ def build_hls_command(source_path: Path, output_dir: Path, profiles: list[dict],
     ])
 
     return cmd
-
 
 async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, priority: bool = False) -> Path:
     from core.exceptions import MediaHubError
@@ -1521,7 +1498,6 @@ async def ensure_hls_manifest(session: AsyncSession, media: MediaMetadata, prior
             except ProcessLookupError:
                 pass
 
-
 async def build_stream_response(session: AsyncSession, media: MediaMetadata, priority: bool = True) -> dict:
     if media.stream_mode == "direct":
         return {
@@ -1556,7 +1532,6 @@ async def build_stream_response(session: AsyncSession, media: MediaMetadata, pri
         "qualities": quality_names
     }
 
-
 async def log_play_event(
     session: AsyncSession,
     user_id: int,
@@ -1584,7 +1559,6 @@ async def log_play_event(
         "event_type": event_type
     })
 
-
 async def log_audit(
     session: AsyncSession,
     user_id: int | None,
@@ -1594,7 +1568,6 @@ async def log_audit(
 ) -> None:
     session.add(AuditLog(user_id=user_id, action=action, target_path=target_path, details=details or {}))
     await session.commit()
-
 
 async def start_pre_transcoding(session: AsyncSession, folder_relative_path: str) -> int:
     result = await session.execute(
@@ -1613,7 +1586,6 @@ async def start_pre_transcoding(session: AsyncSession, folder_relative_path: str
         except Exception:
             continue
     return count
-
 
 async def watch_media_library():
     import asyncio
@@ -1657,7 +1629,6 @@ async def watch_media_library():
                 
             logger.info(f"Detected {len(valid_changes)} valid changes. Triggering rescan...")
 
-
             # Wait a bit for file operations to settle
             await asyncio.sleep(2)
             async with AsyncSessionLocal() as session:
@@ -1691,12 +1662,14 @@ async def apply_media_security_filters(
     from core.models import FolderPermission, FolderSetting
 
     # 1. R18 / Adult Filter
-    nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
+    nsfw_enabled = current_user.preferences and current_user.preferences.get("nsfw") == True if current_user else False
     if request:
         if request.headers.get("X-Disable-R18") == "true":
             nsfw_enabled = False
         elif request.headers.get("X-Enable-R18") == "true":
             nsfw_enabled = True
+        elif "nsfw_enabled" in request.cookies:
+            nsfw_enabled = request.cookies.get("nsfw_enabled") == "true"
             
     adult_folder_exists = exists().where(
         and_(
@@ -1714,7 +1687,8 @@ async def apply_media_security_filters(
         if not nsfw_enabled:
             stmt = stmt.where(and_(MediaMetadata.adult_only == False, ~adult_folder_exists))
         else:
-            stmt = stmt.where(or_(MediaMetadata.adult_only == True, adult_folder_exists))
+            # NSFW Enabled = Show All Content (No filters applied for adult_only)
+            pass
         
     # 2. Locked Content Filter
     if current_user.role not in ("admin", "super-admin"):
@@ -1751,7 +1725,6 @@ async def apply_media_security_filters(
         
     return stmt
 
-
 async def is_media_accessible(
     session: AsyncSession,
     media: MediaMetadata,
@@ -1764,7 +1737,6 @@ async def is_media_accessible(
     stmt = await apply_media_security_filters(session, stmt, current_user, request, strict_ui=strict)
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
-
 async def get_smart_home_data(session: AsyncSession, current_user: User, request=None) -> dict:
     seen_ids = set()
 
@@ -1772,7 +1744,7 @@ async def get_smart_home_data(session: AsyncSession, current_user: User, request
     continue_watching = []
 
     # 2. Recently Added (Filtered to normal videos only)
-    from sqlalchemy import and_, or_
+    from sqlalchemy import or_
     ra_query = select(MediaMetadata).where(
         or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
     ).order_by(MediaMetadata.created_at.desc(), MediaMetadata.id.desc()).limit(30)
@@ -1811,7 +1783,6 @@ async def get_smart_home_data(session: AsyncSession, current_user: User, request
         "recommendations": recommendations,
     }
 
-
 async def cleanup_active_processes():
     """Terminate and clean up all active transcoder/subprocesses to prevent leaks on shutdown."""
     logger.info("Cleaning up active subprocesses...")
@@ -1823,7 +1794,6 @@ async def cleanup_active_processes():
             except Exception as e:
                 logger.error(f"Error terminating process {media_id}: {e}")
     _active_processes.clear()
-
 
 async def run_orphan_cleanup_job() -> None:
     """

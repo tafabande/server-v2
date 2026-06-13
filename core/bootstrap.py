@@ -1,15 +1,12 @@
 import asyncio
 import shutil
-from pathlib import Path
-from sqlalchemy import inspect, select, text, func
+from sqlalchemy import select, text, func
 
 from config import get_settings
 from core.database import AsyncSessionLocal, Base, engine
 from core.media import scan_media_library
 from core.models import (
-    AccessRequest, AuditLog, Collection, CollectionItem, Favorite, FolderPermission,
-    FolderSetting, IdempotentRequest, MediaMetadata, Permission, PlayEvent, Playlist,
-    PlaylistItem, Rating, ServerStatus, Subtitle, SystemSetting, User, Webhook,
+    MediaMetadata, User,
 )
 from core.security import hash_password
 from core.system import ensure_system_settings
@@ -18,7 +15,6 @@ from core.logging import get_logger
 logger = get_logger("bootstrap")
 
 settings = get_settings()
-
 
 # ── Column definitions per ORM model (name → SQLite type) ─────────────────────
 # Used by self_heal_columns to add any missing columns automatically.
@@ -51,6 +47,9 @@ _TABLE_COLUMNS: dict[str, dict[str, str]] = {
     "play_events": {
         "event_type": "VARCHAR(20) DEFAULT 'progress'",
     },
+    "playlists": {
+        "is_adult": "BOOLEAN DEFAULT 0",
+    },
 }
 
 # ── Critical indexes that must exist ──────────────────────────────────────────
@@ -70,14 +69,12 @@ _REQUIRED_INDEXES: list[tuple[str, str, str]] = [
     ("ix_folder_permissions_user_id", "folder_permissions", "user_id"),
 ]
 
-
 async def self_heal_tables() -> None:
     """Create any ORM tables that don't exist yet (non-destructive)."""
     logger.info("Self-healing: Checking for missing tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Self-healing: All tables verified/created.")
-
 
 async def self_heal_columns() -> None:
     """Add any missing columns to existing tables without dropping data."""
@@ -99,7 +96,6 @@ async def self_heal_columns() -> None:
 
         await session.commit()
 
-
 async def self_heal_indexes() -> None:
     """Ensure critical indexes exist on key columns."""
     logger.info("Self-healing: Checking indexes...")
@@ -113,7 +109,6 @@ async def self_heal_indexes() -> None:
                 # Index may already exist or table might be missing — both are fine
                 logger.debug(f"Index '{idx_name}' check: {e}")
         await session.commit()
-
 
 async def self_heal_data_integrity() -> None:
     """Clean up orphaned records and stale files."""
@@ -213,7 +208,6 @@ async def self_heal_data_integrity() -> None:
                     shutil.rmtree(child, ignore_errors=True)
     except Exception as e:
         logger.error(f"Self-healing HLS cleanup failed: {e}")
-
 
 async def bootstrap_application() -> None:
     """Initialize system settings, self-heal schema, and trigger an asynchronous media scan."""

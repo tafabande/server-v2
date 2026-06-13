@@ -245,8 +245,23 @@ export class PlaylistsView {
                         try {
                             await api.removeFromPlaylist(id, media.id);
                             toast('Removed from playlist', 'success');
-                            await this._selectPlaylist(id);
-                            await this._loadPlaylists();
+                            
+                            // Remove from DOM and array to prevent stutter
+                            card.remove();
+                            pl.items.splice(idx, 1);
+                            
+                            // Update remaining indexes
+                            detail.querySelectorAll('.pl-media-card').forEach(c => {
+                                let cIdx = parseInt(c.dataset.index);
+                                if (cIdx > idx) c.dataset.index = cIdx - 1;
+                            });
+                            
+                            // Update count in header
+                            const countEl = detail.querySelector('.flex-between .text-muted.text-xs');
+                            if (countEl) countEl.textContent = `${pl.items.length} items`;
+                            
+                            // Refresh sidebar stats silently
+                            this._loadPlaylists();
                         } catch (err) { toast(err.message, 'error'); }
                         return;
                     }
@@ -288,24 +303,33 @@ export class PlaylistsView {
         const isFav = m.is_favorite;
 
         return `
-            <div class="pl-media-card media-card" data-index="${index}" data-media-id="${m.id}" style="will-change:transform;">
-                <div class="media-card-poster" style="aspect-ratio:16/9;position:relative;">
-                    <img src="${thumb}" alt="${escapeHtml(title)}" class="media-card-thumb shimmer-bg" loading="lazy"
-                         style="opacity:0;transition:opacity 0.3s ease;width:100%;height:100%;object-fit:cover;"
+            <div class="pl-media-card group relative flex flex-col gap-2 cursor-pointer transition-all duration-300 hover:scale-[1.02]" data-index="${index}" data-media-id="${m.id}" style="will-change:transform;">
+                <div class="media-card-poster relative aspect-[2/3] overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-low">
+                    <img src="${thumb}" alt="${escapeHtml(title)}" class="media-card-thumb shimmer-bg w-full h-full object-cover" loading="lazy"
+                         style="opacity:0;transition:opacity 0.3s ease;"
                          onload="this.style.opacity=1;this.classList.remove('shimmer-bg');"
                          onerror="this.onerror=null;this.src='/static/placeholder.svg';this.style.opacity=1;this.classList.remove('shimmer-bg');">
-                    ${m.adult_only ? '<div class="media-badge r18-badge">R18</div>' : ''}
-                    <span class="media-badge duration-badge">${dur}</span>
-                    <div class="media-card-actions">
-                        <button class="btn-icon btn-play" title="Play">▶</button>
-                        <button class="btn-icon btn-fav ${isFav ? 'active' : ''}" title="Favorite">${isFav ? '❤️' : '♡'}</button>
-                        <button class="btn-icon btn-download" title="Download">⬇</button>
-                        <button class="btn-icon btn-remove" title="Remove" style="color:var(--error);">✕</button>
+                    ${m.adult_only ? '<div class="absolute top-2 left-2 px-2 py-0.5 bg-error text-on-error font-bold text-[10px] rounded uppercase tracking-widest shadow-md">R18</div>' : ''}
+                    
+                    <!-- Hover Overlay -->
+                    <div class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                        <div class="w-14 h-14 bg-primary rounded-full flex items-center justify-center shadow-lg text-on-primary btn-play">
+                            <span class="material-symbols-outlined text-4xl fill-icon" data-icon="play_arrow" style="pointer-events:none;">play_arrow</span>
+                        </div>
+                        <button class="absolute top-2 right-2 w-8 h-8 flex items-center justify-center bg-black/40 backdrop-blur-md rounded-full text-primary border border-white/10 btn-fav ${isFav ? 'active' : ''}" title="Favorite">
+                            <span class="material-symbols-outlined text-[20px] ${isFav ? 'fill-icon' : ''}" data-icon="favorite">favorite</span>
+                        </button>
+                        <button class="absolute top-2 right-12 w-8 h-8 flex items-center justify-center bg-black/40 backdrop-blur-md rounded-full text-primary border border-white/10 btn-remove" title="Remove">
+                            <span class="material-symbols-outlined text-[20px]" data-icon="close" style="pointer-events:none;">close</span>
+                        </button>
                     </div>
                 </div>
-                <div class="media-card-info">
-                    <h3 class="media-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
-                    <div class="media-meta"><span>${dur}</span><span class="dot">·</span><span>${escapeHtml(m.video_codec?.toUpperCase() || 'VIDEO')}</span></div>
+                <div class="media-card-info flex flex-col px-1">
+                    <h3 class="media-title font-bold text-on-surface font-body-md line-clamp-1" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
+                    <div class="media-meta flex items-center justify-between text-on-surface-variant font-label-sm text-label-sm">
+                        <span>${dur}</span>
+                        <span>${escapeHtml(m.video_codec?.toUpperCase() || 'VIDEO')}</span>
+                    </div>
                 </div>
             </div>
         `;
@@ -343,6 +367,8 @@ export class PlaylistsView {
                 this.previewVideo.muted = true;
                 this.previewVideo.autoplay = true;
                 this.previewVideo.loop = true;
+                this.previewVideo.setAttribute('playsinline', '');
+                this.previewVideo.setAttribute('webkit-playsinline', '');
                 this.previewVideo.className = 'card-preview-video';
                 this.previewVideo.addEventListener('error', () => this._cleanupPreview());
                 Object.assign(this.previewVideo.style, {

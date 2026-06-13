@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from core.events import broadcast_library_updated
 from core.logging import get_logger
-from core.exceptions import AccessDeniedError
 from core.media import (
     apply_media_security_filters,
     build_stream_response, 
@@ -33,9 +32,7 @@ from core.schemas import (
     MessageResponse,
     PaginatedMediaResponse,
     PlayEventCreate,
-    ScanStatusResponse,
     SeriesGroupDetailRead,
-    SeriesGroupRead,
     SmartHomeResponse,
     StreamResponse,
     WatchHistoryItem,
@@ -49,9 +46,7 @@ from core.storage import ensure_pin_for_path
 
 logger = get_logger("media_router")
 
-
 router = APIRouter()
-
 
 # ── Paginated Library ─────────────────────────────────────────────────────────
 
@@ -135,7 +130,6 @@ async def library(
         pages=max(1, total_pages),
     )
 
-
 from core.schemas import LibraryFolderResponse, FolderItem
 from pydantic import BaseModel
 
@@ -177,7 +171,8 @@ async def get_folders(
         if not nsfw_enabled:
             stmt = stmt.where(and_(MediaMetadata.adult_only == False, ~adult_folder_exists))
         else:
-            stmt = stmt.where(or_(MediaMetadata.adult_only == True, adult_folder_exists))
+            # Show all content
+            pass
         
     if path:
         stmt = stmt.where(MediaMetadata.relative_path.like(f"{path}/%"))
@@ -341,7 +336,6 @@ async def toggle_folder_r18(
     await session.commit()
     return {"message": "Success"}
 
-
 # ── Library Groups (legacy) ───────────────────────────────────────────────────
 
 @router.get("/groups", response_model=list[MediaGroup])
@@ -352,7 +346,6 @@ async def library_grouped(
 ) -> list[MediaGroup]:
     groups = await library_groups(session, current_user=current_user, request=request)
     return [MediaGroup(label=group["label"], items=group["items"]) for group in groups]
-
 
 # ── Smart Home Feed ───────────────────────────────────────────────────────────
 
@@ -365,7 +358,6 @@ async def smart_home(
     """Get personalized home feed data."""
     data = await get_smart_home_data(session, current_user, request)
     return SmartHomeResponse(**data)
-
 
 # ── Recently Added ────────────────────────────────────────────────────────────
 
@@ -389,7 +381,6 @@ async def recent_media(
     result = await session.execute(stmt)
     return [MediaRead.model_validate(m) for m in result.scalars()]
 
-
 # ── Scan Status ───────────────────────────────────────────────────────────────
 
 @router.get("/scan-status")
@@ -409,7 +400,6 @@ async def rescan(
     total = await scan_media_library(session, use_cache=False)
     await broadcast_library_updated(total)
     return MessageResponse(message=f"Indexed {total} media item(s).")
-
 
 # ── Continue Watching ─────────────────────────────────────────────────────────
 
@@ -455,7 +445,6 @@ async def get_continue_watching(
                 break
     return items
 
-
 # ── Watch History ─────────────────────────────────────────────────────────────
 
 @router.get("/history", response_model=list[WatchHistoryItem])
@@ -496,7 +485,6 @@ async def get_watch_history(
                 break
     return items
 
-
 @router.delete("/history", response_model=MessageResponse)
 async def clear_watch_history(
     current_user: Annotated[User, Depends(get_current_user)],
@@ -511,7 +499,6 @@ async def clear_watch_history(
     await session.commit()
     return MessageResponse(message="Watch history cleared.")
 
-
 @router.delete("/history/{event_id}", response_model=MessageResponse)
 async def delete_history_item(
     event_id: int,
@@ -525,7 +512,6 @@ async def delete_history_item(
     await session.delete(event)
     await session.commit()
     return MessageResponse(message="History item removed.")
-
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
@@ -550,7 +536,6 @@ async def search_media(
     
     result = await session.execute(stmt.limit(50))
     return [MediaRead.model_validate(m) for m in result.scalars()]
-
 
 # ── Favorites List (MUST be registered before /{media_id} catch-all) ─────────
 
@@ -577,7 +562,6 @@ async def get_favorites(
         mr.is_favorite = True
         items.append(mr)
     return items
-
 
 # ── Home Feed — Hero & Rows (MUST be before /{media_id} catch-all) ────────────
 
@@ -608,7 +592,6 @@ async def home_hero(
         type="featured",
     )
 
-
 @router.get("/home/rows", response_model=list[HomeRowResponse])
 async def home_rows(
     request: Request,
@@ -638,7 +621,6 @@ async def home_rows(
         ))
 
     return all_rows[offset: offset + 10]
-
 
 @router.get("/most-liked", response_model=list[MediaRead])
 async def get_most_liked(
@@ -674,7 +656,6 @@ async def get_most_liked(
         
     return items
 
-
 # ── Series Groups & Curator Index ─────────────────────────────────────────────
 
 @router.get("/series-groups", response_model=list[SeriesGroupDetailRead])
@@ -684,8 +665,6 @@ async def get_series_groups(
     session: AsyncSession = Depends(get_db),
 ):
     from core.models import SeriesGroup, SeriesMember
-    from core.schemas import SeriesGroupDetailRead
-    from sqlalchemy.orm import selectinload
     
     # We load the SeriesGroup and their associated MediaMetadata via SeriesMember
     stmt = select(SeriesGroup).order_by(SeriesGroup.name)
@@ -708,7 +687,6 @@ async def get_series_groups(
                 "episodes": episodes
             })
     return out
-
 
 @router.get("/curator-index")
 async def curator_index(
@@ -811,7 +789,6 @@ async def get_media_detail(
     
     return media_read
 
-
 # ── Streaming ─────────────────────────────────────────────────────────────────
 
 @router.get("/{media_id}/stream", response_model=StreamResponse)
@@ -837,7 +814,6 @@ async def stream(
         raise HTTPException(status_code=403, detail="Access denied for this resource.")
 
     return StreamResponse(**await build_stream_response(session, media, priority=priority))
-
 
 @router.get("/{media_id}/file")
 async def stream_file(
@@ -867,7 +843,6 @@ async def stream_file(
         "Cache-Control": "no-store, no-cache, must-revalidate"
     }
     return FileResponse(source, headers=headers)
-
 
 # ── Thumbnail ─────────────────────────────────────────────────────────────────
 
@@ -921,7 +896,6 @@ async def get_thumbnail(
     if not thumb_file or not thumb_file.is_file():
         raise HTTPException(status_code=404, detail="Thumbnail file not found.")
 
-
 # ── Preview (Hover Video) ─────────────────────────────────────────────────────
 
 @router.get("/{media_id}/preview")
@@ -956,7 +930,6 @@ async def get_media_preview(
     }
     return FileResponse(source, media_type="video/mp4", headers=headers)
 
-
 # ── Playback Events ──────────────────────────────────────────────────────────
 
 @router.post("/{media_id}/events", response_model=MessageResponse)
@@ -982,7 +955,6 @@ async def play_event(
     )
     return MessageResponse(message="Playback event recorded.")
 
-
 # ── Rescan ────────────────────────────────────────────────────────────────────
 
 @router.post("/rescan", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
@@ -993,7 +965,6 @@ async def rescan(
     total = await scan_media_library(session, use_cache=False)
     await broadcast_library_updated(total)
     return MessageResponse(message=f"Indexed {total} media item(s).")
-
 
 # ── Favorites ─────────────────────────────────────────────────────────────────
 
@@ -1023,7 +994,6 @@ async def toggle_favorite(
     await session.commit()
     return MessageResponse(message=message)
 
-
 @router.post("/{media_id}/like", response_model=MessageResponse)
 async def add_like(
     media_id: int,
@@ -1031,7 +1001,7 @@ async def add_like(
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Increment a media item's like count and ensure it is favorited."""
-    media = await get_media(session, media_id)
+    await get_media(session, media_id)
     
     from sqlalchemy import text
     try:
@@ -1052,7 +1022,6 @@ async def add_like(
     await session.commit()
     return MessageResponse(message="Like added.")
 
-
 # (GET /favorites moved above /{media_id} to fix FastAPI route-order matching)
 
 @router.post("/{media_id}/lock", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "family"))])
@@ -1070,14 +1039,12 @@ async def toggle_pg_lock(
     status_str = "locked" if media.is_locked else "unlocked"
     return MessageResponse(message=f"Media {status_str} successfully.")
 
-
 # ── Rename / Delete Media ────────────────────────────────────────────────────
 
 from pydantic import BaseModel
 
 class MediaRenameRequest(BaseModel):
     title: str
-
 
 @router.post("/{media_id}/rename", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "family"))])
 async def rename_media(
@@ -1086,8 +1053,54 @@ async def rename_media(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Rename a media metadata title."""
+    """Rename a media metadata title and physical file."""
     media = await get_media(session, media_id)
+    old_source = media_source_path(media)
+    
+    if not payload.title:
+        raise HTTPException(status_code=400, detail="New title cannot be empty.")
+        
+    import os
+    from pathlib import Path
+    
+    # Check if we should rename the file on disk
+    if payload.title != media.title:
+        safe_name = Path(payload.title.replace("\\", "/").replace("..", "")).name
+        if old_source.exists() and safe_name:
+            new_source = old_source.with_name(f"{safe_name}{old_source.suffix}")
+            if new_source != old_source:
+                if new_source.exists():
+                    raise HTTPException(status_code=409, detail="A file with the new name already exists.")
+                try:
+                    os.rename(old_source, new_source)
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Failed to physically rename file: {e}")
+                
+                # Update DB paths
+                media.path = str(new_source.resolve())
+                
+                # We also need to update relative_path based on new filename
+                old_rel = media.relative_path
+                if "/" in old_rel:
+                    media.relative_path = f"{old_rel.rsplit('/', 1)[0]}/{new_source.name}"
+                else:
+                    media.relative_path = new_source.name
+                    
+                # Handle thumbnail renaming if it exists
+                from config import get_settings
+                settings = get_settings()
+                if media.thumbnail_path and not media.thumbnail_path.endswith(".svg"):
+                    old_thumb = settings.thumbs_folder / Path(media.thumbnail_path.replace(chr(92), "/")).name
+                    if old_thumb.exists():
+                        import hashlib
+                        new_thumb_name = hashlib.md5(media.relative_path.encode()).hexdigest() + ".jpg"
+                        new_thumb = settings.thumbs_folder / new_thumb_name
+                        try:
+                            os.rename(old_thumb, new_thumb)
+                            media.thumbnail_path = f"/thumbs/{new_thumb_name}"
+                        except Exception as e:
+                            logger.error(f"Failed to rename thumbnail: {e}")
+
     media.title = payload.title
     await session.commit()
     
@@ -1096,22 +1109,36 @@ async def rename_media(
     
     return MessageResponse(message="Media renamed successfully.")
 
-
 @router.delete("/{media_id}", response_model=MessageResponse, dependencies=[Depends(require_roles("admin"))])
 async def delete_media(
     media_id: int,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
-    """Permanently delete a media item from the database."""
+    """Permanently delete a media item from the database and disk."""
     media = await get_media(session, media_id, allow_missing=True)
     
     source = media_source_path(media)
+    import os
     if source.exists():
         try:
-            source.unlink()
+            os.remove(source)
         except Exception as e:
-            print(f"Failed to delete file {source}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to delete physical file: {e}")
+            
+    # Insert Tombstone
+    from core.models import DeletedMediaTombstone
+    from datetime import datetime, timedelta, UTC
+    
+    try:
+        resolved_path = str(source.resolve())
+        tombstone = DeletedMediaTombstone(
+            path=resolved_path,
+            expires_at=datetime.now(UTC) + timedelta(hours=24)
+        )
+        session.add(tombstone)
+    except Exception as e:
+        logger.error(f"Failed to create tombstone for {source}: {e}")
             
     await session.execute(delete(MediaMetadata).where(MediaMetadata.id == media_id))
     await session.commit()
@@ -1120,7 +1147,6 @@ async def delete_media(
     await broadcast_library_updated(0) 
     
     return MessageResponse(message="Media deleted successfully.")
-
 
 # ── Sprites ───────────────────────────────────────────────────────────────────
 
@@ -1151,7 +1177,6 @@ async def get_sprites(
     )
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=202, content={"status": "generating"})
-
 
 # ── Ratings ───────────────────────────────────────────────────────────────────
 
@@ -1185,7 +1210,6 @@ async def rate_media(
     await session.commit()
     return MessageResponse(message=message)
 
-
 @router.get("/{media_id}/rating")
 async def get_media_rating(
     media_id: int,
@@ -1218,7 +1242,6 @@ async def get_media_rating(
         user_rating=user_score,
     )
 
-
 # ── Subtitles ─────────────────────────────────────────────────────────────────
 
 @router.get("/{media_id}/subtitles")
@@ -1236,7 +1259,6 @@ async def list_subtitles(
         select(Subtitle).where(Subtitle.media_id == media_id).order_by(Subtitle.language)
     )
     return [SubtitleRead.model_validate(s) for s in result.scalars()]
-
 
 @router.post("/{media_id}/subtitles", response_model=MessageResponse)
 async def upload_subtitle(
@@ -1266,7 +1288,11 @@ async def upload_subtitle(
             if safe_label:
                 dest_filename = f"{source_path.stem}.{safe_lang}.{safe_label}.srt"
                 
-        dest_path = source_path.parent / dest_filename
+        from config import get_settings
+        settings = get_settings()
+        subs_dir = settings.data_folder / "subtitles"
+        subs_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = subs_dir / f"{media_id}_{dest_filename}"
         
         try:
             content = await file.read()
@@ -1325,7 +1351,6 @@ async def upload_subtitle(
         await session.commit()
         return MessageResponse(message=f"Found and registered {added} subtitle(s).")
 
-
 @router.delete("/{media_id}/subtitles/{subtitle_id}", response_model=MessageResponse)
 async def delete_subtitle(
     media_id: int,
@@ -1343,7 +1368,6 @@ async def delete_subtitle(
     await session.delete(sub)
     await session.commit()
     return MessageResponse(message="Subtitle removed.")
-
 
 @router.get("/{media_id}/download")
 async def download_media(
@@ -1373,7 +1397,6 @@ async def download_media(
         filename=source.name
     )
 
-
 @router.post("/{media_id}/detect-intro", response_model=MessageResponse)
 async def detect_intro(
     media_id: int,
@@ -1393,11 +1416,9 @@ async def detect_intro(
     
     return MessageResponse(message=f"Intro detected: {intro_start}s to {intro_end}s.")
 
-
 import re
 from pathlib import Path
 import asyncio
-from datetime import datetime, timedelta, timezone
 
 def extract_year_from_metadata(media: MediaMetadata) -> int | None:
     match = re.search(r'\b(19\d{2}|20\d{2})\b', media.title)
@@ -1421,7 +1442,6 @@ def extract_synopsis_from_nfo(media_path: Path) -> str | None:
             pass
     return None
 # ── Home rows and hero moved before /{media_id} catch-all. See above. ─────────
-
 
 @router.get("/{media_id}/backdrop")
 async def get_media_backdrop(
@@ -1489,8 +1509,6 @@ async def get_media_backdrop(
 
 # (/{media_id}/preview is handled above, before the /{media_id} catch-all.)
 
-
-
 @router.get("/hls-secure/{media_id}/{filename:path}")
 async def serve_hls_file(
     request: Request,
@@ -1521,7 +1539,6 @@ async def serve_hls_file(
         
     return FileResponse(file_path, headers=headers)
 
-
 @router.get("/sprites-secure/{media_id}")
 async def serve_sprites_file(
     request: Request,
@@ -1542,7 +1559,6 @@ async def serve_sprites_file(
         
     headers = {"Cache-Control": "public, max-age=3600"}
     return FileResponse(file_path, headers=headers)
-
 
 # ── Playlists ─────────────────────────────────────────────────────────────────
 
@@ -1593,7 +1609,7 @@ async def add_playlist_item(
     if not pl or pl.owner_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Playlist not found.")
         
-    media = await get_media(session, payload.media_id)
+    await get_media(session, payload.media_id)
     
     stmt = select(PlaylistItem).where(PlaylistItem.playlist_id == playlist_id, PlaylistItem.media_id == payload.media_id)
     existing = (await session.execute(stmt)).scalar_one_or_none()

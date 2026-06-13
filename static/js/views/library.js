@@ -4,14 +4,14 @@
  * Supports Folder Navigation and bulk operations!
  */
 import { api, player, router } from '../app.js';
-import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved, showAdultAccessDialog, showPinDialog, prefetchThumbnails } from '../utils.js';
+import { formatDuration, formatBytes, thumbUrl, toast, debounce, isAdultApproved, showAdultAccessDialog, showPinDialog, prefetchThumbnails, confirm, prompt, escapeHtml } from '../utils.js';
 
 export class LibraryView {
     constructor(container) {
         this.container = container;
         this._fixedFormat = null;
         this._currentPath = localStorage.getItem('lib_current_path') || "";
-        this._viewMode = localStorage.getItem('lib_view_mode') || 'grid';
+        this._viewMode = localStorage.getItem('lib_view_mode') || 'table';
         this._folders = [];
         this._items = [];
 
@@ -39,41 +39,62 @@ export class LibraryView {
     async render() {
         const title = this._titleOverride || (this._fixedFormat ? (this._fixedFormat.charAt(0).toUpperCase() + this._fixedFormat.slice(1)) : 'Library');
         const isAdmin = this._isAdmin();
-        this.container.innerHTML = `
-            <div class="view-header flex-between mb-lg">
-                <div>
-                    <h1 class="page-title">${title}</h1>
-                    <div id="lib-breadcrumbs" class="page-subtitle breadcrumbs"></div>
-                </div>
-                <div class="flex gap-sm">
-                    <div class="search-bar" style="margin-bottom:0">
-                        <input id="lib-search" class="input" type="text" placeholder="Search...">
+
+        if (!this.container.querySelector('.view-header')) {
+            this.container.innerHTML = `
+                <!-- Sticky 2-Row Header -->
+                <div class="view-header" style="position: sticky; top: 0; z-index: 50; background: var(--bg); padding-bottom: 12px; border-bottom: 1px solid var(--border);">
+                    <!-- Row 1: Identity & Search -->
+                    <div class="flex-between mb-sm" style="align-items: center;">
+                        <div style="flex-shrink: 0;">
+                            <h1 class="page-title" style="margin-bottom: 4px;">${title}</h1>
+                            <div id="lib-breadcrumbs" class="page-subtitle breadcrumbs"></div>
+                        </div>
+                        <div class="search-bar" style="margin-bottom:0; flex-grow: 1; max-width: 600px; margin-left: 24px;">
+                            <input id="lib-search" class="input" type="text" placeholder="Search library..." style="width: 100%;">
+                        </div>
                     </div>
-                    ${this._canUpload ? `<button id="lib-toggle-upload" class="btn btn-ghost btn-sm" title="Upload">📤 Upload</button>` : ''}
-                    ${isAdmin ? `<button id="lib-toggle-selection" class="btn btn-ghost btn-sm" title="Select">☑ Select</button>` : ''}
-                    <select id="lib-sort" class="select" style="width:auto; min-width:100px">
-                        <option value="title">A-Z</option>
-                        <option value="date">Newest</option>
-                        <option value="size">Size</option>
-                        <option value="duration">Duration</option>
-                    </select>
-                    <button id="lib-sort-dir" class="btn btn-ghost btn-sm" title="Reverse Order" data-rev="false" style="padding: 0 8px;">⬇️</button>
-                    <button id="lib-play-all" class="btn btn-accent btn-sm" title="Play All">▶ Play</button>
-                    <button id="lib-toggle" class="btn btn-ghost btn-sm" title="Toggle view">
-                        ${this._viewMode === 'grid' ? '☰' : '▦'}
-                    </button>
+                    
+                    <!-- Row 2: Actions Toolbar -->
+                    <div class="flex-between" style="align-items: center;">
+                        <div class="flex gap-sm">
+                            <select id="lib-sort" class="select" style="width:auto; min-width:100px">
+                                <option value="title">A-Z</option>
+                                <option value="date">Newest</option>
+                                <option value="size">Size</option>
+                                <option value="duration">Duration</option>
+                            </select>
+                            <button id="lib-sort-dir" class="btn btn-ghost btn-sm" title="Reverse Order" data-rev="false" style="padding: 0 8px;">⬇️</button>
+                            <button id="lib-toggle" class="btn btn-ghost btn-sm" title="Toggle view">
+                                ${this._viewMode === 'grid' ? '☰' : '▦'}
+                            </button>
+                        </div>
+                        <div class="flex gap-sm">
+                            <button id="lib-play-all" class="btn btn-accent btn-sm" title="Play All">▶ Play All</button>
+                            ${this._canUpload ? `<button id="lib-toggle-upload" class="btn btn-ghost btn-sm" title="Upload">📤 Upload</button>` : ''}
+                            ${isAdmin ? `<button id="lib-toggle-selection" class="btn btn-ghost btn-sm" title="Select">☑ Select</button>` : ''}
+                        </div>
+                    </div>
                 </div>
-            </div>
-            
-            ${this._canUpload ? `
-            <div id="lib-upload-panel" class="surface mb-md fade-in" style="display: none; padding: 16px; border-radius: var(--radius); border: 1px solid var(--border-subtle);">
-                <div class="flex-between mb-sm">
-                    <div class="section-title" style="margin-bottom: 0;">Upload to /<span id="upload-dest-display">Root</span></div>
-                    <button id="upload-close-btn" class="btn-close" style="font-size: 1.2rem; cursor: pointer; background:none; border:none; color:var(--text-muted);">&times;</button>
-                </div>
-                <div class="upload-layout" style="display: grid; grid-template-columns: 2fr 1fr; gap: 16px;">
-                    <div class="upload-main">
-                        <div class="form-row" style="display: flex; gap: 12px; margin-bottom: 12px;">
+                
+                ${this._canUpload ? `
+                <div id="lib-upload-panel" class="fade-in" style="display: none; padding: 24px 0; border-bottom: 1px solid var(--border);">
+                    <div class="flex-between mb-sm">
+                        <div class="section-title" style="margin-bottom: 0;">Upload Media</div>
+                        <button id="upload-close-btn" class="btn-close" style="font-size: 1.2rem; cursor: pointer; background:none; border:none; color:var(--text-muted);">&times;</button>
+                    </div>
+                    
+                    <!-- Step 1: Dropzone -->
+                    <div id="upload-dropzone" class="upload-dropzone" style="border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px; text-align: center; background: rgba(255,255,255,0.02); transition: all 0.2s; cursor: pointer; margin-bottom: 16px;">
+                        <strong style="font-size: 1.1rem;">Drag & Drop files here</strong>
+                        <p style="margin: 8px 0 0; color: var(--text-muted);">or click to browse files</p>
+                        <input id="upload-file-input" type="file" hidden multiple>
+                    </div>
+
+                    <!-- Step 2: Details (Collapsible/Hidden by default) -->
+                    <div id="upload-details-step" style="display: none; padding: 16px; background: var(--bg-hover); border-radius: var(--radius);">
+                        <div style="font-weight: 600; margin-bottom: 12px; font-size: 0.9rem;">Upload Details</div>
+                        <div class="form-row" style="display: flex; gap: 12px; margin-bottom: 16px;">
                             <div class="form-group" style="flex: 1;">
                                 <label style="display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 4px;">Destination Path</label>
                                 <input id="upload-path" class="input" type="text" placeholder="Movies/Season 01" value="" style="width: 100%;">
@@ -90,89 +111,99 @@ export class LibraryView {
                                 </select>
                             </div>
                         </div>
-                        <div id="upload-dropzone" class="upload-dropzone" style="border: 2px dashed var(--border-subtle); border-radius: var(--radius); padding: 24px; text-align: center; background: rgba(255,255,255,0.02); transition: all 0.2s; cursor: pointer; margin-bottom: 12px;">
-                            <strong>Drag & Drop files here</strong>
-                            <p style="margin: 4px 0 0; font-size: 0.8rem; color: var(--text-muted);">or click to browse files</p>
-                            <input id="upload-file-input" type="file" hidden multiple>
+                        
+                        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 16px;">
+                            <div>
+                                <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">Upload Queue</div>
+                                <div id="upload-queue" style="max-height: 150px; overflow-y: auto; font-size: 0.8rem; display: flex; flex-direction: column; gap: 6px;">
+                                    <div class="text-muted" style="font-style: italic;">No files selected.</div>
+                                </div>
+                            </div>
+                            <div style="border-left: 1px solid var(--border); padding-left: 16px;">
+                                <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">Recent Problems</div>
+                                <div id="current_problems" style="max-height: 100px; overflow-y: auto; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;">
+                                    <div class="text-muted" style="font-style: italic;">No problems.</div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="flex gap-sm">
-                            <button id="upload-start-btn" class="btn btn-accent btn-sm">Start Upload</button>
+
+                        <div class="flex gap-sm mt-md" style="justify-content: flex-end;">
                             <button id="upload-clear-btn" class="btn btn-ghost btn-sm">Clear Queue</button>
-                        </div>
-                    </div>
-                    <div class="upload-sidebar" style="border-left: 1px solid var(--border-subtle); padding-left: 16px;">
-                        <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 8px;">Upload Queue</div>
-                        <div id="upload-queue" style="max-height: 150px; overflow-y: auto; font-size: 0.8rem; display: flex; flex-direction: column; gap: 6px;">
-                            <div class="text-muted" style="font-style: italic;">No files selected.</div>
-                        </div>
-                        <div style="font-weight: 600; font-size: 0.85rem; margin-top: 16px; margin-bottom: 8px;">Recent Problems</div>
-                        <div id="current_problems" style="max-height: 100px; overflow-y: auto; font-size: 0.75rem; display: flex; flex-direction: column; gap: 4px;">
-                            <div class="text-muted" style="font-style: italic;">No problems.</div>
+                            <button id="upload-start-btn" class="btn btn-accent btn-sm">Start Upload</button>
                         </div>
                     </div>
                 </div>
-            </div>
-            ` : ''}
+                ` : ''}
 
-            ${isAdmin ? `
-            <div id="lib-selection-bar" class="surface mb-md flex-between" style="display: none; padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--accent);">
-                <div class="flex gap-sm" style="align-items:center">
-                    <span id="lib-selection-count" style="font-weight: 700;">0 selected</span>
-                    <button id="lib-bulk-lock" class="btn btn-sm btn-ghost">🔒 Lock</button>
-                    <button id="lib-bulk-unlock" class="btn btn-sm btn-ghost">🔓 Unlock</button>
-                    <button id="lib-bulk-r18" class="btn btn-sm btn-ghost">🔞 R18</button>
-                    <button id="lib-bulk-unr18" class="btn btn-sm btn-ghost">✅ Safe</button>
+                ${isAdmin ? `
+                <div id="lib-selection-bar" class="fade-in flex-between" style="display: none; padding: 12px 0; border-bottom: 1px solid var(--accent); margin-top: 8px;">
+                    <div class="flex gap-sm" style="align-items:center">
+                        <span id="lib-selection-count" style="font-weight: 700; color: var(--accent);">0 selected</span>
+                        <div style="width: 1px; height: 16px; background: var(--border); margin: 0 8px;"></div>
+                        <button id="lib-bulk-lock" class="btn btn-sm btn-ghost">🔒 Lock</button>
+                        <button id="lib-bulk-unlock" class="btn btn-sm btn-ghost">🔓 Unlock</button>
+                        <button id="lib-bulk-r18" class="btn btn-sm btn-ghost">🔞 R18</button>
+                        <button id="lib-bulk-unr18" class="btn btn-sm btn-ghost">✅ Safe</button>
+                    </div>
+                    <button id="lib-selection-cancel" class="btn btn-sm btn-ghost">Cancel</button>
+                </div>` : ''}
+
+                <div id="lib-content" class="fade-in" style="margin-top: 16px;">
+                    <div class="skeleton-grid">
+                        ${Array(8).fill().map(() => `
+                            <div class="skeleton-card">
+                                <div class="skeleton-poster shimmer-bg"></div>
+                                <div class="skeleton-title shimmer-bg"></div>
+                            </div>
+                        `).join('')}
+                    </div>
                 </div>
-                <button id="lib-selection-cancel" class="btn btn-sm btn-ghost">Cancel</button>
-            </div>` : ''}
+                <div id="lib-sentinel" style="height: 20px;"></div>
+            `;
 
-            <div id="lib-content" class="fade-in">
-                <div class="skeleton-grid">
-                    ${Array(8).fill().map(() => `
-                        <div class="skeleton-card">
-                            <div class="skeleton-poster shimmer-bg"></div>
-                            <div class="skeleton-title shimmer-bg"></div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-            <div id="lib-sentinel" style="height: 20px;"></div>
-        `;
+            const searchInput = document.getElementById('lib-search');
+            if (searchInput) {
+                searchInput.addEventListener('input', debounce(() => this._renderContent(), 300));
+            }
 
-        const searchInput = document.getElementById('lib-search');
-        if (searchInput) {
-            searchInput.addEventListener('input', debounce(() => this._renderContent(), 300));
+            document.getElementById('lib-sort')?.addEventListener('change', () => this._renderContent());
+            document.getElementById('lib-sort-dir')?.addEventListener('click', (e) => {
+                const btn = e.currentTarget;
+                const isRev = btn.dataset.rev === 'true';
+                btn.dataset.rev = !isRev;
+                btn.textContent = !isRev ? '⬆️' : '⬇️';
+                this._renderContent();
+            });
+            document.getElementById('lib-toggle')?.addEventListener('click', () => this._toggleView());
+            document.getElementById('lib-play-all')?.addEventListener('click', () => this._playAll());
+
+            if (this._canUpload) {
+                document.getElementById('lib-toggle-upload')?.addEventListener('click', () => this._toggleUploadPanel());
+                this._setupUploadEvents();
+            }
+
+            if (isAdmin) {
+                document.getElementById('lib-toggle-selection')?.addEventListener('click', () => this._toggleSelectionMode());
+                document.getElementById('lib-selection-cancel')?.addEventListener('click', () => this._toggleSelectionMode(false));
+                document.getElementById('lib-bulk-lock')?.addEventListener('click', () => this._bulkAction('lock', true));
+                document.getElementById('lib-bulk-unlock')?.addEventListener('click', () => this._bulkAction('lock', false));
+                document.getElementById('lib-bulk-r18')?.addEventListener('click', () => this._bulkAction('r18', true));
+                document.getElementById('lib-bulk-unr18')?.addEventListener('click', () => this._bulkAction('r18', false));
+            }
+            this._setupInfiniteScroll();
+        } else {
+            // DOM Diffing: Update title without rebuilding shell
+            const titleEl = this.container.querySelector('.page-title');
+            if (titleEl) titleEl.textContent = title;
         }
 
-        document.getElementById('lib-sort')?.addEventListener('change', () => this._renderContent());
-        document.getElementById('lib-sort-dir')?.addEventListener('click', (e) => {
-            const btn = e.currentTarget;
-            const isRev = btn.dataset.rev === 'true';
-            btn.dataset.rev = !isRev;
-            btn.textContent = !isRev ? '⬆️' : '⬇️';
-            this._renderContent();
-        });
-        document.getElementById('lib-toggle')?.addEventListener('click', () => this._toggleView());
-        document.getElementById('lib-play-all')?.addEventListener('click', () => this._playAll());
-
-        if (this._canUpload) {
-            document.getElementById('lib-toggle-upload')?.addEventListener('click', () => this._toggleUploadPanel());
-            this._setupUploadEvents();
-        }
-
-        if (isAdmin) {
-            document.getElementById('lib-toggle-selection')?.addEventListener('click', () => this._toggleSelectionMode());
-            document.getElementById('lib-selection-cancel')?.addEventListener('click', () => this._toggleSelectionMode(false));
-            document.getElementById('lib-bulk-lock')?.addEventListener('click', () => this._bulkAction('lock', true));
-            document.getElementById('lib-bulk-unlock')?.addEventListener('click', () => this._bulkAction('lock', false));
-            document.getElementById('lib-bulk-r18')?.addEventListener('click', () => this._bulkAction('r18', true));
-            document.getElementById('lib-bulk-unr18')?.addEventListener('click', () => this._bulkAction('r18', false));
-        }
-        this._setupInfiniteScroll();
         await this._loadPath(this._currentPath);
     }
 
     _setupInfiniteScroll() {
+        if (this._observer) {
+            this._observer.disconnect();
+        }
         this._observer = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting && this._filteredItems && this._renderedCount < this._filteredItems.length) {
                 this._renderNextBatch();
@@ -292,23 +323,25 @@ export class LibraryView {
         }
 
         try {
-            // Folders
-            for (const path of this._selectedPaths) {
-                if (type === 'lock') await api.toggleFolderLock(path, value);
-                if (type === 'r18') await api.toggleFolderR18(path, value);
-            }
+            // Folders (Sequential for backend safety, or parallel)
+            const folderPromises = Array.from(this._selectedPaths).map(path => {
+                if (type === 'lock') return api.toggleFolderLock(path, value);
+                if (type === 'r18') return api.toggleFolderR18(path, value);
+                return Promise.resolve();
+            });
 
-            // Media (If backend supports it, else we iterate)
-            for (const id of this._selectedMediaIds) {
-                // If it's a media ID, we only have toggleLock / toggleR18 (wait, media doesn't have R18 toggle yet? Yes it does via AdultOnly?)
-                // For simplicity, skip media bulk actions if it gets too complex, but let's do it for locks:
+            // Media items
+            const mediaPromises = Array.from(this._selectedMediaIds).map(id => {
                 if (type === 'lock') {
-                    const media = this._items.find(m => m.id == id);
+                    const media = this._items.find(m => String(m.id) === id);
                     if (media && media.requires_pin !== value) {
-                        await api.toggleLock(id);
+                        return api.toggleLock(id);
                     }
                 }
-            }
+                return Promise.resolve();
+            });
+
+            await Promise.all([...folderPromises, ...mediaPromises]);
 
             toast('Bulk operation successful', 'success');
             this._toggleSelectionMode(false);
@@ -349,7 +382,6 @@ export class LibraryView {
             fFolders.reverse();
         }
         this._filteredItems = fItems;
-        this._renderedCount = 0;
 
         if (fFolders.length === 0 && fItems.length === 0) {
             const emptyDiv = document.createElement('div');
@@ -364,163 +396,73 @@ export class LibraryView {
         }
 
         const isAdmin = this._isAdmin();
-        const fragment = document.createDocumentFragment();
 
+        // 1. Maintain a persistent structure in lib-content
+        let foldersContainer = document.getElementById('lib-folder-container');
+        let itemsGrid = document.getElementById('lib-items-grid');
+
+        if (!foldersContainer) {
+            target.innerHTML = `
+                <div id="lib-folder-container" class="folder-list mb-lg"></div>
+                <div id="lib-items-grid" class="mode-${this._viewMode}"></div>
+            `;
+            foldersContainer = document.getElementById('lib-folder-container');
+            itemsGrid = document.getElementById('lib-items-grid');
+        } else {
+            // Update mode class if toggled
+            itemsGrid.className = `mode-${this._viewMode}`;
+        }
+
+        // 2. Render Folders (List Rows)
+        foldersContainer.innerHTML = '';
         if (fFolders.length > 0) {
-            const folderGrid = document.createElement('div');
-            folderGrid.className = 'folder-grid mb-lg';
-
             fFolders.forEach(folder => {
-                const cover = folder.cover_media_id ? thumbUrl(folder.cover_media_id) : '';
                 const blurClass = folder.is_locked ? 'blur-sm' : '';
-                const lockBadge = folder.is_locked ? `<div class="media-badge lock-badge">🔒</div>` : '';
-                const r18Badge = folder.is_adult ? `<div class="media-badge r18-badge">🔞</div>` : '';
-
+                const lockBadge = folder.is_locked ? `🔒 ` : '';
+                const r18Badge = folder.is_adult ? `🔞 ` : '';
+                
                 const folderCard = document.createElement('div');
-                folderCard.className = 'folder-card surface';
+                folderCard.className = 'folder-row';
                 folderCard.dataset.path = folder.path;
-                folderCard.style.cssText = 'position:relative; cursor:pointer; border: 1px solid var(--border-subtle);';
 
                 if (this._selectionMode && this._selectedPaths.has(folder.path)) {
-                    folderCard.style.opacity = '0.5';
-                    folderCard.style.border = '1px solid var(--accent)';
+                    folderCard.classList.add('selected');
                 }
 
                 folderCard.innerHTML = `
-                    <div class="folder-cover shimmer-bg ${blurClass}" style="height: 100px; position:relative; aspect-ratio: 16/9; overflow: hidden; border-radius: var(--radius) var(--radius) 0 0;">
-                        <img src="${cover || '/static/placeholder.svg'}" loading="lazy" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.parentElement.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.parentElement.classList.remove('shimmer-bg');">
-                        ${lockBadge} ${r18Badge}
-                        <div style="position:absolute; bottom:0; left:0; width:100%; padding: 8px 10px; background: linear-gradient(transparent, rgba(0,0,0,0.85)); z-index: 2;">
-                            <h3 style="margin:0; font-size:0.9rem; text-shadow:0 1px 3px #000; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff;">📁 ${folder.name}</h3>
-                            <div style="font-size:0.7rem; color:#bbb;">${folder.item_count} items</div>
+                    <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                        <span style="font-size: 1.2rem;">📁</span>
+                        <div style="flex-grow: 1;">
+                            <h3 style="margin:0; font-size:1rem; color: var(--text);">
+                                ${lockBadge}${r18Badge}${escapeHtml(folder.name)}
+                            </h3>
+                            <div style="font-size:0.8rem; color:var(--text-muted);">${folder.item_count} items</div>
                         </div>
+                        ${isAdmin && !this._selectionMode ? `
+                            <button class="btn-icon btn-folder-menu" data-path="${folder.path}" style="width:32px;height:32px;font-size:1.2rem;">⋮</button>
+                        ` : ''}
                     </div>
-                    ${isAdmin && !this._selectionMode ? `
-                        <div style="position:absolute; top:4px; right:4px;">
-                            <button class="btn-icon btn-folder-menu" data-path="${folder.path}" style="width:28px;height:28px;font-size:0.8rem;">⋮</button>
-                        </div>
-                    ` : ''}
                 `;
-                folderGrid.appendChild(folderCard);
+                foldersContainer.appendChild(folderCard);
             });
-            fragment.appendChild(folderGrid);
         }
 
+        // 3. Reset Media Pagination & Render First Batch
+        itemsGrid.innerHTML = '';
+        this._renderedCount = 0;
+        
         if (fItems.length > 0) {
-            const itemsGrid = document.createElement('div');
-            itemsGrid.className = this._viewMode === 'grid' ? 'yt-grid' : 'media-table';
-
-            fItems.forEach((media, idx) => {
-                const itemEl = document.createElement('div');
-                if (this._viewMode === 'grid') {
-                    itemEl.className = 'media-card';
-                    itemEl.dataset.mediaId = media.id;
-                    itemEl.dataset.index = idx;
-
-                    const title = media.title || media.filename;
-                    const dur = formatDuration(media.duration_seconds);
-                    const thumb = thumbUrl(media);
-                    const adultBadge = media.adult_only ? `<div class="media-badge r18-badge">R18</div>` : '';
-                    const lockBadge = media.requires_pin ? `<div class="media-badge lock-badge">🔒</div>` : '';
-
-                    itemEl.innerHTML = `
-                        <div class="media-card-poster">
-                            <img src="${thumb}" alt="${title}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                            ${adultBadge}
-                            ${lockBadge}
-                            <span class="media-badge duration-badge">${dur}</span>
-                            <div class="media-card-actions">
-                                <button class="btn-icon btn-play" title="Play">▶</button>
-                                <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
-                                    ${media.is_favorite ? '❤️' : '♡'}
-                                </button>
-                                <button class="btn-icon btn-download" title="Download">⬇</button>
-                            </div>
-                        </div>
-                        <div class="media-card-info">
-                            <h3 class="media-title" title="${title}">${title}</h3>
-                            <div class="media-meta">
-                                <span>${dur}</span>
-                                <span class="dot">·</span>
-                                <span>${media.video_codec?.toUpperCase() || 'VIDEO'}</span>
-                            </div>
-                        </div>
-                    `;
-                } else {
-                    itemEl.className = 'table-row';
-                    itemEl.dataset.mediaId = media.id;
-                    itemEl.dataset.index = idx;
-
-                    const dur = formatDuration(media.duration_seconds);
-                    const size = formatBytes(media.file_size);
-                    const title = media.title || media.filename;
-
-                    itemEl.innerHTML = `
-                        <div class="table-thumb-wrapper">
-                            <img src="${thumbUrl(media)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                        </div>
-                        <div class="table-title">
-                            ${title}
-                            ${media.adult_only ? '<span class="badge badge-error" style="font-size:0.6rem;margin-left:6px">R18</span>' : ''}
-                            ${media.requires_pin ? '<span style="color:var(--error);margin-left:4px">🔒</span>' : ''}
-                        </div>
-                        <div class="table-meta">${dur}</div>
-                        <div class="table-meta">${size}</div>
-                        <div class="table-actions">
-                            <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
-                            <button class="btn-icon btn-download" style="width:28px;height:28px;font-size:0.8rem;margin-left:4px" title="Download">⬇</button>
-                        </div>
-                    `;
-                }
-
-                if (this._selectionMode && this._selectedMediaIds.has(String(media.id))) {
-                    itemEl.style.opacity = '0.5';
-                    itemEl.style.border = '1px solid var(--accent)';
-                }
-                itemsGrid.appendChild(itemEl);
-            });
-            fragment.appendChild(itemsGrid);
+            this._renderNextBatch();
         }
 
-        target.replaceChildren(fragment);
-
-
-        this._setupEventListeners();
-        this._setupHoverPreviews();
-    }
-
-    _renderGridCard(media, idx) {
-        const title = media.title || media.filename;
-        const dur = formatDuration(media.duration_seconds);
-        const thumb = thumbUrl(media);
-        const adultBadge = media.adult_only ? `<div class="media-badge r18-badge">R18</div>` : '';
-        const lockBadge = media.requires_pin ? `<div class="media-badge lock-badge">🔒</div>` : '';
-
-        return `
-            <div class="media-card" data-media-id="${media.id}" data-index="${idx}">
-                <div class="media-card-poster">
-                    <img src="${thumb}" alt="${title}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                    ${adultBadge}
-                    ${lockBadge}
-                    <span class="media-badge duration-badge">${dur}</span>
-                    <div class="media-card-actions">
-                        <button class="btn-icon btn-play" title="Play">▶</button>
-                        <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
-                            ${media.is_favorite ? '❤️' : '♡'}
-                        </button>
-                        <button class="btn-icon btn-download" title="Download">⬇</button>
-                    </div>
-                </div>
-                <div class="media-card-info">
-                    <h3 class="media-title" title="${title}">${title}</h3>
-                    <div class="media-meta">
-                        <span>${dur}</span>
-                        <span class="dot">·</span>
-                        <span>${media.video_codec?.toUpperCase() || 'VIDEO'}</span>
-                    </div>
-                </div>
-            </div>
-        `;
+        if (!this._listenersBound) {
+            this._setupEventListeners();
+            this._setupHoverPreviews();
+            this._setupMediaEventListeners(itemsGrid);
+            this._listenersBound = true;
+        }
+        
+        this._reapplySelectionVisuals();
     }
 
     _setupMediaEventListeners(itemsGrid) {
@@ -592,7 +534,7 @@ export class LibraryView {
                 itemEl.dataset.mediaId = media.id;
                 itemEl.dataset.index = i;
 
-                const title = media.title || media.filename;
+                const title = escapeHtml(media.title || media.filename);
                 const dur = formatDuration(media.duration_seconds);
                 const thumb = thumbUrl(media);
                 const adultBadge = media.adult_only ? `<div class="media-badge r18-badge">R18</div>` : '';
@@ -604,12 +546,18 @@ export class LibraryView {
                         ${adultBadge}
                         ${lockBadge}
                         <span class="media-badge duration-badge">${dur}</span>
+                        <!-- Action Buttons replace with single hover menu -->
                         <div class="media-card-actions">
                             <button class="btn-icon btn-play" title="Play">▶</button>
-                            <button class="btn-icon btn-fav ${media.is_favorite ? 'active' : ''}" title="Favorite">
-                                ${media.is_favorite ? '❤️' : '♡'}
-                            </button>
-                            <button class="btn-icon btn-download" title="Download">⬇</button>
+                            <div class="dropdown-container">
+                                <button class="btn-icon btn-menu" title="Options">⋮</button>
+                                <div class="dropdown-menu">
+                                    <button class="btn-fav ${media.is_favorite ? 'active' : ''}">
+                                        ${media.is_favorite ? '❤️ Unfavorite' : '♡ Favorite'}
+                                    </button>
+                                    <button class="btn-download">⬇ Download</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="media-card-info">
@@ -628,7 +576,7 @@ export class LibraryView {
 
                 const dur = formatDuration(media.duration_seconds);
                 const size = formatBytes(media.file_size);
-                const title = media.title || media.filename;
+                const title = escapeHtml(media.title || media.filename);
 
                 itemEl.innerHTML = `
                     <div class="table-thumb-wrapper">
@@ -643,15 +591,23 @@ export class LibraryView {
                     <div class="table-meta">${size}</div>
                     <div class="table-actions">
                         <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
-                        <button class="btn-icon btn-download" style="width:28px;height:28px;font-size:0.8rem;margin-left:4px" title="Download">⬇</button>
+                        <div class="dropdown-container">
+                            <button class="btn-icon btn-menu" style="width:28px;height:28px;font-size:0.8rem">⋮</button>
+                            <div class="dropdown-menu">
+                                <button class="btn-fav ${media.is_favorite ? 'active' : ''}">
+                                    ${media.is_favorite ? '❤️ Unfavorite' : '♡ Favorite'}
+                                </button>
+                                <button class="btn-download">⬇ Download</button>
+                            </div>
+                        </div>
                     </div>
                 `;
             }
 
             if (this._selectionMode && this._selectedMediaIds.has(String(media.id))) {
-                itemEl.style.opacity = '0.5';
-                itemEl.style.border = '1px solid var(--accent)';
+                itemEl.classList.add('selected');
             }
+
             fragment.appendChild(itemEl);
         }
 
@@ -659,59 +615,55 @@ export class LibraryView {
         this._renderedCount = end;
     }
 
-    _renderTableRow(media, idx) {
-        const dur = formatDuration(media.duration_seconds);
-        const size = formatBytes(media.file_size);
-        const title = media.title || media.filename;
-
-        return `
-            <div class="table-row" data-media-id="${media.id}" data-index="${idx}">
-                <div class="table-thumb-wrapper">
-                    <img src="${thumbUrl(media)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                </div>
-                <div class="table-title">
-                    ${title}
-                    ${media.adult_only ? '<span class="badge badge-error" style="font-size:0.6rem;margin-left:6px">R18</span>' : ''}
-                    ${media.requires_pin ? '<span style="color:var(--error);margin-left:4px">🔒</span>' : ''}
-                </div>
-                <div class="table-meta">${dur}</div>
-                <div class="table-meta">${size}</div>
-                <div class="table-actions">
-                    <button class="btn-icon btn-play" style="width:28px;height:28px;font-size:0.8rem">▶</button>
-                    <button class="btn-icon btn-download" style="width:28px;height:28px;font-size:0.8rem;margin-left:4px" title="Download">⬇</button>
-                </div>
-            </div>
-        `;
-    }
-
     _setupEventListeners() {
         const target = document.getElementById('lib-content');
+        if (!target) return;
 
-        // Folder Clicks
-        target.querySelectorAll('.folder-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                const path = card.dataset.path;
+        target.addEventListener('click', async (e) => {
+            const folderRow = e.target.closest('.folder-row');
+            if (folderRow) {
+                const path = folderRow.dataset.path;
 
+                // Handle three-dot menu click
+                const menuBtn = e.target.closest('.btn-folder-menu');
+                if (menuBtn) {
+                    e.stopPropagation();
+                    const folder = this._folders.find(f => f.path === path);
+                    const action = await prompt(`Folder Options`, `Options for /${folder.name}:\nType 'lock', 'unlock', 'r18', or 'unr18'`);
+                    if (!action) return;
+
+                    try {
+                        if (action === 'lock') await api.toggleFolderLock(path, true);
+                        else if (action === 'unlock') await api.toggleFolderLock(path, false);
+                        else if (action === 'r18') await api.toggleFolderR18(path, true);
+                        else if (action === 'unr18') await api.toggleFolderR18(path, false);
+                        else {
+                            toast("Invalid action", "warning");
+                            return;
+                        }
+                        toast("Updated folder", "success");
+                        this._loadPath(this._currentPath);
+                    } catch (err) {
+                        toast(err.message, 'error');
+                    }
+                    return;
+                }
+
+                // Normal folder click
                 if (this._selectionMode) {
-                    if (this._selectedPaths.has(path)) this._selectedPaths.delete(path);
-                    else this._selectedPaths.add(path);
                     if (this._selectedPaths.has(path)) {
                         this._selectedPaths.delete(path);
-                        card.style.opacity = '1';
-                        card.style.border = '1px solid var(--border-subtle)';
+                        folderRow.style.opacity = '1';
+                        folderRow.style.border = '';
                     } else {
                         this._selectedPaths.add(path);
-                        card.style.opacity = '0.5';
-                        card.style.border = '1px solid var(--accent)';
+                        folderRow.style.opacity = '0.5';
+                        folderRow.style.border = '1px solid var(--accent)';
                     }
                     this._updateSelectionCount();
                     return;
                 }
 
-                // If clicked on three-dot menu, ignore
-                if (e.target.closest('.btn-folder-menu')) return;
-
-                // If it's locked and not admin, prompt!
                 const folderObj = this._folders.find(f => f.path === path);
                 if (folderObj && folderObj.is_locked && !this._isAdmin()) {
                     showPinDialog("This folder is PG-Locked. Enter Admin PIN:").then(pin => {
@@ -724,34 +676,7 @@ export class LibraryView {
                 }
 
                 this._loadPath(path);
-            });
-        });
-
-        // Folder Context Menus
-        target.querySelectorAll('.btn-folder-menu').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const path = btn.dataset.path;
-                const folder = this._folders.find(f => f.path === path);
-
-                const action = window.prompt(`Options for /${folder.name}:\nType 'lock', 'unlock', 'r18', or 'unr18'`);
-                if (!action) return;
-
-                try {
-                    if (action === 'lock') await api.toggleFolderLock(path, true);
-                    else if (action === 'unlock') await api.toggleFolderLock(path, false);
-                    else if (action === 'r18') await api.toggleFolderR18(path, true);
-                    else if (action === 'unr18') await api.toggleFolderR18(path, false);
-                    else {
-                        toast("Invalid action", "warning");
-                        return;
-                    }
-                    toast("Updated folder", "success");
-                    this._loadPath(this._currentPath);
-                } catch (err) {
-                    toast(err.message, 'error');
-                }
-            });
+            }
         });
     }
 
@@ -876,6 +801,8 @@ export class LibraryView {
                 this.previewVideo.muted = true;
                 this.previewVideo.autoplay = true;
                 this.previewVideo.loop = true;
+                this.previewVideo.setAttribute('playsinline', '');
+                this.previewVideo.setAttribute('webkit-playsinline', '');
                 this.previewVideo.className = 'card-preview-video';
 
                 Object.assign(this.previewVideo.style, {
@@ -1039,6 +966,12 @@ export class LibraryView {
             detail: 'Ready to upload',
         }));
         this._renderQueue();
+        
+        // Reveal Step 2
+        if (this._queue.length > 0) {
+            const detailsStep = document.getElementById('upload-details-step');
+            if (detailsStep) detailsStep.style.display = 'block';
+        }
     }
 
     _clearSelection() {
@@ -1046,6 +979,10 @@ export class LibraryView {
         const fileInput = document.getElementById('upload-file-input');
         if (fileInput) fileInput.value = '';
         this._renderQueue();
+        
+        // Hide Step 2
+        const detailsStep = document.getElementById('upload-details-step');
+        if (detailsStep) detailsStep.style.display = 'none';
     }
 
     _syncDestinationLabel(value) {

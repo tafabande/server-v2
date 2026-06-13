@@ -3,12 +3,12 @@
  * Optimized with batch rendering for large directories.
  */
 import { api, player, router } from '../app.js';
-import { formatBytes, formatDate, toast, confirm, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog } from '../utils.js';
+import { formatBytes, formatDate, toast, confirm, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog, prompt } from '../utils.js';
 
 export class ExplorerView {
-    constructor(container) { 
-        this.container = container; 
-        this._currentPath = ''; 
+    constructor(container) {
+        this.container = container;
+        this._currentPath = '';
         this._items = [];
         this._viewMode = localStorage.getItem('explorer_view_mode') || 'table';
         this._pageSize = 50;
@@ -61,7 +61,7 @@ export class ExplorerView {
         document.getElementById('explorer-toggle')?.addEventListener('click', () => this._toggleView());
         document.getElementById('explorer-play-all')?.addEventListener('click', () => this._playAll());
         document.getElementById('explorer-search')?.addEventListener('input', debounce(() => this._renderList(), 300));
-        
+
         this._setupDragAndDrop();
         this._setupInfiniteScroll();
 
@@ -74,7 +74,7 @@ export class ExplorerView {
                 const latestAdultReq = requests
                     .filter(r => r.request_type === 'adult_elevation')
                     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                    
+
                 if (latestAdultReq) {
                     if (latestAdultReq.status === 'pending') {
                         reqBtn.textContent = '⏳ 18+ Request Pending';
@@ -143,7 +143,7 @@ export class ExplorerView {
             e.preventDefault();
             this._dragCounter = 0;
             zone.hidden = true;
-            
+
             const files = e.dataTransfer.files;
             if (files.length > 0) {
                 await this._handleUpload({ target: { files } });
@@ -162,9 +162,9 @@ export class ExplorerView {
             const data = await api.browse(path);
             this._items = data.items || [];
             this._renderedCount = 0;
-            
+
             this._renderBreadcrumb(data.path, data.parent);
-            
+
             const stats = document.getElementById('explorer-stats');
             if (stats) {
                 const files = this._items.filter(i => !i.is_dir).length;
@@ -226,17 +226,17 @@ export class ExplorerView {
 
     _renderList() {
         const query = document.getElementById('explorer-search')?.value.toLowerCase() || '';
-        this._filteredItems = query 
+        this._filteredItems = query
             ? this._items.filter(i => i.name.toLowerCase().includes(query))
             : [...this._items];
-            
+
         const container = document.getElementById('explorer-list-container');
         if (!container) return;
-        
-        const listBody = this._viewMode === 'grid' 
+
+        const listBody = this._viewMode === 'grid'
             ? document.getElementById('explorer-grid')
             : document.getElementById('explorer-table-body');
-            
+
         if (listBody) listBody.innerHTML = '';
         this._renderedCount = 0;
         this._renderNextBatch();
@@ -247,7 +247,7 @@ export class ExplorerView {
         const start = this._renderedCount;
         const end = Math.min(start + this._pageSize, itemsToRender.length);
         const batch = itemsToRender.slice(start, end);
-        
+
         if (batch.length === 0) return;
 
         if (this._viewMode === 'grid') {
@@ -280,11 +280,11 @@ export class ExplorerView {
             batch.forEach((item) => {
                 const row = document.createElement('div');
                 row.className = `file-row ${item.adult_only ? 'is-adult' : ''}`;
-                
-                const toggleHtml = item.is_dir 
-                    ? `<span class="explorer-tree-toggle collapsed" title="Expand Folder">▼</span>` 
+
+                const toggleHtml = item.is_dir
+                    ? `<span class="explorer-tree-toggle collapsed" title="Expand Folder">▼</span>`
                     : `<span style="width:28px; display:inline-block"></span>`;
-                
+
                 row.innerHTML = `
                     ${toggleHtml}
                     <span class="file-icon">
@@ -335,9 +335,9 @@ export class ExplorerView {
                         subitems.forEach(subitem => {
                             const subRow = document.createElement('div');
                             subRow.className = `file-row ${subitem.adult_only ? 'is-adult' : ''}`;
-                            
-                            const toggleHtml = subitem.is_dir 
-                                ? `<span class="explorer-tree-toggle collapsed" title="Expand Folder">▼</span>` 
+
+                            const toggleHtml = subitem.is_dir
+                                ? `<span class="explorer-tree-toggle collapsed" title="Expand Folder">▼</span>`
                                 : `<span style="width:28px; display:inline-block"></span>`;
 
                             subRow.innerHTML = `
@@ -380,11 +380,11 @@ export class ExplorerView {
             toast('No playable media in this folder.', 'warning');
             return;
         }
-        
-        const playable = isAdultApproved() 
-            ? mediaItems 
+
+        const playable = isAdultApproved()
+            ? mediaItems
             : mediaItems.filter(i => !i.adult_only);
-            
+
         if (playable.length === 0) {
             toast('Adult content hidden. Verify age to play all.', 'error', {
                 label: 'Verify',
@@ -398,23 +398,23 @@ export class ExplorerView {
             title: i.name,
             adult_only: i.adult_only
         }));
-        
+
         player.play(queue, 0);
         toast(`Playing ${queue.length} items from folder`, 'success');
     }
 
     _bindItemEvents(el, item) {
         el.addEventListener('dblclick', (e) => {
-             if (item.media && item.media_id) {
-                 this._playMedia(item);
-             } else if (item.is_dir) {
-                 const toggle = el.querySelector('.explorer-tree-toggle');
-                 if (toggle) {
-                     this._toggleSubfolder(toggle, item, el);
-                 } else {
-                     this._browse(item.path);
-                 }
-             }
+            if (item.media && item.media_id) {
+                this._playMedia(item);
+            } else if (item.is_dir) {
+                const toggle = el.querySelector('.explorer-tree-toggle');
+                if (toggle) {
+                    this._toggleSubfolder(toggle, item, el);
+                } else {
+                    this._browse(item.path);
+                }
+            }
         });
 
         el.addEventListener('click', (e) => {
@@ -488,7 +488,7 @@ export class ExplorerView {
         const saveBtn = document.getElementById('settings-save');
 
         if (folderLabel) folderLabel.textContent = `Settings: ${name}`;
-        
+
         try {
             const settings = await api.getFolderSettings(path);
             if (lockCheck) lockCheck.checked = settings.is_locked;
@@ -563,7 +563,7 @@ export class ExplorerView {
     }
 
     async _rename(path, oldName) {
-        const newName = prompt('New name:', oldName);
+        const newName = await prompt('Rename', 'New name:', oldName);
         if (!newName || newName === oldName) return;
         try {
             await api.rename(path, newName);

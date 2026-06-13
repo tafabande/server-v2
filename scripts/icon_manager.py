@@ -1,6 +1,5 @@
 import os
 import shutil
-import re
 import xml.etree.ElementTree as ET
 
 # Paths

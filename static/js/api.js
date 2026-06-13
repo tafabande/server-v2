@@ -13,7 +13,10 @@ export class ApiClient {
     this.token = "";
     this.inFlight = new Map();
     this.cache = new Map();
+    this.store = null;
   }
+
+  setStore(store) { this.store = store; }
 
   setToken(token) { this.token = token || ""; }
 
@@ -48,8 +51,12 @@ export class ApiClient {
       const headers = new Headers(rawHeaders || {});
       // We are now using cookie-based auth natively via credentials: 'same-origin'
       if (json !== undefined) headers.set("Content-Type", "application/json");
-      if (!isNsfwEnabled()) {
+      const requestQuery = query ? { ...query } : {};
+      
+      const r18Enabled = this.store ? this.store.get().r18Enabled : isNsfwEnabled();
+      if (!r18Enabled) {
         headers.set("X-Disable-R18", "true");
+        requestQuery.filter = 'safe';
       } else {
         headers.set("X-Enable-R18", "true");
       }
@@ -62,10 +69,11 @@ export class ApiClient {
       }
 
       try {
-        const response = await fetch(this.buildPath(path, query), {
+        const response = await fetch(this.buildPath(path, requestQuery), {
           ...requestOptions,
           headers,
           signal,
+          cache: 'no-store',
           credentials: "same-origin",
           body: json !== undefined ? JSON.stringify(json) : requestOptions.body,
         });
@@ -104,6 +112,7 @@ export class ApiClient {
   }
 
   // === Auth ===
+  getPublicUsers() { return this.request("/api/auth/public-users"); }
   login(username, password) {
     return this.request("/api/auth/token", {
       method: "POST",
@@ -169,14 +178,21 @@ export class ApiClient {
     }
     return data;
   }
-  deleteMedia(mediaId) { return this.request(`/api/media/${parseInt(mediaId, 10)}`, { method: "DELETE" }); }
-  renameMedia(mediaId, title) { return this.request(`/api/media/${parseInt(mediaId, 10)}/rename`, { method: "POST", json: { title: String(title) } }); }
+  async deleteMedia(mediaId) {
+    const res = await this.request(`/api/media/${parseInt(mediaId, 10)}`, { method: "DELETE" });
+    this._clearCaches();
+    return res;
+  }
+  async renameMedia(mediaId, title) {
+    const res = await this.request(`/api/media/${parseInt(mediaId, 10)}/rename`, { method: "POST", json: { title: String(title) } });
+    this._clearCaches();
+    return res;
+  }
   getScanStatus() { return this.request("/api/media/scan-status"); }
   optimizeDatabase() { return this.request("/api/system/optimize", { method: "POST" }); }
   clearHLSCache() { return this.request("/api/system/clear-hls", { method: "POST" }); }
   clearThumbsCache() { return this.request("/api/system/clear-thumbs", { method: "POST" }); }
   getRecentErrors() { return this.request("/api/system/recent-errors"); }
-
 
   // === History & Continue ===
   getHistory() { return this.request("/api/media/history"); }
@@ -189,8 +205,16 @@ export class ApiClient {
     const fd = new FormData(); fd.append("upload_file", file);
     return this.request("/api/files/upload", { method: "POST", query: { path, pin, is_adult: isAdult }, body: fd });
   }
-  rename(path, newName, pin = "") { return this.request("/api/files/rename", { method: "POST", query: { pin }, json: { path, new_name: newName } }); }
-  deleteFile(path, pin = "") { return this.request("/api/files/delete", { method: "POST", query: { pin }, json: { path } }); }
+  async rename(path, newName, pin = "") {
+    const res = await this.request("/api/files/rename", { method: "POST", query: { pin }, json: { path, new_name: newName } });
+    this._clearCaches();
+    return res;
+  }
+  async deleteFile(path, pin = "") {
+    const res = await this.request("/api/files/delete", { method: "POST", query: { pin }, json: { path } });
+    this._clearCaches();
+    return res;
+  }
   getFolderSettings(path) { return this.request("/api/files/settings", { query: { path } }); }
   updateFolderSettings(path, settings) { return this.request("/api/files/settings", { method: "POST", query: { path }, json: settings }); }
 
@@ -223,11 +247,29 @@ export class ApiClient {
 
   // === Profile ===
   updateProfile(data) { return this.request("/api/users/me/profile", { method: "PUT", json: data }); }
+  updatePreferences(preferences) { return this.request("/api/users/me/preferences", { method: "POST", json: { preferences } }); }
   changePassword(current, newPw) { return this.request("/api/users/me/password", { method: "PUT", json: { current_password: current, new_password: newPw } }); }
 
   // === System ===
   getMetrics() { return this.request("/api/system/metrics"); }
   getSessions() { return this.request("/api/system/sessions"); }
   getSettings() { return this.request("/api/system/settings"); }
+  getPublicSettings() { return this.request("/api/system/public-settings"); }
   getAudit() { return this.request("/api/system/audit"); }
+
+  _clearCaches() {
+    this.cache.clear();
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.includes('CacheKey') || key.includes('Cache'))) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+    localStorage.removeItem('homeCacheKey');
+    
+    // Attempt to notify active views to refresh
+    window.dispatchEvent(new CustomEvent('library_updated'));
+  }
 }

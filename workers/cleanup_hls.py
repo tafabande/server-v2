@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from config import get_settings
-
 
 def cleanup() -> int:
     settings = get_settings()
@@ -22,7 +20,6 @@ def cleanup() -> int:
             path.rmdir()
             removed += 1
     return removed
-
 
 if __name__ == "__main__":
     print(f"Removed {cleanup()} stale HLS cache directorie(s).")

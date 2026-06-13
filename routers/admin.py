@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -8,7 +8,6 @@ from core.schemas import BulkAdultFlagRequest, MessageResponse
 from core.security import require_roles
 
 router = APIRouter()
-
 
 @router.post("/pin/{media_id}", response_model=MessageResponse)
 async def toggle_media_pin(
@@ -26,7 +25,6 @@ async def toggle_media_pin(
     
     status_str = "required" if media.requires_pin else "not required"
     return MessageResponse(message=f"Media PIN lock is now {status_str}.")
-
 
 @router.post("/adult-flag", response_model=MessageResponse)
 async def bulk_adult_flag(

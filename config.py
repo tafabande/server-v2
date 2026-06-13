@@ -3,9 +3,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-
 BASE_DIR = Path(__file__).resolve().parent
-
 
 def _resolve_binary_path(env_key: str, default_name: str) -> str:
     env_val = os.getenv(env_key, default_name)
@@ -32,7 +30,6 @@ def _resolve_binary_path(env_key: str, default_name: str) -> str:
             
     return env_val
 
-
 def _load_env_file(env_path: Path) -> None:
     if not env_path.exists():
         return
@@ -44,18 +41,15 @@ def _load_env_file(env_path: Path) -> None:
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
-
 def _env_bool(key: str, default: bool) -> bool:
     value = os.getenv(key)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
-
 def _env_int(key: str, default: int) -> int:
     value = os.getenv(key)
     return default if value is None else int(value)
-
 
 def _env_path(key: str, default: Path) -> Path:
     value = os.getenv(key)
@@ -64,13 +58,11 @@ def _env_path(key: str, default: Path) -> Path:
     candidate = Path(value)
     return candidate if candidate.is_absolute() else BASE_DIR / candidate
 
-
 def _env_list(key: str, default: list[str]) -> list[str]:
     value = os.getenv(key)
     if not value:
         return default
     return [item.strip() for item in value.split(",") if item.strip()]
-
 
 @dataclass(slots=True)
 class Settings:
@@ -167,7 +159,6 @@ class Settings:
     @property
     def pin_keyword_set(self) -> set[str]:
         return {item.strip().lower() for item in self.pin_keywords.split(",") if item.strip()}
-
 
 @lru_cache
 def get_settings() -> Settings:

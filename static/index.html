@@ -10,11 +10,9 @@
   <meta name="theme-color" content="#6366f1" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" type="image/svg+xml" href="/static/placeholder.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700&display=swap"
-    rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/google-fonts.css" />
+  <link rel="stylesheet" href="/static/css/material-symbols.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
 
   <link rel="stylesheet" href="/static/css/styles.css" />
   <link rel="stylesheet" href="/static/css/player.css" />
@@ -27,116 +25,41 @@
   </div>
 
   <div class="app" id="app-root">
-    <!-- Mobile Top Bar -->
-    <header class="topbar-mobile">
-      <button id="mobile-menu-btn" class="btn-naked"
-        style="font-size: 1.5rem; padding: 4px 12px; color: var(--text); background: transparent; border: none; cursor: pointer;">☰</button>
-      <h1 style="flex: 1; text-align: center; margin: 0;">MediaHub</h1>
-      <span id="topbar-user" class="text-muted text-sm" style="padding: 0 12px;"></span>
+    <!-- Mobile Top Bar (Stitch Cinematic Design) -->
+    <header id="topbar-mobile"
+      class="sticky top-0 w-full z-40 flex items-center justify-between px-4 py-3 bg-surface/80 backdrop-blur-md border-b border-white/5 shadow-sm transition-all duration-300 md:hidden">
+      <div class="flex items-center gap-3">
+        <button id="mobile-menu-btn"
+          class="p-2 -ml-2 text-on-surface hover:text-primary transition-colors focus:outline-none">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"></path>
+          </svg>
+        </button>
+        <h1 id="page-title" class="font-['Hanken_Grotesk'] text-xl font-bold tracking-tight text-white bg-clip-text">
+          MediaHub</h1>
+      </div>
+      <div class="flex items-center gap-4">
+        <!-- Global Search Icon -->
+        <button class="text-on-surface-variant hover:text-white transition-colors"
+          onclick="document.getElementById('global-search-input')?.focus()">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+        </button>
+        <!-- User Placeholder -->
+        <div id="topbar-user"
+          class="w-8 h-8 rounded-full bg-surface-variant flex items-center justify-center text-sm font-semibold text-primary border border-white/10 overflow-hidden">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd">
+            </path>
+          </svg>
+        </div>
+      </div>
     </header>
 
-    <!-- Sidebar -->
-    <div id="sidebar-overlay" class="sidebar-overlay"></div>
-    <nav class="sidebar" id="sidebar" hidden>
-      <div class="sidebar-brand">
-        <h1
-          style="font-size: 1.25rem; font-weight: 900; letter-spacing: -0.5px; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--text);">
-          <svg style="width: 24px; height: 24px; color: #dc2626;" fill="currentColor" viewBox="0 0 24 24">
-            <path
-              d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z" />
-          </svg>
-          MediaHub
-        </h1>
-        <small>LAN Media Server</small>
-        <div
-          style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.75rem; color: var(--text-muted);">
-          <span class="status-dot pulsing" id="server-status-dot"></span>
-          <span id="server-status-text">Online</span>
-          <span class="scan-status-container" id="sidebar-scan-status-container"
-            style="display: none; align-items: center; gap: 4px; color: var(--accent);">
-            <div class="spinner-mini"></div>
-            <span id="sidebar-scan-text">Scanning</span>
-          </span>
-        </div>
-      </div>
+    
 
-      <div class="sidebar-nav">
-        <a href="/" class="nav-link" data-link>
-          <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-            style="width: 20px; height: 20px; stroke: currentColor;">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span class="nav-label">HOME</span>
-        </a>
-        <a href="/library" class="nav-link" data-link>
-          <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-            style="width: 20px; height: 20px; stroke: currentColor;">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-          </svg>
-          <span class="nav-label">Library</span>
-        </a>
-        <a href="/shorts" class="nav-link" data-link>
-          <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-            style="width: 20px; height: 20px; stroke: currentColor;">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 18a6 6 0 100-12 6 6 0 000 12z" />
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l4-2.5v5L9 12z" />
-          </svg>
-          <span class="nav-label">Shorties</span>
-        </a>
-        <a href="/history" class="nav-link" data-link>
-          <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-            style="width: 20px; height: 20px; stroke: currentColor;">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span class="nav-label">History</span>
-        </a>
-
-        <hr class="nav-divider">
-
-        <a href="/admin" class="nav-link admin-only" data-link hidden>
-          <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-            style="width: 20px; height: 20px; stroke: currentColor;">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2z" />
-          </svg>
-          <span class="nav-label" style="display: flex; align-items: center; gap: 8px;">
-            Insights <span id="admin-notif-badge" class="badge badge-error"
-              style="display: none; padding: 2px 6px; font-size: 0.7rem; font-family: inherit;">0</span>
-          </span>
-        </a>
-        <a href="/profile" class="nav-link" data-link>
-          <svg class="nav-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-            style="width: 20px; height: 20px; stroke: currentColor;">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          </svg>
-          <span class="nav-label">Profile</span>
-        </a>
-      </div>
-
-      <div class="sidebar-footer">
-        <button id="btn-theme-toggle" class="nav-link" title="Toggle Theme">
-          <span class="nav-icon" id="theme-toggle-icon">☀</span>
-          <span class="nav-label">Switch Theme</span>
-        </button>
-        <div id="nsfw-toggle-wrap" class="nav-sfw-toggle" style="display: none;"
-          title="Safe For Work — hide 18+ content">
-          <span class="nav-sfw-label">SFW</span>
-          <label class="toggle-switch">
-            <input type="checkbox" id="btn-nsfw-toggle" aria-label="SFW mode">
-            <span class="toggle-track"></span>
-          </label>
-        </div>
-
-        <button id="logout-btn" class="nav-link" style="color: var(--error);">
-          <span class="nav-icon">⏻</span>
-          <span class="nav-label">Logout</span>
-        </button>
-      </div>
-    </nav>
-
-    <!-- Main Content -->
+    
     <main class="main" id="main-area">
       <div class="content" id="view-target">
         <!-- Views injected here -->
@@ -145,342 +68,13 @@
   </div>
 
   <!-- Share Dialog -->
-  <dialog id="share-dialog" class="glass-modal share-dialog">
-    <div class="modal-header">
-      <h3>Share MediaHub</h3>
-      <button class="btn-close" onclick="this.closest('dialog').close()">&times;</button>
-    </div>
-    <div class="modal-content">
-      <p class="text-muted text-sm">Scan this code to access MediaHub from another device on your network.</p>
-      <div id="qr-container" class="qr-container">
-        <!-- QR Code injected here -->
-      </div>
-      <div class="url-display">
-        <code id="share-url"></code>
-        <button id="btn-copy-url" class="btn-secondary btn-sm">Copy</button>
-      </div>
-    </div>
-  </dialog>
-
-  <!-- Bottom Bar Player Modal -->
-  <dialog id="player-modal" class="player-modal">
-    <div id="player-container" class="player-container"
-      style="width: 100%; height: 100%; position: relative; background: #000; overflow: hidden;">
-      <!-- UI Overlay Layer -->
-      <div class="player-overlay">
-        <div class="player-scrim-top"></div>
-        <div class="player-scrim-bottom"></div>
-        <div class="player-top-bar">
-          <div class="title-container">
-            <h2 id="tape-title" class="tape-title-main">Loading...</h2>
-          </div>
-        </div>
-      </div>
-      <!-- Full-Screen Video Viewport -->
-      <div class="video-viewport" id="video-viewport">
-        <video id="player-video" playsinline></video>
-        <div class="player-scanlines"></div>
-        <div class="player-loader">
-          <div class="spinner-large"></div>
-        </div>
-        <!-- Triple-Zone Gesture Interface inside the viewport -->
-        <div class="player-gesture-zones" id="gesture-overlay">
-          <div class="gesture-zone" data-zone="left" style="flex: 0 0 30%;"></div>
-          <div class="gesture-zone" data-zone="middle" style="flex: 0 0 40%;"></div>
-          <div class="gesture-zone" data-zone="right" style="flex: 0 0 30%;"></div>
-
-          <!-- Visual Feedback Overlays -->
-          <div id="speed-indicator" class="speed-indicator">2x Speed &raquo;</div>
-          <div id="ripple-left" class="ripple-seek left">
-            <i class="v-icon icon-skip-back"></i>
-            <span>10s</span>
-          </div>
-          <div id="ripple-right" class="ripple-seek right">
-            <i class="v-icon icon-skip-forward"></i>
-            <span>10s</span>
-          </div>
-          <div id="play-pause-feedback" class="play-pause-feedback">
-            <i class="v-icon icon-play"></i>
-          </div>
-        </div>
-      </div>
-
-      <canvas id="analyzer-canvas" class="hidden"></canvas>
-
-      <!-- Up Next Overlay -->
-      <div id="up-next-overlay" class="up-next-overlay">
-        <div class="up-next-content">
-          <span class="up-next-label">UP NEXT IN <span class="up-next-timer">8</span></span>
-          <h3 class="up-next-title">Next Media Title</h3>
-          <div class="up-next-actions">
-            <button type="button" class="btn-play-now btn-accent">Play Now</button>
-            <button type="button" class="btn-cancel-next btn-ghost">Cancel</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Bottom Scrim Gradient (for legibility over video) -->
-      <div class="player-controls-scrim"></div>
-
-      <!-- Floating Bottom Controls -->
-      <div class="player-bottom-controls" id="player-bottom-controls">
-        <!-- Scrubber Progress Bar -->
-        <div class="player-scrubber-row">
-          <div id="transport-track" class="player-transport-track">
-            <div id="transport-buffer" class="player-transport-buffer"></div>
-            <div id="transport-fill" class="player-transport-fill">
-              <div class="transport-thumb"></div>
-            </div>
-            <!-- Seek Preview Container -->
-            <div id="seek-preview" class="seek-preview">
-              <div id="preview-frame" class="preview-frame"></div>
-              <div id="seek-preview-time" class="seek-preview-time">00:00</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Control Row -->
-        <div class="player-controls-row">
-          <!-- Left: Title / Metadata & Favorite -->
-          <div class="player-ctrl-left">
-            <div style="flex: 1; min-width: 0;">
-              <h4 id="tape-title-display" class="player-ctrl-title">Loading Media...</h4>
-              <p id="tape-format" class="player-ctrl-meta">HLS Stream</p>
-            </div>
-            <button type="button" class="vhs-btn btn-naked player-ctrl-btn" id="btn-favorite" title="Favorite">
-              <i class="v-icon icon-favorite"></i>
-            </button>
-            <button type="button" class="vhs-btn btn-naked player-ctrl-btn" id="btn-download" title="Download">
-              <svg viewBox="0 0 24 24"
-                style="width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; display: block;">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-            </button>
-          </div>
-
-          <!-- Center: Playback Controls & Timestamps -->
-          <div class="player-ctrl-center">
-            <div class="player-ctrl-buttons">
-              <button type="button" class="vhs-btn btn-naked player-ctrl-btn" id="btn-shuffle" title="Shuffle">
-                <i class="v-icon icon-shuffle" id="shuffle-icon"></i>
-              </button>
-              <button type="button" class="player-ctrl-btn" id="btn-prev" title="Previous"
-                style="background: transparent; border: none; cursor: pointer; color: rgba(255,255,255,0.7);">
-                <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor;">
-                  <path d="M6 6h2v12H6zm3.5 6L18 6v12z" />
-                </svg>
-              </button>
-              <button type="button" id="btn-play" class="player-play-btn" title="Play/Pause">
-                <svg class="play-icon" viewBox="0 0 24 24"
-                  style="width: 20px; height: 20px; fill: currentColor; margin-left: 2px;">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-                <svg class="pause-icon" viewBox="0 0 24 24"
-                  style="width: 20px; height: 20px; fill: currentColor; display: none;">
-                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                </svg>
-              </button>
-              <button type="button" class="player-ctrl-btn" id="btn-next" title="Next"
-                style="background: transparent; border: none; cursor: pointer; color: rgba(255,255,255,0.7);">
-                <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor;">
-                  <path d="M6 18l8.5-6L6 6zm9-12h2v12h-2z" />
-                </svg>
-              </button>
-              <button type="button" class="vhs-btn btn-naked player-ctrl-btn" id="btn-queue-toggle" title="Queue">
-                <i class="v-icon icon-list"></i>
-              </button>
-            </div>
-            <div class="player-ctrl-time">
-              <span id="transport-current">00:00</span>
-              <span style="opacity: 0.4;">/</span>
-              <span id="transport-total">00:00</span>
-            </div>
-          </div>
-
-          <!-- Right: Settings, Volume, Fullscreen, Close -->
-          <div class="player-ctrl-right">
-            <button type="button" class="vhs-btn btn-naked player-ctrl-btn" id="btn-settings" title="Settings">
-              <i class="v-icon icon-more"></i>
-            </button>
-            <button type="button" class="player-ctrl-btn" id="btn-fullscreen" title="Fullscreen Video"
-              style="background: transparent; border: none; cursor: pointer; color: rgba(255,255,255,0.7); display: flex; align-items: center;">
-              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-                style="width: 18px; height: 18px; stroke: currentColor;">
-                <path d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-              </svg>
-            </button>
-            <div class="player-volume-group">
-              <i class="v-icon icon-volume" id="volume-icon" style="width: 16px; height: 16px; cursor: pointer;"
-                title="Mute (M)" tabindex="0" aria-label="Mute"></i>
-              <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.8"
-                class="player-volume-slider" />
-            </div>
-            <button type="button" id="btn-back" class="player-close-btn" title="Close Player">
-              <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
-                style="width: 18px; height: 18px;">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Settings Drawer -->
-      <div id="player-drawer" class="player-drawer">
-        <div class="drawer-header">
-          <button type="button" class="drawer-back" id="drawer-back-btn">
-            <i class="v-icon icon-back"></i>
-          </button>
-          <span id="drawer-title">Settings</span>
-        </div>
-        <div class="drawer-content" id="drawer-main-menu">
-          <div class="drawer-item" data-menu="queue">
-            <i class="v-icon icon-list drawer-icon"></i>
-            <span class="drawer-label">Playing Queue</span>
-            <span class="drawer-value" id="val-queue">0 items</span>
-          </div>
-          <div class="drawer-item" data-menu="speed">
-            <i class="v-icon icon-speed drawer-icon"></i>
-            <span class="drawer-label">Playback Speed</span>
-            <span class="drawer-value" id="val-speed">1.0x</span>
-          </div>
-          <div class="drawer-item" data-menu="ratio">
-            <i class="v-icon icon-ratio drawer-icon"></i>
-            <span class="drawer-label">Aspect Ratio</span>
-            <span class="drawer-value" id="val-ratio">Fit</span>
-          </div>
-          <div class="drawer-item" id="item-subs">
-            <i class="v-icon icon-subs drawer-icon"></i>
-            <span class="drawer-label">Subtitles</span>
-            <span class="drawer-value" id="val-subs">Off</span>
-          </div>
-          <div class="drawer-section-header">Tools</div>
-          <div class="drawer-item" id="item-rename">
-            <i class="v-icon icon-edit drawer-icon"></i>
-            <span class="drawer-label">Rename</span>
-          </div>
-          <div class="drawer-item" id="item-delete" style="color: #ff3366;">
-            <i class="v-icon icon-delete drawer-icon" style="background-color: #ff3366;"></i>
-            <span class="drawer-label">Delete</span>
-          </div>
-        </div>
-
-        <!-- Sub-Menus (Hidden) -->
-        <div class="drawer-content" id="drawer-queue-menu" hidden></div>
-        <div class="drawer-content" id="drawer-speed-menu" hidden>
-          <div class="drawer-option" data-speed="0.25">0.25x</div>
-          <div class="drawer-option" data-speed="0.5">0.5x</div>
-          <div class="drawer-option" data-speed="0.75">0.75x</div>
-          <div class="drawer-option" data-speed="1.0">1.0x (Normal)</div>
-          <div class="drawer-option" data-speed="1.25">1.25x</div>
-          <div class="drawer-option" data-speed="1.5">1.5x</div>
-          <div class="drawer-option" data-speed="1.75">1.75x</div>
-          <div class="drawer-option" data-speed="2.0">2.0x</div>
-          <div class="drawer-option" data-speed="3.0">3.0x</div>
-          <div class="drawer-option" data-speed="4.0">4.0x</div>
-        </div>
-        <div class="drawer-content" id="drawer-ratio-menu" hidden>
-          <div class="drawer-option" data-ratio="contain">Fit (Default)</div>
-          <div class="drawer-option" data-ratio="cover">Zoom (Fill)</div>
-          <div class="drawer-option" data-ratio="fill">Stretch</div>
-        </div>
-      </div>
-
-      <!-- Bottom Queue Sheet -->
-      <div id="queue-sheet" class="player-queue-sheet">
-        <div class="sheet-header">
-          <div class="sheet-handle"></div>
-          <span>Up Next</span>
-        </div>
-        <div id="queue-list" class="sheet-content"></div>
-      </div>
-
-      <!-- Toast Notification -->
-      <div id="player-toast" class="player-toast"></div>
-    </div>
-    <!-- Playlist Finished Overlay (Lazy Removal UI) -->
-    <div id="playlist-finished-overlay" class="playlist-finished-overlay">
-      <div class="finished-content">
-        <h3 class="finished-message">Playlist Finished!</h3>
-        <div class="finished-actions">
-          <button type="button" class="btn-replay-playlist btn-accent">Replay Playlist</button>
-          <button type="button" class="btn-close-player btn-ghost">Close Player</button>
-        </div>
-      </div>
-    </div>
-  </dialog>
 
   <!-- Confirm Dialog -->
-  <dialog id="confirm-dialog">
-    <div class="dialog-card">
-      <h3 id="confirm-title">Confirm</h3>
-      <p id="confirm-message" class="text-muted" style="margin: 12px 0;"></p>
-      <div class="dialog-actions">
-        <button id="confirm-cancel" class="btn">Cancel</button>
-        <button id="confirm-accept" class="btn btn-accent">Confirm</button>
-      </div>
-    </div>
-  </dialog>
 
   <!-- PG-Lock PIN Dialog -->
-  <dialog id="pin-dialog" class="glass-modal">
-    <div class="dialog-card pin-card">
-      <h3 id="pin-dialog-title">Enter Admin PIN</h3>
-      <p id="pin-dialog-message" class="text-muted text-sm" style="margin-bottom: 20px;">This content is PG-Locked.</p>
-
-      <!-- PIN Dots Indicator -->
-      <div class="pin-display">
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-      </div>
-
-      <!-- Numerical Keypad Grid -->
-      <div class="pin-keypad">
-        <button class="pin-key" data-value="1">1</button>
-        <button class="pin-key" data-value="2">2</button>
-        <button class="pin-key" data-value="3">3</button>
-        <button class="pin-key" data-value="4">4</button>
-        <button class="pin-key" data-value="5">5</button>
-        <button class="pin-key" data-value="6">6</button>
-        <button class="pin-key" data-value="7">7</button>
-        <button class="pin-key" data-value="8">8</button>
-        <button class="pin-key" data-value="9">9</button>
-        <button class="pin-key" id="pin-btn-clear">⌫</button>
-        <button class="pin-key" data-value="0">0</button>
-        <button class="pin-key" id="pin-btn-cancel">✕</button>
-      </div>
-    </div>
-  </dialog>
 
   <!-- Toast Container -->
   <!-- Folder Settings Dialog -->
-  <dialog id="folder-settings-dialog">
-    <form method="dialog" class="dialog-card">
-      <h3 id="settings-folder-name">Folder Settings</h3>
-      <p class="page-subtitle">Configure access and content ratings for this directory.</p>
-
-      <div class="form-group">
-        <label class="checkbox-label">
-          <input type="checkbox" id="settings-locked">
-          <span>Require Admin PIN for access</span>
-        </label>
-      </div>
-
-      <div class="form-group">
-        <label class="checkbox-label">
-          <input type="checkbox" id="settings-adult">
-          <span>Mark as R18 / Adult Content</span>
-        </label>
-      </div>
-
-      <div class="dialog-actions">
-        <button type="button" class="btn" id="settings-cancel">Cancel</button>
-        <button type="submit" class="btn btn-accent" id="settings-save">Save Changes</button>
-      </div>
-    </form>
-  </dialog>
 
   <div id="toast-container" class="toast-container"></div>
   <button id="scroll-top-btn" class="scroll-top-btn" title="Scroll to Top">↑</button>

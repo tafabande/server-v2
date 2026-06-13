@@ -1,99 +1,145 @@
 /**
- * MediaHub — Home View (Netflix-like Experience)
- * Shows a featured Hero spotlight banner, continue watching, trending,
- * my list, and categories with horizontal scroll rows and hover previews.
+ * MediaHub — Home View (State-Driven Component System)
+ * Overhauled to decouple logic and UI, fix memory leaks, and add cache versioning.
  */
 import { api, player, router } from '../app.js';
-import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, isNsfwEnabled, showAdultAccessDialog, escapeHtml, homeCacheKey, clearContentCaches, prefetchThumbnails } from '../utils.js';
+import { toast, formatDuration, formatDate, thumbUrl, debounce, isAdultApproved, showAdultAccessDialog, escapeHtml, homeCacheKey, clearContentCaches, prefetchThumbnails } from '../utils.js';
 
 export class HomeView {
     constructor(container) {
         this.container = container;
         this.rowsOffset = 0;
-        this.loadingMore = false;
         this.hoverTimeout = null;
-        this.previewVideo = null;
+        this._hoverHandler = null;
+        
+        this.previewVideo = document.createElement('video');
+        this.previewVideo.muted = true;
+        this.previewVideo.autoplay = true;
+        this.previewVideo.loop = true;
+        this.previewVideo.setAttribute('playsinline', '');
+        this.previewVideo.className = 'card-preview-video';
+        Object.assign(this.previewVideo.style, {
+            position: 'absolute', top: '0', left: '0',
+            width: '100%', height: '100%', objectFit: 'cover',
+            borderRadius: '0', zIndex: '2',
+            display: 'none', pointerEvents: 'none'
+        });
+        this.previewVideo.addEventListener('error', () => {
+            this.previewVideo.style.display = 'none';
+            if (this._activePosterImg) this._activePosterImg.style.opacity = '1';
+        });
+        container.appendChild(this.previewVideo);
 
-        // Videos pagination state
-        this.videosPage = 1;
-        this.videosLoading = false;
-        this.hasMoreVideos = true;
-        this.videosList = [];
+        this._abortController = new AbortController();
+        this._searchSeq = 0;
+
+        // State object
+        this.state = {
+            hero: null,
+            rows: [],
+            videosList: [],
+            videosPage: 1,
+            videosLoading: false,
+            hasMoreVideos: true,
+            filterContext: 'all'
+        };
+
+        this._globalKeydownHandler = this._globalKeydownHandler.bind(this);
+    }
+
+    _normalizeMedia(m) {
+        return {
+            id: m.id,
+            title: m.title || m.filename || 'Unknown',
+            duration: m.duration_seconds || m.duration || 0,
+            progress: m.progress || 0,
+            resume_position: m.resume_position || m.progress * (m.duration_seconds || m.duration || 0) || 0,
+            year: m.year || '',
+            path: m.path || '',
+            adult_only: !!m.adult_only,
+            video_codec: m.video_codec || ''
+        };
     }
 
     async render() {
-        this.rowsOffset = 0;
-        this.loadingMore = false;
-        this.videosPage = 1;
-        this.videosLoading = false;
-        this.hasMoreVideos = true;
-        this.videosList = [];
-
         this.container.innerHTML = `
-            <div class="view-header flex-between mb-lg" style="position: relative; z-index: 10;">
-                <div>
-                    <h1 class="page-title">Home</h1>
-                </div>
-                <div class="search-bar" style="margin-bottom:0; position:relative; max-width: 320px;">
-                    <input id="home-search" class="input" type="text" placeholder="Search..." autocomplete="off">
-                    <div id="search-suggestions" class="search-suggestions"></div>
-                </div>
-            </div>
-            
-            <div id="request-banner-container"></div>
-            
-            <!-- Hero section -->
-            <div id="hero-banner" class="hero mb-lg" style="display:none;">
-                <div class="hero-backdrop"></div>
-                <div class="hero-gradient"></div>
-                <div class="hero-content">
-                    <div class="hero-badges">
-                        <span class="badge badge-accent" id="hero-badge-type">Featured</span>
-                        <span class="badge badge-muted" id="hero-badge-codec">HD</span>
-                    </div>
-                    <h2 class="hero-title"></h2>
-                    <p class="hero-synopsis"></p>
-                    <div class="hero-meta">
-                        <span class="hero-year"></span>
-                        <span class="hero-duration"></span>
-                    </div>
-                    <div class="hero-buttons">
-                        <button class="btn btn-accent hero-play-btn">▶ Play</button>
-                        <button class="btn btn-ghost hero-mylist-btn">+ My List</button>
-                    </div>
-                    <div class="hero-resume" style="display:none;">
-                        <span>Resume from <span class="hero-resume-position"></span></span>
+            <div class="home-layout">
+                <div class="filter-sidebar">
+                    <h3 style="font-size: 0.85rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Explore</h3>
+                    <div id="smart-sidebar-sections" style="display: flex; flex-direction: column; gap: 4px;">
+                        <div class="skeleton-title shimmer-bg" style="width: 80%; height: 20px; margin-bottom: 8px;"></div>
+                        <div class="skeleton-title shimmer-bg" style="width: 60%; height: 20px;"></div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Smart Sections / Search results -->
-            <div id="smart-sections">
-                <div class="skeleton-row">
-                    <div class="skeleton-row-title shimmer-bg"></div>
-                    <div class="skeleton-row-items">
-                        ${Array(4).fill().map(() => `
-                            <div class="skeleton-row-card">
-                                <div class="skeleton-poster shimmer-bg"></div>
-                                <div class="skeleton-title shimmer-bg"></div>
+                <div class="home-feed-content" style="display: flex; flex-direction: column; width: 100%;">
+                    <div class="primary-search-container">
+                        <div class="primary-search-wrapper">
+                            <input id="home-search" class="primary-search-input" type="text" placeholder="Search library (Press / to focus)" autocomplete="off">
+                            <button id="home-search-clear" class="search-clear-btn">&times;</button>
+                            <div id="search-suggestions" class="search-suggestions" style="top: 60px; left: 0; right: 0; position: absolute;"></div>
+                        </div>
+                        <button class="btn btn-ghost" id="home-search-filters">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+                        </button>
+                    </div>
+
+                    <div id="home-feed-body" style="padding: 24px;">
+                        <div id="request-banner-container"></div>
+                        <div id="smart-sections"></div>
+                        
+                        <div id="hero-banner" class="hero-compact mb-lg hidden">
+                            <div class="hero-backdrop" style="position:absolute; top:0; left:0; right:0; bottom:0; background-size:cover; background-position:center;"></div>
+                            <div class="hero-gradient" style="position:absolute; top:0; left:0; right:0; bottom:0; background: linear-gradient(0deg, var(--bg) 0%, rgba(0,0,0,0.4) 100%);"></div>
+                            <div class="hero-content">
+                                <div class="hero-badges" style="margin-bottom: 8px;">
+                                    <span class="badge badge-accent" id="hero-badge-type">Featured</span>
+                                    <span class="badge badge-muted" id="hero-badge-codec">HD</span>
+                                </div>
+                                <h2 class="hero-title"></h2>
+                                <p class="hero-synopsis" style="margin: 8px 0; color: var(--text-muted); font-size: 0.95rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;"></p>
+                                <div class="hero-meta" style="margin-bottom: 16px; font-size: 0.9rem;">
+                                    <span class="hero-year"></span> • <span class="hero-duration"></span>
+                                </div>
+                                <div class="hero-buttons" style="display:flex; gap:8px;">
+                                    <button class="btn btn-accent hero-play-btn">▶ Play</button>
+                                    <button class="btn btn-ghost hero-mylist-btn">+ My List</button>
+                                </div>
+                                <div class="hero-resume hidden" style="margin-top: 8px; font-size: 0.85rem; color: var(--accent); background: transparent; border: 1px solid var(--border); padding: 4px 8px;">
+                                    <span>Resume from <span class="hero-resume-position"></span></span>
+                                </div>
                             </div>
-                        `).join('')}
+                        </div>
+
+                        <div id="home-videos-section">
+                            <h2 id="grid-context-title" class="row-title mb-md">All Videos</h2>
+                            <div id="home-videos-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;"></div>
+                            <div id="home-videos-sentinel" style="height:20px; margin-top:20px;"></div>
+                        </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Flat Videos Grid -->
-            <div id="home-videos-section" class="mt-lg" style="display:none;">
-                <h2 class="row-title mb-md">Videos</h2>
-                <div id="home-videos-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;"></div>
-                <div id="home-videos-sentinel" style="height:20px; margin-top:20px;"></div>
             </div>
         `;
 
+        this._setupSearch();
+        document.addEventListener('keydown', this._globalKeydownHandler);
+
+        await this._loadRequestAlerts();
+        await this._loadSmartHome();
+        this._attachScrollListeners();
+        this._setupHoverPreviews();
+    }
+
+    _setupSearch() {
         const searchInput = document.getElementById('home-search');
+        const searchClear = document.getElementById('home-search-clear');
+        
         if (searchInput) {
             searchInput.addEventListener('input', debounce((e) => {
                 const q = e.target.value.trim();
+                if (q.length > 0 && searchClear) searchClear.classList.add('visible');
+                else if (searchClear) searchClear.classList.remove('visible');
+                
                 if (q.length > 1) this._showSuggestions(q);
                 else document.getElementById('search-suggestions')?.classList.remove('active');
             }, 200));
@@ -109,118 +155,85 @@ export class HomeView {
             searchInput.addEventListener('blur', () => {
                 setTimeout(() => document.getElementById('search-suggestions')?.classList.remove('active'), 200);
             });
+            
+            if (searchClear) {
+                searchClear.addEventListener('click', () => {
+                    searchInput.value = '';
+                    searchClear.classList.remove('visible');
+                    document.getElementById('search-suggestions')?.classList.remove('active');
+                    this._filterSearch('');
+                });
+            }
         }
+    }
 
-        await this._loadRequestAlerts();
-        await this._loadSmartHome();
-        this._attachScrollListeners();
-        this._setupHoverPreviews();
+    _globalKeydownHandler(e) {
+        if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+            e.preventDefault();
+            const input = document.getElementById('home-search');
+            if (input) input.focus();
+        }
     }
 
     async _showSuggestions(query) {
-        const target = document.getElementById('search-suggestions');
-        if (!target) return;
+        const suggestionsDiv = document.getElementById('search-suggestions');
+        if (!suggestionsDiv) return;
+
+        this._searchSeq++;
+        const seq = this._searchSeq;
 
         try {
-            const results = await api.getSearch(query);
-            if (!results || results.length === 0) {
-                target.classList.remove('active');
-                return;
-            }
-
-            target.innerHTML = results.slice(0, 8).map(m => `
-                <div class="suggestion-item" data-id="${m.id}">
-                    <img src="${thumbUrl(m)}" class="suggestion-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                    <div class="suggestion-info">
-                        <div class="suggestion-title">${escapeHtml(m.title)}</div>
-                        <div class="suggestion-meta">${m.duration_seconds ? formatDuration(m.duration_seconds) + ' · ' : ''}${escapeHtml(m.video_codec || 'VIDEO')}</div>
+            const results = await api.getSearch(query.toLowerCase());
+            if (seq !== this._searchSeq) return;
+            if (results && results.length > 0) {
+                const topResults = results.slice(0, 5);
+                suggestionsDiv.innerHTML = topResults.map(r => `
+                    <div class="suggestion-item" data-id="${r.id}">
+                        <span class="suggestion-title">${escapeHtml(r.title)}</span>
                     </div>
-                </div>
-            `).join('');
-
-            target.classList.add('active');
-
-            target.querySelectorAll('.suggestion-item').forEach(item => {
-                item.addEventListener('click', () => {
-                    const id = parseInt(item.dataset.id);
-                    const media = results.find(m => m.id === id);
-                    if (media) {
-                        if (media.adult_only && !isAdultApproved()) {
-                            showAdultAccessDialog();
-                        } else {
-                            player.play([media], 0);
-                        }
-                    }
-                    target.classList.remove('active');
+                `).join('');
+                
+                suggestionsDiv.querySelectorAll('.suggestion-item').forEach(item => {
+                    item.addEventListener('click', () => {
+                        this._filterSearch(query);
+                        suggestionsDiv.classList.remove('active');
+                    });
                 });
-            });
-
-        } catch (err) { console.error('Search error:', err); }
+                
+                suggestionsDiv.classList.add('active');
+            } else {
+                suggestionsDiv.classList.remove('active');
+            }
+        } catch (e) {
+            suggestionsDiv.classList.remove('active');
+        }
     }
 
     async _loadRequestAlerts() {
-        const bannerContainer = document.getElementById('request-banner-container');
-        if (!bannerContainer) return;
-
         try {
-            const requests = await api.getRequests();
-            const sortedReqs = requests.sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
-            const latestReq = sortedReqs[0];
+            const bannerContainer = document.getElementById('request-banner-container');
+            if (!bannerContainer) return;
 
-            if (latestReq) {
-                const storageKey = `dismissed_req_${latestReq.id}`;
-                const isDismissed = localStorage.getItem(storageKey);
+            const res = await api.getRequests();
+            const requests = Array.isArray(res) ? res : (res?.items || []);
+            const recent = requests.filter(r => new Date(r.created_at) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+            
+            for (const r of recent) {
+                const storageKey = `ack_req_${r.id}_${r.status}`;
+                if (localStorage.getItem(storageKey)) continue;
 
-                if (!isDismissed) {
+                if (r.status === 'approved' || r.status === 'denied') {
+                    const title = r.request_type === 'adult_elevation' ? '18+ Access Request' : `Folder Access: /${r.target_path ? r.target_path.split('/').pop() : 'unknown'}`;
+                    
                     let bannerHtml = '';
-                    const title = latestReq.request_type === 'adult_elevation' ? '🔞 18+ Account Elevation' : `📁 Folder Access ("${latestReq.target_path?.split('/').pop() || ''}")`;
-
-                    if (latestReq.status === 'pending') {
+                    if (r.status === 'approved') {
                         bannerHtml = `
-                            <div class="surface rounded mb-md flex-between fade-in" id="req-banner-${latestReq.id}" style="background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.2); padding: 12px 16px; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; width: 100%; position: relative; z-index: 5;">
+                            <div class="status-banner status-banner--success mb-md flex-between" style="border: 1px solid var(--success); background: rgba(16, 185, 129, 0.05); padding: 12px 16px;">
                                 <div style="display: flex; gap: 12px; align-items: center;">
-                                    <span style="font-size: 1.5rem; line-height: 1;">⏳</span>
-                                    <div>
-                                        <strong style="color: var(--warning);">Access Request Pending Review</strong>
-                                        <div class="text-muted text-xs" style="margin-top: 2px;">
-                                            Your request for <strong>${escapeHtml(title)}</strong> is currently pending administrator review.
-                                        </div>
-                                    </div>
-                                </div>
-                                <div style="display: flex; gap: 12px; align-items: center;">
-                                    <button class="btn btn-sm btn-ghost view-profile-btn">View Profile</button>
-                                    <button class="dismiss-banner-btn" style="background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:1.5rem; line-height:1;">&times;</button>
-                                </div>
-                            </div>
-                        `;
-                    } else if (latestReq.status === 'denied') {
-                        bannerHtml = `
-                            <div class="surface rounded mb-md flex-between fade-in" id="req-banner-${latestReq.id}" style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); padding: 12px 16px; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; width: 100%; position: relative; z-index: 5;">
-                                <div style="display: flex; gap: 12px; align-items: center;">
-                                    <span style="font-size: 1.5rem; line-height: 1;">❌</span>
-                                    <div>
-                                        <strong style="color: var(--error);">Access Request Denied</strong>
-                                        <div class="text-muted text-xs" style="margin-top: 2px;">
-                                            Your request for <strong>${escapeHtml(title)}</strong> was denied. Reason: <span style="font-style: italic;">"${escapeHtml(latestReq.admin_comment || 'No reason provided')}"</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div style="display: flex; gap: 12px; align-items: center;">
-                                    <button class="btn btn-sm btn-ghost view-profile-btn">View Profile</button>
-                                    <button class="dismiss-banner-btn" style="background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:1.5rem; line-height:1;">&times;</button>
-                                </div>
-                            </div>
-                        `;
-                    } else if (latestReq.status === 'approved') {
-                        bannerHtml = `
-                            <div class="surface rounded mb-md flex-between fade-in" id="req-banner-${latestReq.id}" style="background: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.2); padding: 12px 16px; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; width: 100%; position: relative; z-index: 5;">
-                                <div style="display: flex; gap: 12px; align-items: center;">
-                                    <span style="font-size: 1.5rem; line-height: 1;">🎉</span>
+                                    <div style="font-size: 1.5rem;">✅</div>
                                     <div>
                                         <strong style="color: var(--success);">Access Request Approved!</strong>
-                                        <div class="text-muted text-xs" style="margin-top: 2px;">
-                                            Your request for <strong>${escapeHtml(title)}</strong> has been APPROVED! Enjoy full access.
-                                        </div>
+                                        <div class="text-muted text-xs" style="margin-top: 2px;">Your request for <strong>${escapeHtml(title)}</strong> has been APPROVED!</div>
                                     </div>
                                 </div>
                                 <div style="display: flex; gap: 12px; align-items: center;">
@@ -249,112 +262,188 @@ export class HomeView {
         }
     }
 
-    async _loadSmartHome() {
-        const target = document.getElementById('smart-sections');
-        if (!target) return;
-
+    async _loadSmartHomeData() {
         const cacheKey = homeCacheKey();
-        const cacheTimeKey = `${cacheKey}_time`;
+        const cacheTimeKey = `${cacheKey}_time_v1`; // v1 versioning
         const cachedData = localStorage.getItem(cacheKey);
         const cachedTime = localStorage.getItem(cacheTimeKey);
-
-        let hero = null;
-        let rows = [];
 
         const now = Date.now();
         if (cachedData && cachedTime && (now - parseInt(cachedTime) < 5 * 60 * 1000)) {
             try {
                 const parsed = JSON.parse(cachedData);
-                hero = parsed.hero;
-                rows = parsed.rows || [];
-                this.rowsOffset = rows.length;
-                console.log('Loading home feed from cache');
+                if (parsed.v === 1) return parsed;
             } catch (e) {
                 localStorage.removeItem(cacheKey);
+                localStorage.removeItem(cacheTimeKey);
             }
         }
 
-        if (!rows.length) {
-            try {
-                const [heroData, rowsData] = await Promise.all([
-                    api.getHeroContent(),
-                    api.getHomeRows(0)
-                ]);
-                hero = heroData;
-                rows = rowsData || [];
-                this.rowsOffset = rows.length;
+        const [hero, rows] = await Promise.all([
+            api.getHeroContent({ signal: this._abortController.signal }),
+            api.getHomeRows(0, { signal: this._abortController.signal })
+        ]);
+        
+        const data = { v: 1, hero, rows: rows || [] };
+        localStorage.setItem(cacheKey, JSON.stringify(data));
+        localStorage.setItem(cacheTimeKey, now.toString());
+        return data;
+    }
 
-                localStorage.setItem(cacheKey, JSON.stringify({ hero, rows }));
-                localStorage.setItem(cacheTimeKey, now.toString());
-            } catch (err) {
-                console.error('Home load error:', err);
+    async _loadSmartHome() {
+        const target = document.getElementById('smart-sections');
+        if (!target) return;
+
+        let data;
+        try {
+            data = await this._loadSmartHomeData();
+        } catch (err) {
+            if (err.name !== 'AbortError') {
                 target.innerHTML = `<div class="empty-state"><p>Error loading home feed: ${escapeHtml(err.message)}</p></div>`;
-                return;
             }
+            return;
         }
 
-        // Prefetch Hero backdrop and top row items for instant visual feedback
-        if (hero) {
+        this.state.hero = data.hero ? this._normalizeMedia(data.hero) : null;
+        this.state.rows = data.rows;
+        this.rowsOffset = data.rows.length;
+
+        if (this.state.hero) {
             const img = new Image();
-            img.src = thumbUrl(hero.id);
+            img.src = thumbUrl(this.state.hero.id);
         }
-        if (rows.length > 0) {
-            prefetchThumbnails(rows[0].items, 10);
-        }
-
-        if (hero) {
-            this._renderHero(hero);
+        if (this.state.rows.length > 0) {
+            prefetchThumbnails(this.state.rows[0].items, 10);
         }
 
-        target.innerHTML = '';
-        if (rows.length > 0) {
-            const rowsContainer = document.createElement('div');
-            rowsContainer.className = 'rows-container';
-            rowsContainer.id = 'rows-container';
-            target.appendChild(rowsContainer);
-
-            for (const row of rows) {
-                rowsContainer.appendChild(this._createRow(row));
-            }
-
-            this._bindRowClickHandlers(rowsContainer, rows);
+        if (this.state.hero) {
+            this._renderHero(this.state.hero);
         }
 
-        // Show flat videos section and load videos
+        this._renderSidebar();
+
         const vSec = document.getElementById('home-videos-section');
-        if (vSec) vSec.style.display = 'block';
+        if (vSec) vSec.classList.remove('hidden');
         await this._loadVideos();
 
-        // Verify if completely empty after videos are loaded
-        if (!rows.length && this.videosList.length === 0) {
-            target.innerHTML = `
-                <div class="empty-state" style="margin-top: 40px;">
-                    <div class="empty-icon">📂</div>
-                    <h3>No media detected</h3>
-                    <p>We couldn't find any media in your library. Automatically scanning your folders in the background...</p>
-                    <div class="flex-center gap-md mt-lg">
-                        <button class="btn btn-accent" id="home-rescan-btn" disabled>Scanning Library in Background...</button>
-                        <button class="btn btn-ghost" onclick="location.reload()">Refresh Page</button>
-                    </div>
-                </div>
-            `;
-            if (vSec) vSec.style.display = 'none';
+        if (!this.state.rows.length && this.state.videosList.length === 0) {
+            this._renderEmptyState();
+        }
+    }
 
-            // Auto trigger scan
-            api.rescan().then(() => {
-                toast('Library indexed automatically!', 'success');
-                clearContentCaches();
-                setTimeout(() => location.reload(), 1500);
-            }).catch(err => {
-                const btn = document.getElementById('home-rescan-btn');
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = 'Retry Scan';
-                    btn.onclick = () => location.reload();
-                }
-                toast(err.message, 'error');
+    _renderEmptyState() {
+        const target = document.getElementById('smart-sections');
+        const vSec = document.getElementById('home-videos-section');
+        if (!target) return;
+
+        target.innerHTML = `
+            <div class="empty-state" style="margin-top: 40px;">
+                <div class="empty-icon">📂</div>
+                <h3>No media detected</h3>
+                <p>We couldn't find any media in your library. Automatically scanning your folders in the background...</p>
+                <div class="flex-center gap-md mt-lg">
+                    <button class="btn btn-accent" id="home-rescan-btn" disabled>Scanning Library in Background...</button>
+                    <button class="btn btn-ghost" id="home-refresh-btn">Refresh Page</button>
+                </div>
+            </div>
+        `;
+        if (vSec) vSec.classList.add('hidden');
+
+        const refreshBtn = document.getElementById('home-refresh-btn');
+        if (refreshBtn) refreshBtn.onclick = () => { window.appInstance.init().then(() => router.navigate('/')); };
+
+        api.rescan().then(() => {
+            toast('Library indexed automatically!', 'success');
+            clearContentCaches();
+            setTimeout(() => { window.appInstance.init().then(() => router.navigate('/')); }, 1500);
+        }).catch(err => {
+            const btn = document.getElementById('home-rescan-btn');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Retry Scan';
+                btn.onclick = () => { window.appInstance.init().then(() => router.navigate('/')); };
+            }
+            toast(err.message, 'error');
+        });
+    }
+
+    _renderSidebar() {
+        const sidebarSections = document.getElementById('smart-sidebar-sections');
+        if (!sidebarSections) return;
+        
+        sidebarSections.innerHTML = `
+            <div class="sidebar-link active" data-id="all">
+                <span>All Videos</span>
+            </div>
+        `;
+        
+        for (const row of this.state.rows) {
+            const link = document.createElement('div');
+            link.className = 'sidebar-link';
+            link.dataset.id = row.title;
+            link.innerHTML = `<span>${escapeHtml(row.title)}</span>`;
+            
+            link.addEventListener('click', () => {
+                document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+                link.classList.add('active');
+                this.state.filterContext = row.title;
+                
+                document.getElementById('grid-context-title').textContent = row.title;
+                const sentinel = document.getElementById('home-videos-sentinel');
+                if (sentinel) sentinel.style.display = 'none';
+                
+                this._renderFeed(row);
+            });
+            sidebarSections.appendChild(link);
+        }
+        
+        const allLink = sidebarSections.querySelector('[data-id="all"]');
+        if (allLink) {
+            allLink.addEventListener('click', () => {
+                document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+                allLink.classList.add('active');
+                this.state.filterContext = 'all';
+                
+                document.getElementById('grid-context-title').textContent = 'All Videos';
+                const sentinel = document.getElementById('home-videos-sentinel');
+                if (sentinel) sentinel.style.display = 'block';
+                
+                this.state.videosPage = 1;
+                this.state.videosList = [];
+                this.state.hasMoreVideos = true;
+                this._loadVideos();
             });
         }
+    }
+
+    _renderFeed(row) {
+        const grid = document.getElementById('home-videos-grid');
+        if (!grid) return;
+        
+        grid.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        
+        row.items.forEach((rawItem, idx) => {
+            const item = this._normalizeMedia(rawItem);
+            const card = document.createElement('div');
+            card.className = 'home-card';
+            card.dataset.id = item.id;
+            card.style.willChange = 'transform';
+            card.style.width = '100%';
+            card.innerHTML = this._createCard(item, row.type);
+            
+            const list = row.items.map(i => this._normalizeMedia(i));
+            this._attachCardEvents(card, item, list, idx);
+            if (row.type === 'resume') {
+                card.onclick = (e) => {
+                    e.stopPropagation();
+                    const resumePos = item.progress * item.duration;
+                    player.play(list, idx, resumePos);
+                };
+            }
+            fragment.appendChild(card);
+        });
+        grid.appendChild(fragment);
     }
 
     _renderHero(hero) {
@@ -372,9 +461,7 @@ export class HomeView {
         heroDiv.querySelector('.hero-duration').textContent = this._formatDuration(hero.duration);
 
         const badgeType = heroDiv.querySelector('#hero-badge-type');
-        if (badgeType) {
-            badgeType.textContent = 'Featured';
-        }
+        if (badgeType) badgeType.textContent = 'Featured';
 
         const playBtn = heroDiv.querySelector('.hero-play-btn');
         if (playBtn) {
@@ -389,9 +476,15 @@ export class HomeView {
                 try {
                     const playlists = await api.getPlaylists();
                     let mylist = playlists.find(p => p.title === "My List");
-                    if (!mylist) {
-                        mylist = await api.createPlaylist("My List", "My favorite movies and shows");
+                    if (!mylist) mylist = await api.createPlaylist("My List", "My favorite movies and shows");
+                    
+                    const pData = await api.getPlaylist(mylist.id);
+                    if (pData && pData.items && pData.items.some(i => i.id === hero.id)) {
+                        toast('Already in My List', 'info');
+                        mylistBtn.textContent = '✓ In My List';
+                        return;
                     }
+
                     await api.addToPlaylist(mylist.id, hero.id);
                     toast('Added to My List', 'success');
                     mylistBtn.textContent = '✓ In My List';
@@ -405,42 +498,64 @@ export class HomeView {
         const resumeDiv = heroDiv.querySelector('.hero-resume');
         const resumePosEl = heroDiv.querySelector('.hero-resume-position');
         if (hero.resume_position > 0 && resumeDiv && resumePosEl) {
+            resumeDiv.classList.remove('hidden');
             resumeDiv.style.display = 'inline-block';
             resumePosEl.textContent = this._formatTime(hero.resume_position);
         } else if (resumeDiv) {
-            resumeDiv.style.display = 'none';
+            resumeDiv.classList.add('hidden');
+            resumeDiv.style.display = '';
         }
 
-        heroDiv.style.display = 'block';
+        heroDiv.classList.remove('hidden');
     }
 
-    _createRow(row) {
-        const rowDiv = document.createElement('div');
-        rowDiv.className = 'home-row';
-        rowDiv.innerHTML = `
-            <h2 class="row-title">${escapeHtml(row.title)}</h2>
-            <div class="row-scroll">
-                <div class="row-items">
-                    ${row.items.map(item => this._createCard(item, row.type)).join('')}
-                </div>
-            </div>
-        `;
+    _attachCardEvents(card, item, list, idx) {
+        card.addEventListener('click', () => {
+            if (item.adult_only && !isAdultApproved()) {
+                showAdultAccessDialog();
+                return;
+            }
+            player.play(list, idx);
+        });
 
-        const scrollContainer = rowDiv.querySelector('.row-scroll');
-        const leftBtn = document.createElement('button');
-        leftBtn.className = 'scroll-btn left';
-        leftBtn.innerHTML = '‹';
-        leftBtn.onclick = () => scrollContainer.scrollBy({ left: -360, behavior: 'smooth' });
+        const playBtn = card.querySelector('.card-action-play');
+        if (playBtn) {
+            playBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                player.play([{ id: item.id, title: item.title, duration_seconds: item.duration }], 0);
+            });
+        }
 
-        const rightBtn = document.createElement('button');
-        rightBtn.className = 'scroll-btn right';
-        rightBtn.innerHTML = '›';
-        rightBtn.onclick = () => scrollContainer.scrollBy({ left: 360, behavior: 'smooth' });
+        const saveBtn = card.querySelector('.card-action-save');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    const ps = await api.getPlaylists();
+                    let m = ps.find(p => p.title === 'My List');
+                    if (!m) m = await api.createPlaylist('My List', 'Favorites');
+                    
+                    const pData = await api.getPlaylist(m.id);
+                    if (pData && pData.items && pData.items.some(i => i.id === item.id)) {
+                        toast('Already in My List', 'info');
+                        return;
+                    }
 
-        rowDiv.appendChild(leftBtn);
-        rowDiv.appendChild(rightBtn);
+                    await api.addToPlaylist(m.id, item.id);
+                    toast('Added to My List', 'success');
+                } catch (err) {
+                    toast(err.message, 'error');
+                }
+            });
+        }
 
-        return rowDiv;
+        const infoBtn = card.querySelector('.card-action-info');
+        if (infoBtn) {
+            infoBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                location.hash = '#explorer?path=' + encodeURIComponent(item.path || '');
+            });
+        }
     }
 
     _createCard(item, rowType) {
@@ -448,92 +563,78 @@ export class HomeView {
             ? `<div class="card-progress"><div class="card-progress-bar" style="width: ${item.progress * 100}%"></div></div>`
             : '';
 
-        const duration = item.duration ? this._formatDuration(item.duration) : '';
+        const dur = item.duration ? this._formatDuration(item.duration) : '';
 
         return `
-            <div class="home-card" data-id="${item.id}" data-title="${escapeHtml(item.title)}" style="will-change: transform;">
-                <div class="card-poster" style="aspect-ratio: 16/9;">
-                    <img src="${thumbUrl(item.id)}" alt="${escapeHtml(item.title)}" class="shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                    ${progressHtml}
-                    ${duration ? `<span class="media-badge duration-badge">${duration}</span>` : ''}
-                    <div class="card-hover-info">
-                        <button class="card-play-btn">▶</button>
-                    </div>
+            <div class="card-poster" style="aspect-ratio: 16/9; position: relative;">
+                <img src="${thumbUrl(item.id)}" alt="${escapeHtml(item.title)}" class="media-card-thumb" loading="lazy" style="opacity:0; transition: opacity 0.3s ease; width:100%; height:100%; object-fit:cover;" onload="this.style.opacity=1;" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1;">
+                ${progressHtml}
+                ${dur ? `<span class="media-badge duration-badge">${dur}</span>` : ''}
+                <div class="card-hover-info">
+                    <button class="card-play-btn">▶</button>
                 </div>
-                <div class="media-card-info">
-                    <h3 class="media-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</h3>
-                    ${item.year ? `<div class="media-meta"><span>${escapeHtml(String(item.year))}</span></div>` : ''}
-                </div>
+            </div>
+            <div class="card-actions-row hidden">
+                <button class="btn btn-xs btn-accent card-action-play">▶ Play</button>
+                <button class="btn btn-xs btn-ghost card-action-save">+ List</button>
+                <button class="btn btn-xs btn-ghost card-action-info">ℹ</button>
+            </div>
+            <div class="media-card-info" style="padding-top: 8px;">
+                <h3 class="media-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</h3>
+                ${item.year ? `<div class="media-meta"><span>${escapeHtml(String(item.year))}</span></div>` : ''}
             </div>
         `;
     }
 
-    _bindRowClickHandlers(container, rows) {
-        container.querySelectorAll('.home-row').forEach((rowEl, rowIdx) => {
-            const rowData = rows.at(rowIdx);
-            rowEl.querySelectorAll('.home-card').forEach((card, cardIdx) => {
-                card.addEventListener('click', (e) => {
-                    const id = parseInt(card.dataset.id);
-                    const list = rowData.items.map(item => ({ id: item.id, title: item.title, duration_seconds: item.duration }));
-                    const resumePos = (rowData.type === 'resume') ? (rowData.items.at(cardIdx).progress * rowData.items.at(cardIdx).duration) : 0;
-
-                    player.play(list, cardIdx, resumePos);
-                });
-            });
-        });
-    }
-
     _setupHoverPreviews() {
-        this.container.addEventListener('mouseenter', (e) => {
-            const card = e.target.closest('.home-card, .media-card');
+        if (this._hoverHandler) {
+            this.container.removeEventListener('mouseenter', this._hoverHandler, true);
+        }
+
+        const cleanupPreview = () => {
+            this.previewVideo.pause();
+            this.previewVideo.style.display = 'none';
+            if (this._activePosterImg) {
+                this._activePosterImg.style.opacity = '1';
+                this._activePosterImg = null;
+            }
+            if (this.previewVideo.parentNode) {
+                try { this.previewVideo.parentNode.removeChild(this.previewVideo); } catch(err){}
+            }
+        };
+
+        this._hoverHandler = (e) => {
+            const card = e.target.closest('.home-card');
             if (!card) return;
 
-            if (this.hoverTimeout) {
-                clearTimeout(this.hoverTimeout);
-            }
-            this._cleanupPreview();
+            if (this.hoverTimeout) clearTimeout(this.hoverTimeout);
 
             this.hoverTimeout = setTimeout(() => {
-                const mediaId = card.dataset.id || card.dataset.mediaId;
-                const posterImg = card.querySelector('img');
-                if (!mediaId) return;
-                const previewUrl = `/api/media/${mediaId}/preview`;
+                cleanupPreview();
 
-                this.previewVideo = document.createElement('video');
-                this.previewVideo.src = previewUrl;
-                this.previewVideo.muted = true;
-                this.previewVideo.autoplay = true;
-                this.previewVideo.loop = true;
-                this.previewVideo.className = 'card-preview-video';
+                const mediaId = card.dataset.id;
+                const posterContainer = card.querySelector('.card-poster');
+                this._activePosterImg = card.querySelector('img');
+                if (!mediaId || !posterContainer) return;
 
-                // Silently clean up if the file isn't previewable (e.g. HLS-only MKV)
-                this.previewVideo.addEventListener('error', () => {
-                    this._cleanupPreview(card, posterImg);
-                });
-
-                Object.assign(this.previewVideo.style, {
-                    position: 'absolute',
-                    top: '0',
-                    left: '0',
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    borderRadius: '8px',
-                    zIndex: '2',
-                });
-
-                const posterContainer = card.querySelector('.card-poster, .media-card-poster');
-                if (posterContainer) {
-                    posterContainer.style.position = 'relative';
-                    posterContainer.appendChild(this.previewVideo);
+                posterContainer.appendChild(this.previewVideo);
+                
+                const targetUrl = `/api/media/${mediaId}/preview`;
+                if (!this.previewVideo.src.endsWith(targetUrl)) {
+                    this.previewVideo.src = targetUrl;
                 }
-                if (posterImg) posterImg.style.opacity = '0.1';
+                
+                this.previewVideo.style.display = 'block';
+                if (this._activePosterImg) this._activePosterImg.style.opacity = '0.1';
+                
+                this.previewVideo.play().catch(() => {});
+                
+                const mouseLeaveHandler = () => {
+                    cleanupPreview();
+                };
+                
+                card.addEventListener('mouseleave', mouseLeaveHandler, { once: true });
 
-                this.previewVideo.play().catch(() => console.log('Autoplay blocked'));
-
-                card.addEventListener('mouseleave', () => {
-                    this._cleanupPreview(card, posterImg);
-                }, { once: true });
             }, 500);
 
             card.addEventListener('mouseleave', () => {
@@ -542,46 +643,13 @@ export class HomeView {
                     this.hoverTimeout = null;
                 }
             }, { once: true });
-        }, true);
-    }
-
-    _cleanupPreview(card, posterImg) {
-        if (this.hoverTimeout) {
-            clearTimeout(this.hoverTimeout);
-            this.hoverTimeout = null;
-        }
-        if (this.previewVideo) {
-            try {
-                this.previewVideo.pause();
-                this.previewVideo.src = '';
-                this.previewVideo.load();
-                this.previewVideo.remove();
-            } catch (e) { }
-            this.previewVideo = null;
-        }
-
-        // Global safeguard: remove any other playing previews
-        document.querySelectorAll('.card-preview-video').forEach(video => {
-            try {
-                video.pause();
-                video.src = '';
-                video.load();
-                video.remove();
-            } catch (e) { }
-        });
-
-        if (posterImg) {
-            posterImg.style.opacity = '1';
-        } else {
-            document.querySelectorAll('.home-card img, .media-card img').forEach(img => {
-                img.style.opacity = '1';
-            });
-        }
+        };
+        this.container.addEventListener('mouseenter', this._hoverHandler, true);
     }
 
     _attachScrollListeners() {
         this._observer = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting && !this.videosLoading && this.hasMoreVideos) {
+            if (entries[0].isIntersecting && !this.state.videosLoading && this.state.hasMoreVideos && !this._abortController.signal.aborted) {
                 this._loadVideos();
             }
         }, { rootMargin: '400px' });
@@ -591,11 +659,11 @@ export class HomeView {
     }
 
     async _loadVideos() {
-        if (this.videosLoading || !this.hasMoreVideos) return;
-        this.videosLoading = true;
+        if (this.state.videosLoading || !this.state.hasMoreVideos) return;
+        this.state.videosLoading = true;
 
         const grid = document.getElementById('home-videos-grid');
-        if (grid && this.videosPage === 1) {
+        if (grid && this.state.videosPage === 1) {
             grid.innerHTML = `
                 ${Array(10).fill().map(() => `
                     <div class="skeleton-card" style="width: 100%;">
@@ -608,31 +676,30 @@ export class HomeView {
 
         try {
             const res = await api.getLibrary({
-                page: this.videosPage,
+                page: this.state.videosPage,
                 per_page: 48,
                 sort: 'created_at',
                 order: 'desc'
-            });
+            }, { signal: this._abortController.signal });
 
             const videos = res.items || [];
-            if (this.videosPage === 1 && grid) {
-                grid.innerHTML = '';
-            }
+            if (this.state.videosPage === 1 && grid) grid.innerHTML = '';
 
             if (videos.length === 0) {
-                this.hasMoreVideos = false;
-                if (this.videosPage === 1 && grid) {
+                this.state.hasMoreVideos = false;
+                if (this.state.videosPage === 1 && grid) {
                     grid.innerHTML = '<div class="empty-state" style="grid-column: 1/-1;"><p>No videos found.</p></div>';
                 }
-                this.videosLoading = false;
+                this.state.videosLoading = false;
                 return;
             }
 
-            const startIndex = this.videosList.length;
-            this.videosList.push(...videos);
+            const startIndex = this.state.videosList.length;
+            this.state.videosList.push(...videos.map(v => this._normalizeMedia(v)));
 
             const fragment = document.createDocumentFragment();
-            videos.forEach((video, index) => {
+            videos.forEach((rawVideo, index) => {
+                const video = this._normalizeMedia(rawVideo);
                 const globalIndex = startIndex + index;
                 const card = document.createElement('div');
                 card.className = 'home-card';
@@ -641,51 +708,28 @@ export class HomeView {
                 card.style.willChange = 'transform';
                 card.style.width = '100%';
                 card.style.margin = '0';
+                card.innerHTML = this._createCard(video, 'default');
 
-                const title = video.title || video.filename;
-                const dur = video.duration_seconds ? this._formatDuration(video.duration_seconds) : '';
-                const thumb = thumbUrl(video);
-
-                card.innerHTML = `
-                    <div class="card-poster" style="aspect-ratio: 16/9; position: relative;">
-                        <img src="${thumb}" alt="${escapeHtml(title)}" class="media-card-thumb shimmer-bg" loading="lazy" style="opacity:0; transition: opacity 0.3s ease; width:100%; height:100%; object-fit:cover;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                        ${dur ? `<span class="media-badge duration-badge">${dur}</span>` : ''}
-                        <div class="card-hover-info">
-                            <button class="card-play-btn">▶</button>
-                        </div>
-                    </div>
-                    <div class="media-card-info" style="padding-top: 8px;">
-                        <h3 class="media-title" title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
-                        ${video.year ? `<div class="media-meta"><span>${escapeHtml(String(video.year))}</span></div>` : ''}
-                    </div>
-                `;
-
-                card.addEventListener('click', () => {
-                    if (video.adult_only && !isAdultApproved()) {
-                        showAdultAccessDialog();
-                        return;
-                    }
-                    const list = this.videosList.map(item => ({ id: item.id, title: item.title || item.filename, duration_seconds: item.duration_seconds }));
-                    player.play(list, globalIndex);
-                });
-
+                this._attachCardEvents(card, video, this.state.videosList, globalIndex);
                 fragment.appendChild(card);
             });
 
             grid.appendChild(fragment);
 
             if (videos.length < 48) {
-                this.hasMoreVideos = false;
+                this.state.hasMoreVideos = false;
             } else {
-                this.videosPage++;
+                this.state.videosPage++;
             }
         } catch (err) {
-            console.error("Failed to load flat videos grid", err);
-            if (this.videosPage === 1 && grid) {
-                grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;"><p>Error loading videos: ${escapeHtml(err.message)}</p></div>`;
+            if (err.name !== 'AbortError') {
+                console.error("Failed to load flat videos grid", err);
+                if (this.state.videosPage === 1 && grid) {
+                    grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;"><p>Error loading videos: ${escapeHtml(err.message)}</p></div>`;
+                }
             }
         } finally {
-            this.videosLoading = false;
+            this.state.videosLoading = false;
         }
     }
 
@@ -694,75 +738,70 @@ export class HomeView {
         const target = document.getElementById('smart-sections');
         const hero = document.getElementById('hero-banner');
         const vSec = document.getElementById('home-videos-section');
+        const gridTitle = document.getElementById('grid-context-title');
+        const sentinel = document.getElementById('home-videos-sentinel');
+        
         if (!target) return;
 
         if (!q) {
             if (hero) hero.style.display = 'block';
             if (vSec) vSec.style.display = 'block';
-            await this._loadSmartHome();
+            this._renderSidebar();
+            const allLink = document.querySelector('.sidebar-link[data-id="all"]');
+            if (allLink) allLink.click();
+            if (sentinel && this._observer) this._observer.observe(sentinel);
             return;
         }
 
+        if (sentinel && this._observer) this._observer.unobserve(sentinel);
         if (hero) hero.style.display = 'none';
-        if (vSec) vSec.style.display = 'none';
-        target.innerHTML = `
-            <div class="skeleton-grid">
+        if (vSec) vSec.style.display = 'block';
+        if (gridTitle) gridTitle.textContent = `Search Results for "${q}"`;
+        
+        const grid = document.getElementById('home-videos-grid');
+        const searchSentinel = document.getElementById('home-videos-sentinel');
+        if (searchSentinel) searchSentinel.style.display = 'none';
+        
+        if (grid) {
+            grid.innerHTML = `
                 ${Array(8).fill().map(() => `
-                    <div class="skeleton-card">
-                        <div class="skeleton-poster shimmer-bg"></div>
+                    <div class="skeleton-card" style="width: 100%;">
+                        <div class="skeleton-poster shimmer-bg" style="aspect-ratio: 16/9;"></div>
                         <div class="skeleton-title shimmer-bg"></div>
-                        <div class="skeleton-meta shimmer-bg"></div>
                     </div>
                 `).join('')}
-            </div>
-        `;
+            `;
+        }
 
+        this._searchSeq++;
+        const seq = this._searchSeq;
+        
         try {
             const results = await api.getSearch(q);
+            if (seq !== this._searchSeq) return;
             if (!results || results.length === 0) {
-                target.innerHTML = `<div class="empty-state"><p>No results found for "${escapeHtml(q)}"</p></div>`;
+                if (grid) grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;"><p>No results found for "${escapeHtml(q)}"</p></div>`;
                 return;
             }
 
-            target.innerHTML = `
-                <div style="margin-left: 0;">
-                    <div class="section-title">Search Results for "${escapeHtml(q)}"</div>
-                    <div class="yt-grid">
-                        ${results.map((m) => `
-                            <div class="media-card" data-id="${m.id}" data-title="${escapeHtml(m.title)}">
-                                <div class="media-card-poster">
-                                    <img class="media-card-thumb shimmer-bg" src="${thumbUrl(m)}" alt="${escapeHtml(m.title)}" loading="lazy" style="opacity:0; transition: opacity 0.3s ease;" onload="this.style.opacity=1; this.classList.remove('shimmer-bg');" onerror="this.onerror=null; this.src='/static/placeholder.svg'; this.style.opacity=1; this.classList.remove('shimmer-bg');">
-                                    ${m.duration_seconds ? `<span class="media-badge duration-badge">${formatDuration(m.duration_seconds)}</span>` : ''}
-                                    <div class="media-card-actions">
-                                        <button class="btn-icon btn-play">▶</button>
-                                    </div>
-                                </div>
-                                <div class="media-card-info">
-                                    <h3 class="media-title">${escapeHtml(m.title)}</h3>
-                                    <div class="media-meta">
-                                        ${m.duration_seconds ? `<span>${formatDuration(m.duration_seconds)}</span><span class="dot">·</span>` : ''}
-                                        <span>${escapeHtml(m.video_codec?.toUpperCase() || 'VIDEO')}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        `).join('')}
+            if (grid) {
+                grid.innerHTML = '';
+                const fragment = document.createDocumentFragment();
+                const normalizedResults = results.map(r => this._normalizeMedia(r));
+                
+                grid.innerHTML = normalizedResults.map(item => `
+                    <div class="home-card" data-id="${item.id}" style="will-change: transform; width: 100%; margin: 0;">
+                        ${this._createCard(item, 'default')}
                     </div>
-                </div>
-            `;
+                `).join('');
 
-            target.querySelectorAll('.media-card').forEach((card, idx) => {
-                card.addEventListener('click', () => {
-                    const m = results[idx];
-                    if (m && m.adult_only && !isAdultApproved()) {
-                        showAdultAccessDialog();
-                        return;
-                    }
-                    const list = results.map(item => ({ id: item.id, title: item.title, duration_seconds: item.duration_seconds }));
-                    player.play(list, idx);
+                grid.querySelectorAll('.home-card').forEach((card, idx) => {
+                    const item = normalizedResults[idx];
+                    this._attachCardEvents(card, item, normalizedResults, idx);
                 });
-            });
+            }
         } catch (err) {
-            target.innerHTML = `<div class="empty-state"><p>Search error: ${escapeHtml(err.message)}</p></div>`;
+            if (grid) grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;"><p>Search error: ${escapeHtml(err.message)}</p></div>`;
         }
     }
 
@@ -770,7 +809,9 @@ export class HomeView {
         if (!seconds) return '';
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
-        return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+        if (hours) return `${hours}h ${minutes}m`;
+        if (minutes) return `${minutes}m`;
+        return `${Math.floor(seconds)}s`;
     }
 
     _formatTime(seconds) {
@@ -780,6 +821,13 @@ export class HomeView {
     }
 
     destroy() {
+        if (this.hoverTimeout) {
+            clearTimeout(this.hoverTimeout);
+            this.hoverTimeout = null;
+        }
+        if (this._abortController) {
+            this._abortController.abort();
+        }
         if (this._observer) {
             this._observer.disconnect();
             this._observer = null;
@@ -789,5 +837,10 @@ export class HomeView {
             this.previewVideo.remove();
             this.previewVideo = null;
         }
+        if (this._hoverHandler) {
+            this.container.removeEventListener('mouseenter', this._hoverHandler, true);
+            this._hoverHandler = null;
+        }
+        document.removeEventListener('keydown', this._globalKeydownHandler);
     }
 }

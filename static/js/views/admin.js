@@ -3,7 +3,7 @@
  * System metrics, log streams, system fixes, users, webhooks, requests, media management.
  */
 import { api } from '../app.js';
-import { toast, confirm, formatDateTime, escapeHtml } from '../utils.js';
+import { toast, confirm, formatDateTime, escapeHtml, prompt } from '../utils.js';
 
 export class AdminView {
     constructor(container) {
@@ -25,6 +25,7 @@ export class AdminView {
 
             <div class="tabs" id="admin-tabs">
                 <button class="tab active" data-tab="metrics">System & Fixes</button>
+                <button class="tab" data-tab="settings">Settings</button>
                 <button class="tab" data-tab="users">Users</button>
                 <button class="tab" data-tab="media">Media & Site</button>
                 <button class="tab" data-tab="webhooks">Webhooks</button>
@@ -63,6 +64,7 @@ export class AdminView {
 
         switch (tab) {
             case 'metrics': return this._loadMetrics(content);
+            case 'settings': return this._loadSettings(content);
             case 'users': return this._loadUsers(content);
             case 'media': return this._loadMediaManagement(content);
             case 'webhooks': return this._loadWebhooks(content);
@@ -231,6 +233,56 @@ export class AdminView {
         }
     }
 
+    async _loadSettings(target) {
+        try {
+            const res = await api.getSettings();
+            const settings = res.settings || {};
+            target.innerHTML = `
+                <div class="surface mb-md">
+                    <div class="section-title">System Configuration</div>
+                    <p class="text-muted text-sm mb-md">Public and private settings for MediaHub.</p>
+                    
+                    <form id="settings-form" class="form-grid">
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label>Login Background Video URL</label>
+                            <input id="set-login-video" class="input" type="text" value="${escapeHtml(settings.login_video_url || '')}" placeholder="/static/wifey.mp4">
+                            <p class="text-muted text-xs mt-xs">URL of the background video for the login screen. Must be accessible without authentication.</p>
+                        </div>
+                        
+                        <div class="form-group mt-md" style="grid-column: span 2;">
+                            <button type="submit" class="btn btn-accent">Save Settings</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            
+            document.getElementById('settings-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = e.target.querySelector('button[type="submit"]');
+                const originalText = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'Saving...';
+                
+                const updates = {
+                    login_video_url: document.getElementById('set-login-video').value.trim()
+                };
+                
+                try {
+                    await api.request("/api/system/settings", { method: "PUT", json: { settings: updates } });
+                    toast('Settings updated successfully', 'success');
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                }
+            });
+            
+        } catch (err) {
+            target.innerHTML = `<div class="empty-state"><p>${escapeHtml(err.message)}</p></div>`;
+        }
+    }
+
     _metricCard(label, value, pct) {
         const color = pct > 80 ? 'error' : pct > 60 ? 'warning' : 'success';
         return `
@@ -314,10 +366,10 @@ export class AdminView {
 
             target.querySelectorAll('.reset-pw-btn').forEach(btn => {
                 btn.addEventListener('click', async () => {
-                    const pw = prompt(`New password for ${btn.dataset.name}:`);
-                    if (!pw || pw.length < 8) { toast('Password must be 8+ characters', 'error'); return; }
+                    const resetPw = await prompt('Reset Password', `New password for ${btn.dataset.name}:`);
+                    if (!resetPw || resetPw.length < 8) { toast('Password must be 8+ characters', 'error'); return; }
                     try {
-                        await api.resetUserPassword(parseInt(btn.dataset.id), pw);
+                        await api.resetUserPassword(parseInt(btn.dataset.id), resetPw);
                         toast('Password reset completed', 'success');
                     } catch (err) { toast(err.message, 'error'); }
                 });
@@ -576,10 +628,10 @@ export class AdminView {
 
             target.querySelectorAll('.approve-btn').forEach(btn => {
                 btn.addEventListener('click', async () => {
-                    const comment = prompt('Admin comment (optional):');
-                    if (comment === null) return; // Ignore request if prompt was cancelled
+                    const adminComment = await prompt('Approve Request', 'Admin comment (optional):');
+                    if (adminComment === null) return; // Ignore request if prompt was cancelled
                     try {
-                        await api.processRequest(parseInt(btn.dataset.id), 'approved', comment);
+                        await api.processRequest(parseInt(btn.dataset.id), 'approved', adminComment);
                         toast('Request approved successfully', 'success');
                         this._loadRequests(target);
                     } catch (err) { toast(err.message, 'error'); }
@@ -588,10 +640,10 @@ export class AdminView {
 
             target.querySelectorAll('.deny-btn').forEach(btn => {
                 btn.addEventListener('click', async () => {
-                    const comment = prompt('Reason for denial:');
-                    if (!comment) return;
+                    const denyReason = await prompt('Deny Request', 'Reason for denial:');
+                    if (!denyReason) return;
                     try {
-                        await api.processRequest(parseInt(btn.dataset.id), 'denied', comment);
+                        await api.processRequest(parseInt(btn.dataset.id), 'denied', denyReason);
                         toast('Request denied successfully', 'success');
                         this._loadRequests(target);
                     } catch (err) { toast(err.message, 'error'); }

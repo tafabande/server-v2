@@ -13,16 +13,13 @@ from core.media import ffmpeg_available
 from core.models import AuditLog, MediaMetadata, User
 from core.runtime_state import list_active_sessions
 
-
 settings = get_settings()
-
 
 def tail_log_lines(path: Path, limit: int = 100) -> list[str]:
     if not path.exists():
         return []
     lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     return lines[-limit:]
-
 
 def read_transcode_log(limit: int = 100) -> list[dict]:
     entries: list[dict] = []
@@ -32,7 +29,6 @@ def read_transcode_log(limit: int = 100) -> list[dict]:
         except json.JSONDecodeError:
             entries.append({"level": "info", "message": line})
     return entries
-
 
 async def build_dashboard_snapshot(session: AsyncSession) -> dict:
     disk = psutil.disk_usage(str(settings.shared_folder.resolve()))

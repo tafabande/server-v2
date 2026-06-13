@@ -1,4 +1,6 @@
 import jwt
+import uuid
+from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Any, Callable, Annotated
 from fastapi import HTTPException, status, Depends, Request
@@ -22,21 +24,31 @@ from core.models import User
 
 settings = get_settings()
 
+class CurrentUserContext(BaseModel):
+    """Pydantic model carrying effective permissions for the current request."""
+    id: int
+    username: str
+    role: str
+    is_adult: bool
+    preferences: dict
+    bio: str = ""
+    avatar_url: str = ""
+    pin: str | None = None
+    password_hash: str = ""
+    last_login: datetime | None = None
+
 pwd_context = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hash."""
     return pwd_context.verify(plain_password, hashed_password)
-
 
 def get_password_hash(password: str) -> str:
     """Hash a password using bcrypt."""
     return pwd_context.hash(password)
 
 hash_password = get_password_hash
-
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create a new JWT access token."""
@@ -46,10 +58,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
     encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
     return encoded_jwt
-
 
 def decode_token(token: str) -> Optional[dict[str, Any]]:
     """Decode and validate a JWT token."""
@@ -59,12 +70,11 @@ def decode_token(token: str) -> Optional[dict[str, Any]]:
     except jwt.PyJWTError:
         return None
 
-
 async def get_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     token: str | None = Depends(oauth2_scheme),
-) -> User:
+) -> CurrentUserContext:
     """Dependency to get the current authenticated user."""
     if not token:
         token = request.query_params.get("token")
@@ -118,18 +128,42 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Create request-local context for effective permissions
+    ctx = CurrentUserContext(
+        id=user.id,
+        username=user.username,
+        role=user.role,
+        is_adult=user.is_adult,
+        preferences=user.preferences or {},
+        bio=user.bio or "",
+        avatar_url=user.avatar_url or "",
+        pin=user.pin,
+        password_hash=user.password_hash or "",
+        last_login=user.last_login
+    )
+    
     if request.headers.get("x-disable-r18") == "true" or request.query_params.get("disable_r18") == "true":
-        user.is_adult = False
+        ctx.is_adult = False
         
-    return user
+    return ctx
 
+def get_guest_user() -> User:
+    """Returns a default 'Guest' user object."""
+    return User(
+        id=0, # A unique ID for guests, not conflicting with real users
+        username="guest",
+        role="guest",
+        is_adult=False,
+        preferences={} # Ensure preferences exist for guest too
+    )
 
 async def get_optional_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> User:
+) -> CurrentUserContext:
     """
     Dependency that attempts to authenticate via cookie or token.
     If no valid authentication is present, returns a fallback 'Guest' user
@@ -141,21 +175,25 @@ async def get_optional_user(
             user = await get_current_user(request, db, token)
             return user
     except Exception:
-        pass
-        
-    # Fallback to Guest
-    guest = User(
-        id=0,
-        username="guest",
-        role="guest",
-        is_adult=False
+        pass # Fallback to guest below if get_current_user fails
+            
+    guest = get_guest_user()
+    return CurrentUserContext(
+        id=guest.id,
+        username=guest.username,
+        role=guest.role,
+        is_adult=guest.is_adult,
+        preferences=guest.preferences,
+        bio="",
+        avatar_url="",
+        pin=None,
+        password_hash="",
+        last_login=None
     )
-    return guest
-
 
 def require_roles(*roles: str) -> Callable:
     """Dependency factory to require specific roles."""
-    def role_dependency(user: Annotated[User, Depends(get_current_user)]) -> User:
+    def role_dependency(user: Annotated[CurrentUserContext, Depends(get_current_user)]) -> CurrentUserContext:
         if user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

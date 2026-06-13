@@ -1,6 +1,6 @@
 export function createElement(
   tag,
-  { className = "", text = undefined, attrs = {}, dataset = {}, children = [] } = {},
+  { className = "", text = undefined, attrs = {}, dataset = {}, style = null, children = [] } = {},
 ) {
   const element = document.createElement(tag);
   if (className) {
@@ -10,9 +10,15 @@ export function createElement(
     element.textContent = text;
   }
 
+  if (style && typeof style === 'object') {
+    Object.assign(element.style, style);
+  }
+
   for (const [key, value] of Object.entries(attrs)) {
-    if (value === undefined || value === null) continue;
-    element.setAttribute(key, String(value));
+    if (value == null) continue; // Catches both null and undefined
+    // If it's a boolean, we can set the attribute properly or omit it
+    if (value === true) element.setAttribute(key, ""); 
+    else if (value !== false) element.setAttribute(key, String(value));
   }
 
   for (const [key, value] of Object.entries(dataset)) {

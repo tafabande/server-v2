@@ -88,7 +88,7 @@ def generate_pki(output_dir="certs", common_name="MediaHub Local CA"):
 if __name__ == "__main__":
     # Check if cryptography is installed
     try:
-        import cryptography
+        pass
     except ImportError:
         print("❌ Error: 'cryptography' library not found. Run 'pip install cryptography' first.")
         exit(1)

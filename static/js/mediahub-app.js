@@ -101,7 +101,7 @@ export class MediaHubApp {
   }
 
   handleCriticalError(err) {
-    const loader = document.querySelector("#boot-loader");
+    const loader = this.elements ? this.elements.bootLoader : document.querySelector("#boot-loader");
     if (loader) {
       const content = createElement("div", {
         className: "loader-content error",
@@ -122,6 +122,7 @@ export class MediaHubApp {
 
   collectElements() {
     return {
+      bootLoader: document.querySelector("#boot-loader"),
       authModal: document.querySelector("#auth-modal"),
       appShell: document.querySelector(".app-shell"),
       authError: document.querySelector("#auth-error"),
@@ -229,7 +230,7 @@ export class MediaHubApp {
     const token = window.localStorage.getItem("mediahub_token");
     if (!token) {
       this.elements.authModal.classList.add("active");
-      document.querySelector("#boot-loader").style.display = "none";
+      if (this.elements.bootLoader) this.elements.bootLoader.style.display = "none";
       this.elements.appShell.style.opacity = "1";
       this.elements.appShell.style.pointerEvents = "auto";
       return;
@@ -250,6 +251,9 @@ export class MediaHubApp {
   }
 
   async hydrateSession() {
+    const token = Symbol();
+    this._syncToken = token;
+
     this.elements.authModal.classList.remove("active");
     this.elements.authError.textContent = "";
     this.updatePermissions();
@@ -258,11 +262,13 @@ export class MediaHubApp {
 
     await Promise.all([this.loadSettings(), this.synchronizeWorkspace()]);
 
+    if (this._syncToken !== token) return; // Cancel token guard
+
     this.ui.setActivity(`Signed in as ${this.state.user.username}. Ready to browse.`);
     this.ui.setBanner("Library ready.", "success");
 
     // Reveal the app shell
-    document.querySelector("#boot-loader").style.display = "none";
+    if (this.elements.bootLoader) this.elements.bootLoader.style.display = "none";
     this.elements.appShell.style.opacity = "1";
     this.elements.appShell.style.pointerEvents = "auto";
   }
@@ -323,10 +329,12 @@ export class MediaHubApp {
     this.elements.statLocked.textContent = String(summary.lockedCount);
 
     const highlightCards = [];
+    const bleedStyles = "box-shadow: none; background: transparent; border: none;";
     if (!summary.itemCount) {
       highlightCards.push(
         createElement("article", {
           className: "highlight-card",
+          attrs: { style: bleedStyles },
           children: [
             createElement("span", { className: "highlight-label", text: "Library empty" }),
             createElement("strong", { className: "highlight-value", text: "Upload media or run a rescan" }),
@@ -337,6 +345,7 @@ export class MediaHubApp {
       highlightCards.push(
         createElement("article", {
           className: "highlight-card",
+          attrs: { style: bleedStyles },
           children: [
             createElement("span", { className: "highlight-label", text: "Direct play" }),
             createElement("strong", { className: "highlight-value", text: `${summary.directCount} titles` }),
@@ -344,6 +353,7 @@ export class MediaHubApp {
         }),
         createElement("article", {
           className: "highlight-card",
+          attrs: { style: bleedStyles },
           children: [
             createElement("span", { className: "highlight-label", text: "Adaptive HLS" }),
             createElement("strong", { className: "highlight-value", text: `${summary.hlsCount} titles` }),
@@ -351,6 +361,7 @@ export class MediaHubApp {
         }),
         createElement("article", {
           className: "highlight-card",
+          attrs: { style: bleedStyles },
           children: [
             createElement("span", {
               className: "highlight-label",
@@ -366,6 +377,7 @@ export class MediaHubApp {
         }),
         createElement("article", {
           className: "highlight-card",
+          attrs: { style: bleedStyles },
           children: [
             createElement("span", { className: "highlight-label", text: "Protected content" }),
             createElement("strong", {
@@ -605,6 +617,10 @@ export class MediaHubApp {
       return;
     }
 
+    if (state === "connected") {
+      this.synchronizeWorkspace(); // Force refresh to ensure data integrity
+    }
+
     const activityMap = new Map([
       ["connected", "Live sync connected."],
       ["connecting", "Connecting live sync..."],
@@ -637,6 +653,7 @@ export class MediaHubApp {
   }
 
   clearSession({ message = "Disconnected.", tone = "neutral" } = {}) {
+    this._syncToken = null;
     this.playerManager.close();
     this.state.token = "";
     this.state.user = null;

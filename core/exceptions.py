@@ -1,4 +1,4 @@
-from fastapi import HTTPException, status
+from fastapi import status
 
 class MediaHubError(Exception):
     """Base exception for all MediaHub errors."""

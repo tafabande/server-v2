@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,9 +8,7 @@ from core.schemas import AccessRequestAction, AccessRequestCreate, AccessRequest
 from core.security import get_current_user, require_roles
 from core.events import socket_manager
 
-
 router = APIRouter()
-
 
 @router.get("", response_model=list[AccessRequestRead])
 async def list_requests(
@@ -40,7 +38,6 @@ async def list_requests(
         requests.append(data)
     
     return requests
-
 
 @router.post("", response_model=MessageResponse)
 async def create_request(
@@ -82,7 +79,6 @@ async def create_request(
     })
 
     return MessageResponse(message="Request submitted successfully.")
-
 
 @router.post("/{request_id}/action", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "super-admin"))])
 async def take_action(

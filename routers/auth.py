@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from config import get_settings
 from core.database import get_db
 from core.models import User
 from core.security import (
+    CurrentUserContext,
     create_access_token,
     decode_token,
     get_current_user,
@@ -20,6 +21,21 @@ from core.security import (
 settings = get_settings()
 router = APIRouter()
 
+@router.get("/public-users")
+async def get_public_users(
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """Return a public list of users for the login selector grid."""
+    result = await db.execute(select(User.username, User.avatar_url).where(User.role != "guest"))
+    users = result.all()
+    
+    return [
+        {
+            "username": u.username,
+            "avatar_url": u.avatar_url or f"https://api.dicebear.com/7.x/initials/svg?seed={u.username}"
+        }
+        for u in users
+    ]
 
 @router.post("/token")
 async def login_for_access_token(
@@ -70,7 +86,6 @@ async def login_for_access_token(
         }
     }
 
-
 # Alias: POST /api/auth/login → same as /token
 @router.post("/login")
 async def login(
@@ -80,7 +95,6 @@ async def login(
 ):
     """Login endpoint (alias for /token). Returns JWT + user."""
     return await login_for_access_token(response, form_data, db)
-
 
 from core.schemas import PinUnlockRequest
 
@@ -115,9 +129,8 @@ async def unlock_session(
     
     return {"access_token": access_token}
 
-
 @router.get("/me")
-async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
+async def read_users_me(current_user: Annotated[CurrentUserContext, Depends(get_current_user)]):
     """Get the current authenticated user's profile."""
     return {
         "id": current_user.id,
@@ -127,15 +140,13 @@ async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]
         "avatar_url": current_user.avatar_url,
         "preferences": current_user.preferences,
         "last_login": current_user.last_login,
-        "created_at": current_user.created_at,
         "is_adult": current_user.is_adult,
         "has_pin": current_user.pin is not None,
     }
 
-
 @router.put("/me")
 async def update_profile(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[CurrentUserContext, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     bio: str | None = None,
     avatar_url: str | None = None,
@@ -143,25 +154,25 @@ async def update_profile(
     language: str | None = None,
 ):
     """Update current user's profile (bio, prefs)."""
+    db_user = await db.get(User, current_user.id)
     if bio is not None:
-        current_user.bio = bio
+        db_user.bio = bio
     if avatar_url is not None:
-        current_user.avatar_url = avatar_url
+        db_user.avatar_url = avatar_url
     
-    prefs = dict(current_user.preferences or {})
+    prefs = dict(db_user.preferences or {})
     if theme is not None:
         prefs["theme"] = theme
     if language is not None:
         prefs["language"] = language
-    current_user.preferences = prefs
+    db_user.preferences = prefs
     
     await db.commit()
     return {"message": "Profile updated."}
 
-
 @router.post("/change-password")
 async def change_password(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[CurrentUserContext, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     current_password: str = "",
     new_password: str = "",
@@ -173,11 +184,11 @@ async def change_password(
     if len(new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
     
+    db_user = await db.get(User, current_user.id)
     from core.security import get_password_hash
-    current_user.password_hash = get_password_hash(new_password)
+    db_user.password_hash = get_password_hash(new_password)
     await db.commit()
     return {"message": "Password changed successfully."}
-
 
 @router.post("/logout")
 async def logout(

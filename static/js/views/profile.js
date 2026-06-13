@@ -1,6 +1,3 @@
-/**
- * MediaHub — Profile View
- */
 import appInstance, { api } from '../app.js';
 import { toast, formatDate, persistNsfwPreference } from '../utils.js';
 
@@ -34,14 +31,14 @@ export class ProfileView {
                 if (latestAdultReq.status === 'pending') {
                     adultReqSection = `
                         <div class="status-banner status-banner--warning">
-                            <strong style="color: var(--warning);">18+ request pending</strong>
+                            <strong style="color: var(--warning);">[PENDING] 18+ Access Request</strong>
                             <div class="text-muted text-xs">Submitted ${formatDate(latestAdultReq.created_at)}</div>
                         </div>
                     `;
                 } else if (latestAdultReq.status === 'denied') {
                     adultReqSection = `
                         <div class="status-banner status-banner--danger">
-                            <strong style="color: var(--error);">18+ request denied</strong>
+                            <strong style="color: var(--error);">[DENIED] 18+ Access Request</strong>
                             <div class="text-muted text-xs mb-sm">${formatDate(latestAdultReq.created_at)} — ${latestAdultReq.admin_comment || 'No reason provided.'}</div>
                             <button type="button" id="req-adult-btn" class="btn btn-sm btn-accent">Re-request 18+</button>
                         </div>
@@ -59,12 +56,13 @@ export class ProfileView {
         const sfwOn = user.preferences?.nsfw !== true;
 
         this.container.innerHTML = `
-            <h1 class="page-title">Profile</h1>
-            <p class="page-subtitle">Account & preferences</p>
+            <h1 class="page-title">Profile: ${user.username}</h1>
+            <p class="page-subtitle mb-lg">Manage your account and preferences</p>
 
             <div class="profile-grid">
+                <!-- Column 1: Identity & Bio -->
                 <div>
-                    <div class="surface-bleed mb-md">
+                    <div class="profile-section mb-md">
                         <div class="profile-header">
                             <div class="avatar">${user.avatar_url ? `<img src="${user.avatar_url}" alt="">` : initial}</div>
                             <div>
@@ -86,15 +84,25 @@ export class ProfileView {
                                 <textarea id="prof-bio" class="textarea" placeholder="A short bio...">${user.bio || ''}</textarea>
                             </div>
                             <button type="submit" class="btn btn-accent btn-sm">Save</button>
-                            ${adultReqSection}
                         </form>
                     </div>
 
-                    <div class="surface-bleed">
-                        <div class="section-title">Password</div>
-                        <form id="password-form">
+                    <div class="profile-section">
+                        <div class="section-title">Account</div>
+                        <p class="text-muted text-sm" style="margin-bottom:12px">
+                            ID ${user.id} · ${user.role}
+                        </p>
+                        <button id="logout-profile" class="btn btn-danger btn-sm" style="width:100%">Logout</button>
+                    </div>
+                </div>
+
+                <!-- Column 2: Settings & Security -->
+                <div>
+                    <div class="profile-section mb-md">
+                        <div class="section-title">Security</div>
+                        <form id="password-form" class="mb-md">
                             <div class="form-group">
-                                <label>Current</label>
+                                <label>Current Password</label>
                                 <input id="pw-current" class="input" type="password" required>
                             </div>
                             <div class="form-row">
@@ -110,10 +118,10 @@ export class ProfileView {
                             <p id="pw-error" class="text-error" hidden></p>
                             <button type="submit" class="btn btn-sm">Update password</button>
                         </form>
-                    </div>
-
-                    <div class="surface-bleed" style="margin-top: 16px;">
-                        <div class="section-title">Folder PIN</div>
+                        
+                        <div style="border-top: 1px solid var(--border); padding-top: 16px; margin-top: 16px;"></div>
+                        
+                        <h4 style="margin-bottom: 4px; font-size: 0.95rem;">Folder PIN</h4>
                         <p class="text-muted text-xs mb-sm">Unlock PIN-protected folders without the admin PIN.</p>
                         <form id="pin-form">
                             <div class="form-group">
@@ -126,10 +134,8 @@ export class ProfileView {
                             </div>
                         </form>
                     </div>
-                </div>
 
-                <div>
-                    <div class="surface-bleed mb-md">
+                    <div class="profile-section mb-md">
                         <div class="section-title">Preferences</div>
                         <div class="pref-row">
                             <div>
@@ -143,8 +149,8 @@ export class ProfileView {
                         ${canToggleSfw ? `
                         <div class="pref-row">
                             <div>
-                                <span class="pref-label">SFW mode</span>
-                                <span class="pref-hint text-muted text-xs">Hide 18+ content</span>
+                                <span class="pref-label">Hide adult content</span>
+                                <span class="pref-hint text-muted text-xs">Filter 18+ videos from library and home</span>
                             </div>
                             <label class="toggle-switch">
                                 <input type="checkbox" id="pref-sfw" ${sfwOn ? 'checked' : ''}>
@@ -154,43 +160,39 @@ export class ProfileView {
                         ` : ''}
                     </div>
 
-                    <div class="surface-bleed mb-md">
-                        <div class="section-title">Requests</div>
-                        ${requests.length === 0 ? `
-                            <p class="text-muted text-sm">No requests yet.</p>
-                        ` : `
-                            <div class="flex flex-column" style="max-height: 220px; overflow-y: auto;">
-                                ${requests.map(r => {
-            let statusBadge = '';
-            if (r.status === 'approved') statusBadge = '<span class="badge badge-success">Approved</span>';
-            else if (r.status === 'denied') statusBadge = '<span class="badge badge-error">Denied</span>';
-            else statusBadge = '<span class="badge badge-warning">Pending</span>';
+                    <div class="profile-section">
+                        <div class="section-title">Content Access & Activity</div>
+                        ${adultReqSection}
+                        
+                        <div style="margin-top: 16px;">
+                            ${requests.length === 0 ? `
+                                <p class="text-muted text-sm mt-md">No system requests yet.</p>
+                            ` : `
+                                <div class="flex flex-column mt-md" style="max-height: 220px; overflow-y: auto;">
+                                    ${requests.map(r => {
+                let statusLabel = '[PENDING]';
+                let statusColor = 'var(--warning)';
+                if (r.status === 'approved') { statusLabel = '[APPROVED]'; statusColor = 'var(--success)'; }
+                else if (r.status === 'denied') { statusLabel = '[DENIED]'; statusColor = 'var(--error)'; }
 
-            const title = r.request_type === 'adult_elevation'
-                ? '18+ access'
-                : `Folder: ${r.target_path ? r.target_path.split('/').pop() : 'unknown'}`;
+                const title = r.request_type === 'adult_elevation'
+                    ? '18+ Access Request'
+                    : `Folder Access: /${r.target_path ? r.target_path.split('/').pop() : 'unknown'}`;
 
-            return `
-                                    <div class="request-card">
-                                        <div class="flex-between mb-xs">
-                                            <strong class="text-sm">${title}</strong>
-                                            ${statusBadge}
+                return `
+                                        <div class="request-card" style="border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">
+                                            <div class="flex-between mb-xs">
+                                                <strong class="text-sm">${title}</strong>
+                                                <span style="color: ${statusColor}; font-size: 0.75rem; font-family: monospace;">${statusLabel}</span>
+                                            </div>
+                                            <div class="text-muted text-xs">${formatDate(r.created_at)}</div>
+                                            ${r.admin_comment ? `<div class="text-muted text-xs" style="margin-top:4px; font-style:italic;">> ${r.admin_comment}</div>` : ''}
                                         </div>
-                                        <div class="text-muted text-xs">${formatDate(r.created_at)}</div>
-                                        ${r.admin_comment ? `<div class="text-muted text-xs" style="margin-top:4px; font-style:italic;">${r.admin_comment}</div>` : ''}
-                                    </div>
-                                `;
-        }).join('')}
-                            </div>
-                        `}
-                    </div>
-
-                    <div class="surface-bleed">
-                        <div class="section-title">Account</div>
-                        <p class="text-muted text-sm" style="margin-bottom:12px">
-                            ID ${user.id} · ${user.role}
-                        </p>
-                        <button id="logout-profile" class="btn btn-danger btn-sm" style="width:100%">Logout</button>
+                                    `;
+            }).join('')}
+                                </div>
+                            `}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -226,46 +228,59 @@ export class ProfileView {
         document.getElementById('pref-sfw')?.addEventListener('change', async (e) => {
             const sfwOn = e.target.checked;
             const nextNsfw = !sfwOn;
-            console.log(`[ProfileView] SFW toggle changed. SFW mode: ${sfwOn}, Target NSFW: ${nextNsfw}`);
             try {
                 const updatedUser = await persistNsfwPreference(nextNsfw);
-                console.log(`[ProfileView] Successfully persisted NSFW preference: ${nextNsfw}`);
                 const app = appInstance;
                 if (app) {
                     app.store.set({ r18Enabled: nextNsfw, user: updatedUser });
                     app.updateUI();
-                    console.log(`[ProfileView] App UI updated. New state r18Enabled: ${nextNsfw}`);
                     await app.handleNavigation();
                 }
                 toast(sfwOn ? 'SFW mode on' : 'SFW mode off', 'success');
             } catch (err) {
-                console.error(`[ProfileView] Failed to update SFW preference:`, err);
                 e.target.checked = !sfwOn;
                 toast(err.message || 'Failed to update preference', 'error');
             }
         });
 
-        document.getElementById('req-adult-btn')?.addEventListener('click', async () => {
+        document.getElementById('req-adult-btn')?.addEventListener('click', async (e) => {
+            const btn = e.target;
+            const originalText = btn.textContent;
+            
             const { confirm } = await import('../utils.js');
             const yes = await confirm('Request 18+ Access', 'Request elevation to 18+ status?');
             if (!yes) return;
+            
+            btn.disabled = true;
+            btn.textContent = 'Submitting...';
+            
             try {
                 await api.submitRequest('adult_elevation');
                 toast('Request submitted', 'success');
                 this.render();
             } catch (err) {
                 toast(err.message, 'error');
+                btn.disabled = false;
+                btn.textContent = originalText;
             }
         });
     }
 
     async _updateProfile(e) {
         e.preventDefault();
+        const btn = e.target.querySelector('button[type="submit"]');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+        
         try {
             await api.updateProfile({ bio: document.getElementById('prof-bio').value });
             toast('Profile updated', 'success');
         } catch (err) {
             toast(err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     }
 
@@ -284,6 +299,11 @@ export class ProfileView {
             return;
         }
 
+        const btn = e.target.querySelector('button[type="submit"]');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Updating...';
+
         try {
             await api.changePassword(current, newPw);
             toast('Password changed', 'success');
@@ -291,6 +311,9 @@ export class ProfileView {
         } catch (err) {
             pwErr.textContent = err.message;
             pwErr.hidden = false;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     }
 
@@ -304,6 +327,11 @@ export class ProfileView {
             return;
         }
 
+        const btn = e.target.querySelector('button[type="submit"]');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+
         try {
             await api.updateProfile({ pin });
             toast('PIN updated.', 'success');
@@ -311,13 +339,22 @@ export class ProfileView {
             this.render();
         } catch (err) {
             toast(err.message || 'Failed to update PIN', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     }
 
     async _clearPin() {
+        const btn = document.getElementById('clear-pin-btn');
+        const originalText = btn.textContent;
+        
         const { confirm } = await import('../utils.js');
         const yes = await confirm('Remove PIN', 'Remove your custom unlock PIN?');
         if (!yes) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Removing...';
 
         try {
             await api.updateProfile({ pin: "" });
@@ -325,6 +362,8 @@ export class ProfileView {
             this.render();
         } catch (err) {
             toast(err.message || 'Failed to clear PIN', 'error');
+            btn.disabled = false;
+            btn.textContent = originalText;
         }
     }
 

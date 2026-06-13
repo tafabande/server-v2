@@ -14,11 +14,11 @@ from core.schemas import (
     UserCreateRequest,
     UserManageRead,
     UserUpdateRequest,
+    PreferencesUpdateRequest,
 )
-from core.security import get_current_user, get_password_hash, require_roles, verify_password
+from core.security import CurrentUserContext, get_current_user, get_password_hash, require_roles, verify_password
 
 router = APIRouter()
-
 
 @router.get("", response_model=list[UserManageRead])
 async def list_users(
@@ -28,7 +28,6 @@ async def list_users(
     """List all users (admin only)."""
     result = await session.execute(select(User).order_by(User.created_at))
     return [UserManageRead.model_validate(u) for u in result.scalars()]
-
 
 @router.post("", response_model=UserManageRead)
 async def create_user(
@@ -53,7 +52,6 @@ async def create_user(
     await session.commit()
     await session.refresh(user)
     return UserManageRead.model_validate(user)
-
 
 @router.put("/{user_id}", response_model=UserManageRead)
 async def update_user(
@@ -82,7 +80,6 @@ async def update_user(
     await session.refresh(user)
     return UserManageRead.model_validate(user)
 
-
 @router.delete("/{user_id}", response_model=MessageResponse)
 async def delete_user(
     user_id: int,
@@ -101,7 +98,6 @@ async def delete_user(
     await session.commit()
     return MessageResponse(message=f"User '{user.username}' deleted.")
 
-
 @router.post("/{user_id}/reset-password", response_model=MessageResponse)
 async def reset_user_password(
     user_id: int,
@@ -118,50 +114,66 @@ async def reset_user_password(
     await session.commit()
     return MessageResponse(message=f"Password reset for '{user.username}'.")
 
-
 @router.put("/me/password", response_model=MessageResponse)
 async def change_own_password(
     payload: PasswordChangeRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[CurrentUserContext, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Change your own password."""
     if not verify_password(payload.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
 
-    current_user.password_hash = get_password_hash(payload.new_password)
+    db_user = await session.get(User, current_user.id)
+    db_user.password_hash = get_password_hash(payload.new_password)
     await session.commit()
     return MessageResponse(message="Password changed successfully.")
-
 
 @router.put("/me/profile", response_model=MessageResponse)
 async def update_own_profile(
     payload: ProfileUpdateRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[CurrentUserContext, Depends(get_current_user)],
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     """Update your own profile (bio, avatar, theme, PIN)."""
+    db_user = await session.get(User, current_user.id)
+    
     if payload.bio:
-        current_user.bio = payload.bio
+        db_user.bio = payload.bio
     if payload.avatar_url:
-        current_user.avatar_url = payload.avatar_url
+        db_user.avatar_url = payload.avatar_url
 
-    prefs = dict(current_user.preferences or {})
+    prefs = dict(db_user.preferences or {})
     if payload.theme:
         prefs["theme"] = payload.theme
     if payload.language:
         prefs["language"] = payload.language
     if payload.preferences is not None:
         prefs.update(payload.preferences)
-    current_user.preferences = prefs
+    db_user.preferences = prefs
 
     if payload.pin is not None:
         if payload.pin == "":
-            current_user.pin = None
+            db_user.pin = None
         else:
             if len(payload.pin) < 4 or len(payload.pin) > 12:
                 raise HTTPException(status_code=400, detail="PIN must be between 4 and 12 characters.")
-            current_user.pin = get_password_hash(payload.pin)
+            db_user.pin = get_password_hash(payload.pin)
 
     await session.commit()
     return MessageResponse(message="Profile updated.")
+
+@router.post("/me/preferences", response_model=MessageResponse)
+async def update_own_preferences(
+    payload: PreferencesUpdateRequest,
+    current_user: Annotated[CurrentUserContext, Depends(get_current_user)],
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Explicitly update user preferences."""
+    db_user = await session.get(User, current_user.id)
+    prefs = dict(db_user.preferences or {})
+    prefs.update(payload.preferences)
+    db_user.preferences = prefs
+    await session.commit()
+    return MessageResponse(message="Preferences updated.")
+
