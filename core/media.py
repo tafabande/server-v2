@@ -956,10 +956,13 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
         indexed += 1
         _scan_state["files_scanned"] = indexed
 
-        # Progressive commit to allow fast loadup of UI during heavy scans
-        if indexed % 50 == 0:
+        # Progressive commit to allow fast loadup of UI and real-time updates during heavy scans
+        if indexed % 5 == 0:
             await session.commit()
+            from core.events import broadcast_library_updated
+            await broadcast_library_updated(indexed)
             await asyncio.sleep(0.01) # Yield to event loop so API can serve items
+
 
     result = await session.execute(select(MediaMetadata))
     for media in result.scalars():

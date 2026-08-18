@@ -96,14 +96,18 @@ async def batch_upload(
         try:
             destination = await save_upload(path, upload_file)
             uploaded_count += 1
+            if uploaded_count % 3 == 0:
+                await broadcast_library_updated(uploaded_count)
         except Exception as e:
             logger.error("Error saving batch upload file '%s': %s", filename, e)
             skipped_count += 1
 
     if uploaded_count > 0:
         await refresh_library_view(session)
+        await broadcast_library_updated(uploaded_count)
         await log_audit(session, current_user.id, "batch_upload", relative_shared_path(target_dir), {"count": uploaded_count})
         logger.info("Admin %s batch uploaded %d files to '%s'", current_user.username, uploaded_count, relative_shared_path(target_dir))
+
 
     return {
         "status": "success",

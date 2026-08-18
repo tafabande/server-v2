@@ -53,14 +53,58 @@ export interface SystemFolderApi {
   size: string
 }
 
+export type RealtimeUpdateCallback = (data: any) => void
+
 class ApiClient {
   private token: string | null = null
+  private listeners: Set<RealtimeUpdateCallback> = new Set()
+  private ws: WebSocket | null = null
 
   constructor() {
     try {
       this.token = localStorage.getItem('mediahub_token')
     } catch {}
   }
+
+  subscribeToUpdates(callback: RealtimeUpdateCallback): () => void {
+    this.listeners.add(callback)
+    this.ensureWebSocket()
+    return () => {
+      this.listeners.delete(callback)
+    }
+  }
+
+  private ensureWebSocket() {
+    if (typeof window === 'undefined') return
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return
+    }
+
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsUrl = `${protocol}//${window.location.host}/api/system/ws`
+      this.ws = new WebSocket(wsUrl)
+
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'ping') return
+          this.listeners.forEach((cb) => cb(data))
+        } catch {}
+      }
+
+      this.ws.onclose = () => {
+        setTimeout(() => this.ensureWebSocket(), 3000)
+      }
+
+      this.ws.onerror = () => {
+        try { this.ws?.close() } catch {}
+      }
+    } catch (e) {
+      console.warn('WebSocket connection error:', e)
+    }
+  }
+
 
   setToken(token: string | null) {
     this.token = token

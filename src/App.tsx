@@ -484,18 +484,32 @@ function HomeView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) => 
 
   useEffect(() => {
     let active = true
-    Promise.all([
-      api.getContinueWatching(),
-      api.getRecentlyAdded(),
-    ]).then(([cont, rec]) => {
-      if (active) {
-        setContinueItems(cont)
-        setRecentItems(rec)
-        setLoading(false)
+    const loadData = () => {
+      Promise.all([
+        api.getContinueWatching(),
+        api.getRecentlyAdded(),
+      ]).then(([cont, rec]) => {
+        if (active) {
+          setContinueItems(cont)
+          setRecentItems(rec)
+          setLoading(false)
+        }
+      })
+    }
+
+    loadData()
+    const unsubscribe = api.subscribeToUpdates(data => {
+      if (data.type === 'library-updated' || data.type === 'media-added') {
+        loadData()
       }
     })
-    return () => { active = false }
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
   }, [])
+
 
   const heroItem = recentItems[0] || continueItems[0]
 
@@ -614,15 +628,28 @@ function LibraryView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) 
 
   useEffect(() => {
     let active = true
-    setLoading(true)
-    api.getLibrary({ q: search }).then(data => {
-      if (active) {
-        setItems(data)
-        setLoading(false)
+    const fetchLibrary = () => {
+      api.getLibrary({ q: search }).then(data => {
+        if (active) {
+          setItems(data)
+          setLoading(false)
+        }
+      })
+    }
+
+    fetchLibrary()
+    const unsubscribe = api.subscribeToUpdates(data => {
+      if (data.type === 'library-updated' || data.type === 'media-added') {
+        fetchLibrary()
       }
     })
-    return () => { active = false }
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
   }, [search])
+
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden anim-view">
