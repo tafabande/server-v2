@@ -78,30 +78,35 @@ async def library(
                 MediaMetadata.width.isnot(None),
                 MediaMetadata.height > MediaMetadata.width
             ))
-        elif t == "movies":
-            stmt = stmt.where(and_(
-                MediaMetadata.duration_seconds > 2400,
-                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+        elif t in {"movies", "movie"}:
+            stmt = stmt.where(or_(
+                func.lower(MediaMetadata.category).in_(["movie", "movies"]),
+                MediaMetadata.relative_path.ilike("%movie%"),
+                MediaMetadata.duration_seconds > 2400
             ))
-        elif t == "series":
-            stmt = stmt.where(and_(
-                MediaMetadata.duration_seconds > 900,
-                MediaMetadata.duration_seconds <= 2400,
-                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
+        elif t in {"series", "tv", "shows"}:
+            stmt = stmt.where(or_(
+                func.lower(MediaMetadata.category).in_(["series", "tv", "tv shows", "show", "shows"]),
+                MediaMetadata.relative_path.ilike("%series%"),
+                MediaMetadata.relative_path.ilike("%tv%"),
+                MediaMetadata.relative_path.ilike("%season%"),
+                MediaMetadata.title.ilike("%S__E__%"),
+                and_(MediaMetadata.duration_seconds > 600, MediaMetadata.duration_seconds <= 3600)
+            ))
+        elif t in {"user_videos", "videos"}:
+            stmt = stmt.where(or_(
+                func.lower(MediaMetadata.category).in_(["user videos", "videos"]),
+                MediaMetadata.relative_path.ilike("%user videos%"),
+                MediaMetadata.relative_path.ilike("%videos%")
             ))
         elif t == "movies_series":
             stmt = stmt.where(and_(
                 MediaMetadata.duration_seconds > 900,
                 or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
             ))
-        elif t == "videos" or t == "normal":
-            stmt = stmt.where(and_(
-                MediaMetadata.duration_seconds >= 60,
-                MediaMetadata.duration_seconds <= 900,
-                or_(MediaMetadata.width >= MediaMetadata.height, MediaMetadata.height.is_(None))
-            ))
         else:
             stmt = stmt.where(MediaMetadata.container == t)
+
     if category:
         cat_clean = category.strip().lower()
         if cat_clean in {"movie", "movies"}:

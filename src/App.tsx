@@ -652,7 +652,16 @@ function LibraryView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) 
     }
   }, [search, selectedCategory])
 
-  // Group media items by normalized category/folder name
+  // Helper to extract season and episode numbers (e.g. S01E05 -> [1, 5])
+  const getEpisodeNumbers = (title: string): [number, number] => {
+    const match = title.match(/S(\d+)E(\d+)/i) || title.match(/(\d+)x(\d+)/i)
+    if (match) return [parseInt(match[1], 10), parseInt(match[2], 10)]
+    const epMatch = title.match(/E(\d+)/i) || title.match(/Ep\s*(\d+)/i) || title.match(/Episode\s*(\d+)/i)
+    if (epMatch) return [1, parseInt(epMatch[1], 10)]
+    return [999, 999]
+  }
+
+  // Group media items by normalized category/folder name & sort numerically
   const groupedFolders = items.reduce<Record<string, MediaApiItem[]>>((acc, item) => {
     let cat = (item.genre || item.category || 'General').trim()
     const catLower = cat.toLowerCase()
@@ -664,6 +673,18 @@ function LibraryView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) 
     acc[cat].push(item)
     return acc
   }, {})
+
+  // Sort items inside each folder group by Season & Episode number
+  Object.keys(groupedFolders).forEach(folder => {
+    groupedFolders[folder].sort((a, b) => {
+      const [sA, eA] = getEpisodeNumbers(a.title)
+      const [sB, eB] = getEpisodeNumbers(b.title)
+      if (sA !== sB) return sA - sB
+      if (eA !== eB) return eA - eB
+      return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' })
+    })
+  })
+
 
   const categoriesList = ['all', 'movies', 'series', 'user_videos']
 

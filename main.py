@@ -157,7 +157,9 @@ async def add_csp_header(request: Request, call_next):
             "default-src 'self'",
             "script-src 'self'",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",        # unsafe-inline & Google Fonts
+            "style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com",   # explicit element style directive
             "font-src 'self' data: https://fonts.gstatic.com",
+
 
             "img-src 'self' data: blob: https://api.dicebear.com",  # dicebear for fallback avatars
             "media-src 'self' blob:",                    # blob: required for HLS.js segments
