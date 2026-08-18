@@ -81,6 +81,15 @@ def get_shortcut_mappings() -> list[tuple[Path, Path]]:
 def relative_shared_path(path: Path) -> str:
     path_resolved = path.resolve()
     base_resolved = settings.shared_folder.resolve()
+    user_videos_dir = (Path.home() / "Videos").resolve()
+
+    if user_videos_dir.exists():
+        try:
+            rel = path_resolved.relative_to(user_videos_dir).as_posix()
+            return f"User Videos/{rel}" if rel != "." else "User Videos"
+        except ValueError:
+            pass
+
     try:
         return path_resolved.relative_to(base_resolved).as_posix()
     except ValueError:
@@ -96,12 +105,22 @@ def relative_shared_path(path: Path) -> str:
 
 def resolve_shared_path(raw_path: str | None = None) -> Path:
     base = settings.shared_folder.resolve()
+    user_videos_dir = (Path.home() / "Videos").resolve()
+
     if not raw_path:
         return base
         
+    if raw_path == "User Videos" or raw_path.startswith("User Videos/"):
+        rel_part = raw_path[12:] if raw_path.startswith("User Videos/") else ""
+        base = user_videos_dir
+        raw_path = rel_part
+        if not raw_path:
+            return base
+
     parts = Path(raw_path).parts
     current = base
-    allowed_roots = [base]
+    allowed_roots = [base, user_videos_dir]
+
     
     for part in parts:
         if part == "..":

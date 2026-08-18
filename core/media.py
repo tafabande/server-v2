@@ -662,7 +662,13 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
     tombstone_paths = {t.path for t in tomb_result.scalars()}
 
     media_files = await asyncio.to_thread(get_all_media_files, settings.shared_folder, "", use_cache)
+    user_videos_dir = Path.home() / "Videos"
+    if user_videos_dir.exists():
+        user_media = await asyncio.to_thread(get_all_media_files, user_videos_dir, "User Videos", use_cache)
+        media_files.extend(user_media)
+
     _scan_state["files_total"] = len(media_files)
+
 
     for target_path, virtual_rel in media_files:
         _scan_state["current_folder"] = target_path.parent.name or "Root"
