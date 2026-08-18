@@ -445,11 +445,12 @@ def probe_media(path: Path) -> dict:
         creation_flags = 0
         if os.name == 'nt':
             creation_flags = 0x08000000  # CREATE_NO_WINDOW
-        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", creationflags=creation_flags)
+        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", timeout=5, creationflags=creation_flags)
         if completed.returncode != 0:
             return {}
     except Exception:
         return {}
+
 
     try:
         payload = json.loads(completed.stdout)
@@ -517,8 +518,29 @@ def _configured_log_dir_candidates() -> list[Path]:
         candidates.append(raw_path if raw_path.is_absolute() else BASE_DIR / raw_path)
     return candidates
 
+def detect_category(virtual_rel: str, title: str, duration_seconds: float | None = None) -> str:
+    rel_lower = virtual_rel.lower()
+    title_lower = title.lower()
+
+    if "movie" in rel_lower or "movie" in title_lower or (duration_seconds and duration_seconds > 2400):
+        return "Movies"
+    import re
+    if "series" in rel_lower or "season" in rel_lower or "tv" in rel_lower or "moviebox" in rel_lower or re.search(r"S\d+E\d+", title, re.I):
+        return "Series"
+    if "study" in rel_lower or "course" in rel_lower:
+        return "Study"
+    
+    parts = [p for p in virtual_rel.split("/") if p and p != "User Videos"]
+    if len(parts) > 1:
+        return parts[0]
+    return "User Videos"
+
 def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = True) -> list[tuple[Path, str]]:
-    logger.info(f"Configured scan root: {root}")
+
+    if base_relative and not base_relative.endswith("/"):
+        base_relative = f"{base_relative}/"
+    logger.info(f"Configured scan root: {root} (base_relative: {base_relative})")
+
 
     try:
         resolved_root_str = str(root.resolve(strict=False))
@@ -530,8 +552,11 @@ def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = T
     visited_files: set[str] = set()
     logged_errors: set[str] = set()
 
-    cache_file = settings.temp_folder / "file_scan_cache.json"
+    import hashlib
+    root_hash = hashlib.md5(resolved_root_str.encode()).hexdigest()[:8]
+    cache_file = settings.temp_folder / f"file_scan_cache_{root_hash}.json"
     if use_cache and cache_file.exists():
+
         try:
             data = json.loads(cache_file.read_text(encoding="utf-8"))
             if isinstance(data, dict):
@@ -669,8 +694,10 @@ def get_all_media_files(root: Path, base_relative: str = "", use_cache: bool = T
     return items
 
 def validate_media(path: Path) -> bool:
-    if not ffprobe_available():
+    if not path.exists() or path.stat().st_size < 1024:
         return False
+    if not ffprobe_available():
+        return True  # Trust file extension if ffprobe is not installed
     command = [
         settings.ffprobe_path,
         "-v",
@@ -683,10 +710,11 @@ def validate_media(path: Path) -> bool:
         creation_flags = 0
         if os.name == 'nt':
             creation_flags = 0x08000000  # CREATE_NO_WINDOW
-        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", timeout=15, creationflags=creation_flags)
+        completed = subprocess.run(command, capture_output=True, encoding="utf-8", errors="ignore", timeout=3, creationflags=creation_flags)
         return completed.returncode == 0
     except Exception:
         return False
+
 
 async def scan_media_library(session: AsyncSession, use_cache: bool = True, force_thumbs: bool = False, build_all: bool = False) -> int:
     logger.info("Starting media library discovery and indexing...")
@@ -788,7 +816,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                 "relative_path": virtual_rel,
                 "path": str(target_path.resolve()),
                 "title": title,
-                "category": virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added",
+                "category": detect_category(virtual_rel, title, probe.get("duration_seconds") if "probe" in locals() else None),
                 "file_size": stat.st_size,
                 "container": target_path.suffix.lower().lstrip("."),
                 "thumbnail_path": thumbnail,
@@ -808,8 +836,8 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
             }
             stmt = insert(MediaMetadata).values(**media_values)
             upsert_stmt = stmt.on_conflict_do_update(
-                index_elements=["path"],
-                set_={k: v for k, v in media_values.items() if k not in ["path"]}
+                index_elements=["relative_path"],
+                set_={k: v for k, v in media_values.items() if k not in ["relative_path"]}
             )
             await session.execute(upsert_stmt)
             indexed += 1
@@ -819,49 +847,9 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                 await asyncio.sleep(0.01)
             continue
         else:
-            # 1. Validate file with ffprobe
+            # Validate file with ffprobe (fast check)
             is_valid = validate_media(target_path)
-            
-            if not is_valid:
-                logger.warning(f"Validation failed for {virtual_rel}. Attempting to remux and repair the container once...")
-                temp_fixed = settings.temp_folder / f".fixed_{target_path.name}"
-                remux_command = [
-                    settings.ffmpeg_path,
-                    "-y",
-                    "-fflags",
-                    "+genpts",
-                    "-i",
-                    str(target_path),
-                    "-c",
-                    "copy",
-                    str(temp_fixed)
-                ]
-                try:
-                    creation_flags = 0
-                    if os.name == 'nt':
-                        creation_flags = 0x08000000
-                    remux_res = subprocess.run(remux_command, capture_output=True, encoding="utf-8", errors="ignore", timeout=60, creationflags=creation_flags)
-                    if remux_res.returncode == 0 and temp_fixed.exists() and temp_fixed.stat().st_size > 0:
-                        try:
-                            target_path.unlink(missing_ok=True)
-                            shutil.move(str(temp_fixed), str(target_path))
-                            logger.info(f"Successfully repaired container for {virtual_rel} via remux.")
-                            # Re-stat the file
-                            stat = target_path.stat()
-                            # Re-validate
-                            is_valid = validate_media(target_path)
-                        except Exception as e:
-                            logger.error(f"Failed to replace original file with repaired file for {virtual_rel}: {e}")
-                    else:
-                        logger.warning(f"Remux repair failed for {virtual_rel}: {remux_res.stderr}")
-                except Exception as e:
-                    logger.error(f"Error during remux repair for {virtual_rel}: {e}")
-                finally:
-                    if temp_fixed.exists():
-                        try:
-                            temp_fixed.unlink(missing_ok=True)
-                        except Exception:
-                            pass
+
             
             # 2. If still invalid, mark status as corrupted in DB and skip heavy processing
             if not is_valid:
@@ -973,7 +961,7 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
             "relative_path": virtual_rel,
             "path": str(target_path.resolve()),
             "title": title,
-            "category": virtual_rel.split("/", 1)[0] if "/" in virtual_rel else "Recently Added",
+            "category": detect_category(virtual_rel, title, probe.get("duration_seconds")),
             "file_size": stat.st_size,
             "container": target_path.suffix.lower().lstrip("."),
             "thumbnail_path": thumbnail,
@@ -994,9 +982,9 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
         
         stmt = insert(MediaMetadata).values(**media_values)
         upsert_stmt = stmt.on_conflict_do_update(
-            index_elements=["path"],
+            index_elements=["relative_path"],
             # Intentionally omit hls_status to avoid re-triggering transcodes on previously indexed items
-            set_={k: v for k, v in media_values.items() if k not in ["path", "hls_status"]} 
+            set_={k: v for k, v in media_values.items() if k not in ["relative_path", "hls_status"]} 
         )
         await session.execute(upsert_stmt)
 

@@ -32,8 +32,9 @@ class MediaMetadata(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
     relative_path: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+
     category: Mapped[str] = mapped_column(String(120), default="Library", nullable=False, index=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
