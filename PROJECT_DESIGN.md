@@ -4,108 +4,84 @@
 - **Name**: MediaHub
 - **Type**: Minimalist LAN media server
 - **Aesthetic**: Clean dark monochrome UI, single accent color (indigo), VHS/synthwave video player
-- **Stack**: FastAPI + SQLAlchemy (async) + SQLite + Vanilla JS/CSS
+- **Stack**: FastAPI + SQLAlchemy (async) + SQLite + React 19 + TypeScript + Vite 8 + Tailwind CSS v4
 ---
 
 ## Design Principles
 1. **Function over form** — every element serves a purpose
 2. **Data-dense** — show information, not decoration
-3. **Offline-first** — zero external CDN dependencies, fully air-gapped capable
-4. **Keyboard-accessible** — Ctrl+K search, Space/arrows player, F fullscreen
+3. **Offline-first** — zero external CDN dependencies, fully air-gapped capable with PWA Service Worker
+4. **Keyboard-accessible** — Space/arrows player, ESC modals
 5. **VHS player as signature** — the one place the app breaks from minimalism
+6. **Real-time Progressive Sync** — instant WebSocket updates as files are uploaded or scanned
 
 ---
 
 ## Design Tokens
 ```
-Background:   #111113 (near-black)
-Surface:      #1a1a1f (cards, panels)
-Hover:        #252529
-Border:       #2a2a30
-Text:         #e4e4e7
-Text Muted:   #71717a
+Background:   #0b0b0e (near-black)
+Surface:      #131318 (cards, panels)
+Border:       #21212e
+Text:         #e0e0ea
+Text Muted:   #74748a
 Accent:       #6366f1 (indigo)
 Success:      #22c55e
 Warning:      #eab308
 Error:        #ef4444
 Font:         system-ui, -apple-system, sans-serif
-Radius:       6px
 ```
 
 ---
 
-## Architecture
+## Data Fetching Guidelines & Architecture
 
-### Backend (Python / FastAPI)
-- `main.py` — FastAPI app with lifespan, CORS, static mounts
-- `config.py` — Settings from env/dotenv, path management
-- `core/database.py` — Async SQLAlchemy engine + session factory
-- `core/models.py` — 9 tables: users, media_metadata, play_events, audit_logs, system_settings, playlists, playlist_items, permissions, server_status
-- `core/security.py` — JWT auth, bcrypt hashing, RBAC (admin/family/guest)
-- `core/media.py` — FFmpeg HLS transcoding, ABR variants, metadata probing, thumbnail generation
-- `core/storage.py` — Path sandboxing, PIN locks, adult content filtering
-- `core/bootstrap.py` — DB self-healing, admin/guest user provisioning, background media scan
-- `core/discovery.py` — mDNS/Zeroconf LAN broadcast
+### API Client (`src/api.ts`)
+All frontend data fetching is centralized in `src/api.ts` through the `api` singleton (`ApiClient`):
+- **Token Management**: Automatically retrieves JWT token from `localStorage` (`mediahub_token`) and injects `Authorization: Bearer <token>` into all API requests.
+- **Graceful Unauthenticated Fallback**: Endpoint failures (401/403) fall back to clean empty states (`[]`) or public LAN read access without crashing the UI.
+- **Thumbnail URL Resolution**: Automatically formats poster URLs to `/api/media/{id}/thumbnail` with zero-dependency inline SVG fallbacks if thumbnails are generating.
 
-### API Routers
-- `/api/auth` — Login, logout, /me
-- `/api/media` — Library, streaming, play events, history, continue watching, rescan
-- `/api/files` — Browse, upload, rename, delete (admin/family)
-- `/api/users` — CRUD user management (admin), self-service profile/password
-- `/api/playlists` — CRUD playlists, add/remove items
-- `/api/system` — Health, metrics, sessions, settings, audit logs, WebSocket
-
-### Frontend (Vanilla JS / CSS)
-- `static/css/styles.css` — Minimalist design system
-- `static/css/player.css` — VHS/synthwave player theme
-- `static/index.html` — SPA shell with sidebar, player modal, dialogs
-- `static/js/app.js` — Entry point, router, auth guard
-- `static/js/api.js` — HTTP client for all endpoints
-- `static/js/router.js` — Client-side routing with history API
-- `static/js/player-manager.js` — VHS player with HLS.js, keyboard/touch controls
-- `static/js/utils.js` — Toast, formatting, confirm dialog
-
-### Views
-| Route | File | Purpose |
+### Core API Methods
+| Method | Endpoint | Description |
 |:---|:---|:---|
-| `/` | `views/home.js` | Continue watching, category rows, search |
-| `/library` | `views/library.js` | Full grid/table, sort, filter, category tabs |
-| `/explorer` | `views/explorer.js` | File browser, upload, rename, delete |
-| `/playlists` | `views/playlists.js` | Playlist management, play all |
-| `/history` | `views/history.js` | Watch history table, progress, clear all |
-| `/admin` | `views/admin.js` | Metrics, user CRUD, audit log |
-| `/profile` | `views/profile.js` | Bio, password change, preferences |
-| `/login` | `views/login.js` | Auth form, guest login |
+| `api.getPublicUsers()` | `GET /api/auth/public-users` | Public user profile selector for login screen |
+| `api.login(user, pin)` | `POST /api/auth/token` | Obtains JWT access token and user info |
+| `api.getLibrary(params)` | `GET /api/media/library` | Paginated/filtered media list with title search (`q`) |
+| `api.getContinueWatching()` | `GET /api/media/continue` | User continue watching row with progress % |
+| `api.getRecentlyAdded()` | `GET /api/media/recent` | Recently added media files |
+| `api.getHistory()` | `GET /api/media/history` | User watch history |
+| `api.getPlaylists()` | `GET /api/playlists` | User playlists |
+| `api.getSystemFolders()` | `GET /api/system/metrics` | System storage sizes and media item counts |
+| `api.subscribeToUpdates(cb)`| `WS /api/system/ws` | Real-time WebSocket event listener for progressive library updates |
+
+### Real-Time Live Sync Strategy
+1. React views (`HomeView`, `LibraryView`, `AdminView`) subscribe to real-time events via `api.subscribeToUpdates(data => ...)` on mount.
+2. When `data.type === 'library-updated'` or `data.type === 'media-added'` arrives over WebSocket, views re-fetch active dataset.
+3. As media files are uploaded or scanned, new cards render **immediately in real time** without requiring page reloads or waiting for batch completion.
+
+### Media Streaming Strategy
+- **Direct Video Stream**: Served via `GET /api/media/{media_id}/file` with HTTP `Accept-Ranges: bytes` headers for smooth scrubbing in HTML5 `<video>` tags.
+- **HLS Stream Info**: Available via `GET /api/media/{media_id}/stream`.
 
 ---
 
-## Video Player (VHS/Synthwave Theme)
-The player is a fullscreen dialog that transforms the clean UI into an immersive retro experience:
-- **Mechanical VHS buttons**: EJECT, REW, PLAY, FF, STOP, PAUSE — raised 3D CSS buttons
-- **Tape info sidebar**: Title, format, resolution, duration, position, quality badge
-- **8-LED volume bar**: Green (1-5), yellow (6-7), red (8) with glow effects
-- **Scanlines overlay**: `repeating-linear-gradient` at 2px intervals, low opacity
-- **CRT glow**: Amber `box-shadow` on the video container
-- **Transport bar**: Progress track, monospace timestamps
-- **Keyboard**: Space, ←→, ↑↓, F, M, Esc
-- **Touch**: Double-tap seek, vertical swipe volume
+## Project Structure
 
----
-
-## Security
-- JWT tokens with role claims
-- Roles: admin, family, guest
-- `require_roles()` decorator for endpoint protection
-- Path sandboxing in `resolve_shared_path()`
-- PIN-based folder locks
-- Adult content keyword filtering
-- Audit logging for file operations
-
----
-
-## Responsive Breakpoints
-| Width | Layout |
-|:---|:---|
-| `< 768px` | Bottom tab bar, stacked forms, smaller cards |
-| `768-1199px` | Icon-only sidebar |
-| `≥ 1200px` | Full sidebar with labels |
+```
+├── main.py                # FastAPI app entrypoint, SPA routing & static mounts
+├── config.py              # System configuration & path resolution
+├── launch.bat             # One-click launcher script for Windows
+├── core/                  # Engine core (database, models, security, media processing)
+│   ├── bootstrap.py       # Table self-healing, default users & startup scan
+│   ├── discovery.py       # mDNS LAN discovery
+│   ├── events.py          # WebSocket ConnectionManager and event broadcast
+│   ├── media.py          # FFmpeg metadata probing, thumbnail & HLS generation
+│   ├── schemas.py        # Pydantic schemas (MediaRead, User, etc.)
+│   └── storage.py        # Path sandboxing, upload handling & user Videos access
+├── routers/               # API endpoint routers (auth, media, files, playlists, system)
+├── public/                # Static PWA assets (sw.js, manifest.json)
+└── src/                   # React TypeScript frontend
+    ├── App.tsx            # Main application UI, routing & views
+    ├── api.ts             # Production API client & WebSocket sync
+    └── index.css          # Design system, glitch tokens & responsive layout
+```

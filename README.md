@@ -1,30 +1,44 @@
 # MediaHub
 
-MediaHub is a premium, minimalist LAN-first media server. It features a high-fidelity **Minimalist Design System** UI (with a special VHS/Synthwave video player), FastAPI backend, and FFmpeg-driven HLS streaming.
+MediaHub is a high-performance, minimalist LAN-first media server. It features a modern React + TypeScript + Tailwind CSS UI, retrowave VHS video player, FastAPI backend, PWA offline capabilities, and real-time progressive media syncing.
 
-## What is included
+## Features
 
-- **Minimalist UI**: Clean, data-dense interface with a stark dark theme and indigo accents.
-- **VHS Player**: An immersive VHS/Synthwave themed media player with mechanical buttons and scanlines.
-- **FastAPI Backend**: Routers for auth, media, files, playlists, users, and system endpoints.
-- **Async Logic**: SQLAlchemy models and async file operations.
-- **Media Engine**: HLS transcoding and recursive scanning for `shared_media/`.
-- **Security**: JWT auth, path sandboxing, and admin PIN protection.
+- **Modern Redesign UI**: Responsive React interface with dark theme and indigo accents.
+- **Real-Time Live Sync**: WebSocket event streaming so newly uploaded or scanned media items appear instantly on screen.
+- **VHS Media Player**: Immersive VHS/Synthwave themed player with scanlines and controls.
+- **1k Batch File Upload**: High-performance batch uploader with drag-and-drop & progress bar.
+- **Offline PWA Support**: Service Worker (`public/sw.js`), Web App Manifest, and zero-dependency SVG poster fallbacks for air-gapped playback.
+- **User Videos Integration**: Automatically scans and streams media from `%USERPROFILE%\Videos` (User Videos).
+- **FastAPI Backend**: Routers for auth, media, files, playlists, users, and system endpoints with SQLite self-healing.
 
-## Project layout
+## Data Fetching Guidelines
 
-- `main.py`: App entrypoint and static routing.
-- `config.py`: Environment configuration.
-- `core/`: Database, models, and streaming engine.
-- `routers/`: API endpoints for auth, media, playlists, system, files, users.
-- `routers/`: API endpoints for auth, media, playlists, system, files, users.
-- `src/`: React frontend with TypeScript components.
+All frontend data fetching is managed via **`src/api.ts`**:
+- **Centralized Client**: Use `api.getLibrary()`, `api.getContinueWatching()`, `api.getHistory()`, etc.
+- **Authentication**: Injects `Authorization: Bearer <token>` automatically when logged in.
+- **Real-Time Subscription**: Use `api.subscribeToUpdates(callback)` to receive instant WebSocket updates (`library-updated`).
+- **Streaming**: Video and audio files stream directly via `GET /api/media/{id}/file` with HTTP Range headers.
 
-## Run locally
+## Run Locally
 
-1. Setup Python environment.
-2. Install dependencies: `pip install -r requirements.txt`.
-3. Start the server: `python main.py`.
-4. Build frontend: `pnpm run build` (or `pnpm dev` for development).
+### Quick Launch (Windows)
+Double-click [`launch.bat`](file:///c:/Users/User/Documents/new%20-%20Copy/launch.bat) or run in terminal:
+```cmd
+launch.bat
+```
 
-For initial setup, configure credentials through environment variables (.env file).
+### Manual Launch
+1. Install Python dependencies:
+   ```cmd
+   pip install -r requirements.txt
+   ```
+2. Build frontend production assets:
+   ```cmd
+   npx vite build
+   ```
+3. Start the FastAPI server:
+   ```cmd
+   python main.py
+   ```
+   Access points will be printed in the terminal (e.g. `http://localhost:51733` or LAN IP).
