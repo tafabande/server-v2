@@ -12,7 +12,8 @@ from core.database import get_db
 from core.events import broadcast_settings_updated, socket_manager
 from core.models import AuditLog, SystemSetting, User
 from core.schemas import AuditLogRead, MessageResponse, PaginatedAuditResponse, SystemSettingsRead, SystemSettingsUpdate
-from core.security import get_current_user, require_roles
+from core.security import get_current_user, get_optional_user, require_roles
+
 from core.system import get_settings_map
 from pydantic import BaseModel
 
@@ -55,9 +56,12 @@ async def create_client_log(
 async def health() -> dict:
     return {"status": "ok", "service": "mediahub"}
 
-@router.get("/metrics", dependencies=[Depends(get_current_user)])
-async def get_metrics(current_user: User = Depends(require_roles("admin", "super-admin"))) -> dict:
-    """Get system health metrics (CPU, RAM, Disk)."""
+@router.get("/metrics")
+async def get_metrics(
+    current_user: User = Depends(get_optional_user),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """Get system health and storage metrics."""
     import datetime
     from core.discovery import discovery
     
@@ -76,7 +80,6 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
     try:
         import subprocess
         res = subprocess.run(["wmic", "memphysical", "get", "memoryerrorcorrection"], capture_output=True, encoding="utf-8", errors="ignore")
-        # 3 = None, 5 = Single-bit ECC, 6 = Multi-bit ECC
         if "3" in res.stdout: ecc_status = "none"
         elif "5" in res.stdout: ecc_status = "single-bit ecc"
         elif "6" in res.stdout: ecc_status = "multi-bit ecc"
@@ -84,10 +87,15 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
         pass
 
     from core.media import ffmpeg_available
+    from core.models import MediaMetadata
+    from sqlalchemy import func, select
 
     cpu_val = psutil.cpu_percent(interval=None)
     vm = psutil.virtual_memory()
     du = psutil.disk_usage("/")
+
+    total_media = await session.scalar(select(func.count(MediaMetadata.id)).where(MediaMetadata.file_exists == True)) or 0
+    movies_count = await session.scalar(select(func.count(MediaMetadata.id)).where(MediaMetadata.file_exists == True, MediaMetadata.duration_seconds > 2400)) or 0
 
     return {
         "cpu_percent": cpu_val,
@@ -97,6 +105,14 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
         "disk_used_gb": du.used / (1024**3),
         "disk_total_gb": du.total / (1024**3),
         "disk_percent": du.percent,
+        "storage": {
+            "used_bytes": du.used,
+            "free_bytes": du.free,
+            "total_bytes": du.total,
+        },
+        "total_media": total_media,
+        "movies_count": movies_count,
+        "active_sessions": len(socket_manager._connections),
         "ffmpeg_available": ffmpeg_available(),
         "platform": psutil.os.name,
         "server_time": datetime.datetime.now().isoformat(),
@@ -104,6 +120,7 @@ async def get_metrics(current_user: User = Depends(require_roles("admin", "super
         "mdns_active": discovery.service_info is not None,
         "ecc_ram": ecc_status,
     }
+
 
 @router.get("/sessions", dependencies=[Depends(get_current_user)])
 async def get_active_sessions(current_user: User = Depends(require_roles("admin", "super-admin"))) -> list:
