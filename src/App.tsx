@@ -623,13 +623,15 @@ function HomeView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) => 
 
 function LibraryView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) => void; onOpenBatchUpload: () => void }) {
   const [search, setSearch] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [items, setItems] = useState<MediaApiItem[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let active = true
     const fetchLibrary = () => {
-      api.getLibrary({ q: search }).then(data => {
+      const catParam = selectedCategory !== 'all' ? selectedCategory : undefined
+      api.getLibrary({ q: search, type: catParam }).then(data => {
         if (active) {
           setItems(data)
           setLoading(false)
@@ -648,52 +650,108 @@ function LibraryView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) 
       active = false
       unsubscribe()
     }
-  }, [search])
+  }, [search, selectedCategory])
 
+  // Group media items by normalized category/folder name
+  const groupedFolders = items.reduce<Record<string, MediaApiItem[]>>((acc, item) => {
+    let cat = (item.genre || item.category || 'General').trim()
+    const catLower = cat.toLowerCase()
+    if (catLower === 'movie' || catLower === 'movies') cat = 'Movies'
+    else if (catLower === 'series' || catLower === 'tv' || catLower === 'tv shows') cat = 'Series'
+    else if (catLower === 'user videos' || catLower === 'videos') cat = 'User Videos'
+
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(item)
+    return acc
+  }, {})
+
+  const categoriesList = ['all', 'movies', 'series', 'user_videos']
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden anim-view">
-      <div className="p-8 border-b border-[#16161e] flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold" style={{ color: '#e0e0ea' }}>Library</h1>
-          <p className="text-xs mt-0.5" style={{ color: '#74748a' }}>{items.length} titles available in database</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button onClick={onOpenBatchUpload} className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:scale-105"
-            style={{ background: '#6366f1', color: '#fff', cursor: 'pointer' }}>
-            <IcoUpload size={15} /> Batch Upload (1k Files)
-          </button>
-          <div className="relative" style={{ width: 220 }}>
-            <IcoSearch size={14} className="absolute left-3 top-3" style={{ color: '#74748a' }} />
-            <input type="text" placeholder="Search media..." value={search} onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 rounded-lg text-xs" style={{ background: '#131318', border: '1px solid #21212e', color: '#e0e0ea' }} />
+      {/* Header */}
+      <div className="p-8 border-b border-[#16161e] space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold" style={{ color: '#e0e0ea' }}>Library</h1>
+            <p className="text-xs mt-0.5" style={{ color: '#74748a' }}>{items.length} titles grouped by folder</p>
           </div>
+          <div className="flex items-center gap-3">
+            <button onClick={onOpenBatchUpload} className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:scale-105"
+              style={{ background: '#6366f1', color: '#fff', cursor: 'pointer' }}>
+              <IcoUpload size={15} /> Batch Upload (1k Files)
+            </button>
+            <div className="relative" style={{ width: 220 }}>
+              <IcoSearch size={14} className="absolute left-3 top-3" style={{ color: '#74748a' }} />
+              <input type="text" placeholder="Search media..." value={search} onChange={e => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 rounded-lg text-xs" style={{ background: '#131318', border: '1px solid #21212e', color: '#e0e0ea' }} />
+            </div>
+          </div>
+        </div>
+
+        {/* Category / Folder Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {[
+            { id: 'all', label: 'All Folders' },
+            { id: 'movies', label: '🎬 Movies' },
+            { id: 'series', label: '📺 Series' },
+            { id: 'user_videos', label: '📁 User Videos' },
+            { id: 'shorties', label: '📱 Shorts' },
+          ].map(tab => (
+            <button key={tab.id} onClick={() => setSelectedCategory(tab.id)}
+              className="px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all"
+              style={{
+                background: selectedCategory === tab.id ? '#6366f1' : '#131318',
+                color: selectedCategory === tab.id ? '#ffffff' : '#74748a',
+                border: selectedCategory === tab.id ? '1px solid #6366f1' : '1px solid #21212e',
+                cursor: 'pointer',
+              }}>
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      <div className="flex-1 p-8 overflow-y-auto">
+      {/* Main Content Area: Grouped by Folder */}
+      <div className="flex-1 p-8 overflow-y-auto space-y-8">
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <div className="w-8 h-8 rounded-full border-2 border-[#6366f1] border-t-transparent animate-spin" />
           </div>
-        ) : items.length > 0 ? (
-          <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
-            {items.map(m => (
-              <button key={m.id} onClick={() => onPlay(m)} className="text-left group card-hover relative rounded-xl overflow-hidden"
-                style={{ aspectRatio: '2/3', background: '#131318', cursor: 'pointer' }}>
-                <img src={m.thumb || createOfflinePosterSvg(m.title, m.genre || 'Media')} alt={m.title} className="w-full h-full object-cover" />
-                <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.3) 100%)' }}>
-                  <div className="flex justify-end">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded font-bold" style={{ background: 'rgba(99,102,241,0.8)', color: '#fff' }}>★ {m.rating || 8.0}</span>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold leading-tight" style={{ color: '#e0e0ea' }}>{m.title}</p>
-                    <p className="text-[10px] mt-0.5" style={{ color: '#74748a' }}>{m.year || 2024} · {m.genre || 'Media'}</p>
-                  </div>
+        ) : Object.keys(groupedFolders).length > 0 ? (
+          Object.entries(groupedFolders).map(([folderName, folderItems]) => (
+            <div key={folderName} className="space-y-3">
+              <div className="flex items-center justify-between border-b border-[#181822] pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{ background: '#6366f1' }} />
+                  <h2 className="text-sm font-semibold tracking-wide" style={{ color: '#e0e0ea' }}>
+                    {folderName.toUpperCase()}
+                  </h2>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono" style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8' }}>
+                    {folderItems.length} files
+                  </span>
                 </div>
-              </button>
-            ))}
-          </div>
+              </div>
+
+              <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
+                {folderItems.map(m => (
+                  <button key={m.id} onClick={() => onPlay(m)} className="text-left group card-hover relative rounded-xl overflow-hidden"
+                    style={{ aspectRatio: '2/3', background: '#131318', cursor: 'pointer' }}>
+                    <img src={m.thumb || createOfflinePosterSvg(m.title, folderName)} alt={m.title} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.3) 100%)' }}>
+                      <div className="flex justify-end">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-bold" style={{ background: 'rgba(99,102,241,0.8)', color: '#fff' }}>★ {m.rating || 8.0}</span>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold leading-tight" style={{ color: '#e0e0ea' }}>{m.title}</p>
+                        <p className="text-[10px] mt-0.5" style={{ color: '#74748a' }}>{m.year || 2024} · {m.duration}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))
         ) : (
           <div className="py-16 text-center border border-dashed border-[#21212e] rounded-2xl">
             <IcoLibrary size={32} className="mx-auto mb-3" style={{ color: '#74748a' }} />
@@ -708,6 +766,7 @@ function LibraryView({ onPlay, onOpenBatchUpload }: { onPlay: (m: MediaApiItem) 
     </div>
   )
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Playlists View
@@ -848,48 +907,154 @@ function AdminView({ onOpenBatchUpload }: { onOpenBatchUpload: () => void }) {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Player Overlay (Live Media Streaming)
-// ─────────────────────────────────────────────────────────────────────────────
+function formatTimecode(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) return '00:00:00'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${pad(h)}:${pad(m)}:${pad(s)}`
+}
 
 function PlayerOverlay({ item, onClose }: { item: MediaApiItem; onClose: () => void }) {
-  const [playing, setPlaying] = useState(true)
-  const [progress, setProgress] = useState(item.progress || 0)
+  const [isPlaying, setIsPlaying] = useState(true)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [volume, setVolume] = useState(1)
+  const [isMuted, setIsMuted] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const playerContainerRef = useRef<HTMLDivElement>(null)
+  const progressTimerRef = useRef<any>(null)
 
   const mediaSrc = item.stream_url || `/api/media/${item.id}/file`
 
+  useEffect(() => {
+    progressTimerRef.current = setInterval(() => {
+      if (videoRef.current && !videoRef.current.paused) {
+        api.reportProgress(item.id, videoRef.current.currentTime, false)
+      }
+    }, 5000)
+
+    return () => {
+      if (progressTimerRef.current) clearInterval(progressTimerRef.current)
+      if (videoRef.current) {
+        api.reportProgress(item.id, videoRef.current.currentTime, videoRef.current.ended)
+      }
+    }
+  }, [item.id])
+
+  const togglePlay = () => {
+    if (!videoRef.current) return
+    if (videoRef.current.paused) {
+      videoRef.current.play()
+      setIsPlaying(true)
+    } else {
+      videoRef.current.pause()
+      setIsPlaying(false)
+      api.reportProgress(item.id, videoRef.current.currentTime, false)
+    }
+  }
+
+  const seekBy = (seconds: number) => {
+    if (!videoRef.current) return
+    videoRef.current.currentTime = Math.max(0, Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + seconds))
+  }
+
+  const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!videoRef.current || !duration) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const pos = (e.clientX - rect.left) / rect.width
+    videoRef.current.currentTime = pos * duration
+  }
+
+  const toggleFullscreen = () => {
+    if (!playerContainerRef.current) return
+    if (!document.fullscreenElement) {
+      playerContainerRef.current.requestFullscreen().catch(() => {})
+    } else {
+      document.exitFullscreen().catch(() => {})
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col anim-fade-in" style={{ background: '#000' }}>
-      <div className="relative flex-1 scanlines grain overflow-hidden flex items-center justify-center">
-        {mediaSrc ? (
-          <video
-            ref={videoRef}
-            src={mediaSrc}
-            autoPlay
-            controls
-            className="w-full h-full object-contain"
-            onTimeUpdate={() => {
-              if (videoRef.current) {
-                const percent = Math.round((videoRef.current.currentTime / videoRef.current.duration) * 100)
-                if (!isNaN(percent)) setProgress(percent)
-              }
-            }}
-          />
-        ) : (
-          <div className="relative z-10 text-center">
-            <p className="text-xs tracking-widest text-[#ef4444] mb-2 font-mono">VHS MEDIA PLAYER</p>
-            <h2 className="font-display text-4xl font-bold text-white mb-2">{item.title}</h2>
-            <p className="text-xs text-gray-400">{item.duration || 'Stream'}</p>
+    <div ref={playerContainerRef} className="fixed inset-0 z-50 flex flex-col bg-black anim-fade-in">
+      {/* Top Header */}
+      <div className="flex items-center justify-between px-6 py-4 z-20 bg-gradient-to-b from-black/90 to-transparent">
+        <div className="flex items-center gap-3">
+          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-widest bg-red-600/80 text-white border border-red-500/50">VHS HI-FI</span>
+          <div>
+            <h2 className="text-sm font-semibold text-white truncate max-w-md">{item.title}</h2>
+            <p className="text-[10px] text-gray-400">{item.genre || 'Media'} · {item.duration}</p>
           </div>
-        )}
-        <button onClick={onClose} className="absolute top-6 right-6 w-10 h-10 rounded-full flex items-center justify-center bg-black/60 text-white border border-white/20 z-50">
+        </div>
+        <button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/20 text-white transition-colors">
           <IcoX size={18} />
         </button>
+      </div>
+
+      {/* Video Viewport */}
+      <div className="relative flex-1 scanlines grain overflow-hidden flex items-center justify-center bg-black">
+        <video
+          ref={videoRef}
+          src={mediaSrc}
+          autoPlay
+          className="w-full h-full object-contain cursor-pointer"
+          onClick={togglePlay}
+          onTimeUpdate={() => {
+            if (videoRef.current) {
+              setCurrentTime(videoRef.current.currentTime)
+              setDuration(videoRef.current.duration || 0)
+            }
+          }}
+          onEnded={() => {
+            setIsPlaying(false)
+            api.reportProgress(item.id, videoRef.current?.duration || 0, true)
+          }}
+        />
+
+        {/* Monospace HUD Overlay */}
+        <div className="absolute top-6 left-6 pointer-events-none text-xs font-mono tracking-widest text-[#818cf8]/70 drop-shadow flex gap-4">
+          <span>TAPE: {item.id.padStart(4, '0')}</span>
+          <span>SP MODE</span>
+          <span>{formatTimecode(currentTime)}</span>
+        </div>
+      </div>
+
+      {/* VHS Retrowave Controls Bar */}
+      <div className="z-20 p-6 bg-gradient-to-t from-black/95 via-black/80 to-transparent border-t border-white/10">
+        {/* Scrubber Progress Bar */}
+        <div className="w-full h-2 rounded-full bg-white/10 cursor-pointer mb-4 relative overflow-hidden group" onClick={handleSeekClick}>
+          <div className="h-full bg-[#6366f1] transition-all" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
+        </div>
+
+        {/* Retrowave Buttons Row */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button onClick={togglePlay} className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#6366f1] hover:bg-[#4f46e5] text-white transition-all">
+              {isPlaying ? <IcoPause size={18} /> : <IcoPlay size={18} />}
+            </button>
+            <button onClick={() => seekBy(-10)} className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-mono text-gray-300">
+              -10s
+            </button>
+            <button onClick={() => seekBy(10)} className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-mono text-gray-300">
+              +10s
+            </button>
+            <span className="text-xs font-mono text-gray-400 ml-2">
+              {formatTimecode(currentTime)} / {formatTimecode(duration)}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <button onClick={toggleFullscreen} className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300">
+              <span className="text-xs font-mono">FULLSCREEN</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // App Root

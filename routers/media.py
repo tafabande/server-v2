@@ -103,7 +103,14 @@ async def library(
         else:
             stmt = stmt.where(MediaMetadata.container == t)
     if category:
-        stmt = stmt.where(MediaMetadata.category == category)
+        cat_clean = category.strip().lower()
+        if cat_clean in {"movie", "movies"}:
+            stmt = stmt.where(func.lower(MediaMetadata.category).in_(["movie", "movies"]))
+        elif cat_clean in {"series", "tv", "tv shows", "show", "shows"}:
+            stmt = stmt.where(func.lower(MediaMetadata.category).in_(["series", "tv", "tv shows", "show", "shows"]))
+        else:
+            stmt = stmt.where(func.lower(MediaMetadata.category) == cat_clean)
+
     if q:
         stmt = stmt.where(MediaMetadata.title.ilike(f"%{q}%"))
     if adult_only is True:
@@ -485,6 +492,48 @@ async def get_watch_history(
             if len(items) >= 50:
                 break
     return items
+
+class PlayProgressRequest(BaseModel):
+    position_seconds: float
+    completed: bool = False
+
+@router.post("/{media_id}/progress", response_model=MessageResponse)
+async def update_play_progress(
+    media_id: int,
+    payload: PlayProgressRequest,
+    current_user: Annotated[User, Depends(get_optional_user)],
+    session: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """Record or update user watch progress."""
+    user_id = current_user.id if current_user and current_user.role != "guest" else 1
+    media = await session.get(MediaMetadata, media_id)
+    if not media:
+        raise HTTPException(status_code=404, detail="Media item not found.")
+
+    result = await session.execute(
+        select(PlayEvent).where(
+            PlayEvent.user_id == user_id,
+            PlayEvent.media_id == media_id
+        )
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        event = PlayEvent(
+            user_id=user_id,
+            media_id=media_id,
+            position_seconds=payload.position_seconds,
+            completed=payload.completed,
+            created_at=datetime.now(UTC),
+        )
+        session.add(event)
+    else:
+        event.position_seconds = payload.position_seconds
+        event.completed = payload.completed
+        event.created_at = datetime.now(UTC)
+
+    await session.commit()
+    return MessageResponse(message="Progress updated.")
+
 
 @router.delete("/history", response_model=MessageResponse)
 async def clear_watch_history(

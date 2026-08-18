@@ -277,7 +277,22 @@ class ApiClient {
     return []
   }
 
+  // Report Watch Progress
+  async reportProgress(mediaId: string, positionSeconds: number, completed = false): Promise<void> {
+
+    try {
+      await this.request(`/api/media/${mediaId}/progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position_seconds: positionSeconds, completed }),
+      })
+    } catch (e) {
+      // Ignore background progress reporting errors
+    }
+  }
+
   // Playlists
+
   async getPlaylists(): Promise<PlaylistItemApi[]> {
     try {
       const items = await this.request<any[]>('/api/playlists')
