@@ -322,12 +322,16 @@ class ApiClient {
     const mins = m.duration_seconds ? Math.round(m.duration_seconds / 60) : 0
     const durationStr = mins > 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`
 
+    const thumbUrl = m.thumbnail_path
+      ? (m.thumbnail_path.startsWith('/api/') ? m.thumbnail_path : `/api/media/${m.id}/thumbnail`)
+      : `/api/media/${m.id}/thumbnail`
+
     return {
       id: String(m.id),
       title: m.title || m.filename || 'Untitled Media',
       subtitle: m.category ? m.category.toUpperCase() : undefined,
       year: m.year || (m.created_at ? new Date(m.created_at).getFullYear() : 2024),
-      thumb: m.has_thumbnail ? `/api/media/${m.id}/thumbnail` : undefined,
+      thumb: thumbUrl,
       rating: m.rating || 8.0,
       genre: m.genre || m.category || 'General',
       duration: durationStr !== '0m' ? durationStr : 'Media',
@@ -336,6 +340,7 @@ class ApiClient {
       stream_url: `/api/media/${m.id}/file`,
     }
   }
+
 }
 
 export const api = new ApiClient()

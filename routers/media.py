@@ -826,11 +826,10 @@ async def stream_file(
 ) -> FileResponse:
     media = await get_media(session, media_id)
     source = media_source_path(media)
-    if media.stream_mode != "direct":
-        raise HTTPException(status_code=400, detail="This media must be played through HLS.")
         
     from pathlib import Path
     await ensure_pin_for_path(session, Path(media.path), pin, current_user=current_user)
+
         
     from core.media import is_media_accessible
     if not await is_media_accessible(session, media, current_user, request):
