@@ -65,8 +65,9 @@ async def library(
     session: AsyncSession = Depends(get_db),
 ) -> PaginatedMediaResponse:
     """Paginated media library with filters and sorting."""
-    stmt = select(MediaMetadata)
+    stmt = select(MediaMetadata).where(MediaMetadata.file_exists == True)
     stmt = await apply_media_security_filters(session, stmt, current_user, request)
+
     if type:
         t = type.lower()
         if t == "shorties":

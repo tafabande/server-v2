@@ -1,5 +1,5 @@
 import socket
-from zeroconf import IPVersion, ServiceInfo, Zeroconf
+import os
 from core.logging import get_logger
 
 logger = get_logger("discovery")
@@ -12,12 +12,13 @@ class DiscoveryService:
 
     def start(self):
         try:
+            os.environ["ZEROCONF_USE_CYTHON"] = "0"
+            from zeroconf import IPVersion, ServiceInfo, Zeroconf
             self.zeroconf = Zeroconf(ip_version=IPVersion.V4Only)
             hostname = socket.gethostname()
-            # Robust IP detection that works without internet
+            
             def get_local_ip():
                 try:
-                    # Method 1: Try finding a real interface IP
                     import psutil
                     for interface, addrs in psutil.net_if_addrs().items():
                         for addr in addrs:
@@ -26,20 +27,16 @@ class DiscoveryService:
                 except ImportError:
                     pass
                 
-                # Method 2: Fallback to UDP trick but with a local destination (DNS default gateway)
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
-                    # Doesn't actually send data, just finds the interface used to reach a LAN address
                     s.connect(("192.168.1.254", 80))
                     return s.getsockname()[0]
                 except Exception:
-                    # Method 3: Final fallback to hostname
                     return socket.gethostbyname(socket.gethostname())
                 finally:
                     s.close()
 
             local_ip = get_local_ip()
-
             desc = {'version': '0.1.0', 'path': '/'}
             
             self.service_info = ServiceInfo(
@@ -53,13 +50,12 @@ class DiscoveryService:
 
             logger.info(f"Registering mDNS service: mediahub.local on {local_ip}:{self.port}")
             self.zeroconf.register_service(self.service_info)
-        except Exception as e:
-            logger.error("Failed to start mDNS discovery", exc_info=True)
+        except BaseException as e:
+            logger.debug(f"mDNS LAN discovery disabled (incompatible environment): {e}")
 
     def stop(self):
         try:
-            if self.service_info:
-                # Use a small timeout or just ignore if it fails during shutdown
+            if self.service_info and self.zeroconf:
                 self.zeroconf.unregister_service(self.service_info)
         except Exception as e:
             logger.debug(f"Error unregistering service during shutdown: {e}")
