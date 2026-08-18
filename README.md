@@ -17,16 +17,14 @@ MediaHub is a premium, minimalist LAN-first media server. It features a high-fid
 - `config.py`: Environment configuration.
 - `core/`: Database, models, and streaming engine.
 - `routers/`: API endpoints for auth, media, playlists, system, files, users.
-- `static/`: The Minimalist frontend (HTML/CSS/JS) and VHS player.
-- `hub.bat`: Master controller for server management.
+- `routers/`: API endpoints for auth, media, playlists, system, files, users.
+- `src/`: React frontend with TypeScript components.
 
 ## Run locally
 
 1. Setup Python environment.
 2. Install dependencies: `pip install -r requirements.txt`.
-3. Start the hub: Run `hub.bat` and choose option 1.
+3. Start the server: `python main.py`.
+4. Build frontend: `pnpm run build` (or `pnpm dev` for development).
 
-Default bootstrap credentials:
-- Username: `admin`
-- Password: `admin123`
-- Admin PIN: `1984`
+For initial setup, configure credentials through environment variables (.env file).

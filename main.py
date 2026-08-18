@@ -1,9 +1,11 @@
 import sys
 import asyncio
 
-# Fix for WinError 10038 and asyncio race conditions on Windows (esp. Python 3.12+)
+# Fix for WinError 10038 and asyncio race conditions on Windows
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    if sys.version_info < (3, 12):
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
     
     # Suppress noisy WinError 10054 (browser closed tab mid-stream) from asyncio logs
     from asyncio.proactor_events import _ProactorBasePipeTransport
@@ -254,13 +256,18 @@ async def add_cache_control_header(request: Request, call_next):
 
 @app.get("/sw.js", include_in_schema=False)
 async def serve_sw():
-    return FileResponse(Path("static/sw.js"), media_type="application/javascript")
+    sw_path = Path("dist/sw.js") if Path("dist/sw.js").exists() else Path("public/sw.js")
+    return FileResponse(sw_path, media_type="application/javascript")
 
 @app.get("/manifest.json", include_in_schema=False)
 async def serve_manifest():
-    return FileResponse(Path("static/manifest.json"), media_type="application/json")
+    manifest_path = Path("dist/manifest.json") if Path("dist/manifest.json").exists() else Path("public/manifest.json")
+    return FileResponse(manifest_path, media_type="application/json")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+if Path("dist/assets").exists():
+    app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
+elif Path("public").exists():
+    app.mount("/public", StaticFiles(directory="public"), name="public")
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
@@ -276,7 +283,14 @@ app.include_router(collections.router, prefix="/api/collections", tags=["collect
 # Catch-all route to support SPA frontend routing
 @app.get("/{full_path:path}", include_in_schema=False)
 async def catch_all(request: Request, full_path: str):
-    # Only serve index.html for paths that don't look like file requests (no dot in the last segment)
-    # or specific frontend routes we want to handle.
-    # For a pure SPA, we can just return index.html for everything not caught by previous routers/mounts.
-    return FileResponse(Path("static/index.html"))
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API endpoint not found")
+    index_path = Path("dist/index.html") if Path("dist/index.html").exists() else Path("index.html")
+    return FileResponse(index_path)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=settings.port, reload=True)
+
+

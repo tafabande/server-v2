@@ -69,6 +69,51 @@ async def upload(
     logger.info("Admin %s uploaded file '%s' to '%s'", current_user.username, upload_file.filename, relative_shared_path(destination))
     return MessageResponse(message="Upload completed.")
 
+@router.post("/batch-upload", dependencies=[Depends(require_roles("admin", "family"))])
+async def batch_upload(
+    path: str | None = Query(default=None),
+    pin: str | None = Query(default=None),
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    target_dir = resolve_shared_path(path)
+    await ensure_pin_for_path(session, target_dir, pin, current_user=current_user)
+    
+    if not current_user.is_adult and await is_path_adult(session, target_dir):
+        from core.exceptions import AccessDeniedError
+        raise AccessDeniedError("Access to 18+ content denied for this account.")
+        
+    uploaded_count = 0
+    skipped_count = 0
+
+    for upload_file in files:
+        filename = upload_file.filename or ""
+        if filename.lower() in {"thumbs.db", "desktop.ini", ".ds_store"} or filename.startswith("._"):
+            skipped_count += 1
+            continue
+
+        try:
+            destination = await save_upload(path, upload_file)
+            uploaded_count += 1
+        except Exception as e:
+            logger.error("Error saving batch upload file '%s': %s", filename, e)
+            skipped_count += 1
+
+    if uploaded_count > 0:
+        await refresh_library_view(session)
+        await log_audit(session, current_user.id, "batch_upload", relative_shared_path(target_dir), {"count": uploaded_count})
+        logger.info("Admin %s batch uploaded %d files to '%s'", current_user.username, uploaded_count, relative_shared_path(target_dir))
+
+    return {
+        "status": "success",
+        "uploaded": uploaded_count,
+        "skipped": skipped_count,
+        "total": len(files),
+        "message": f"Successfully uploaded {uploaded_count} of {len(files)} files."
+    }
+
+
 @router.post("/rename", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "family"))])
 async def rename(
     payload: RenameRequest,

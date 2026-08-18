@@ -1,50 +1,56 @@
-# MediaHub Data & Caches
-data/
-thumbs/
-sprites/
-logs/
-temp/
+# Dependencies
+node_modules/
+.pnpm-store/
 
-# OS System Files
-thumbs.db
-Thumbs.db
-desktop.ini
-.DS_Store
-._*
+# Production builds
+dist/
+build/
+.cache/
+.vite/
+*.tsbuildinfo
 
-# Media Files / Folders
-shared_media/
-*.mp4
-*.mkv
-*.avi
-*.webm
-*.mov
-*.m4v
-*.ts
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.webp
-
-# Python & Virtual Environment
-__pycache__/
-.venv/
-venv/
-*.pyc
-
-# Environment & Databases
+# Environment & local settings
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database & runtime storage
 *.db
 *.db-shm
 *.db-wal
-# Node / Frontend Build
-node_modules/
-package-lock.json
-package.json
-tailwindcss.exe
-tailwind.config.js
 
-# Temporary Scripts & Build Artifacts
-static/css/tailwind*
-static/css/input.css
+# Media caches, thumbnails & temp uploads
+logs/
+*.log
+data/logs/
+temp/
+thumbs/
+data/temp/
+data/thumbs/*
+data/sprites/*
+!data/sprites/.gitkeep
+!data/thumbs/.gitkeep
+!data/temp/.gitkeep
+
+# Python cache & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+.venv/
+env/
+.env/
+
+# IDE, OS & System files
+.DS_Store
+.DS_Store?
+._*
+[Tt]humbs.db
+ehthumbs.db
+.vscode/
+.idea/
+*.suo
+*.user
