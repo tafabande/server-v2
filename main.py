@@ -1,10 +1,15 @@
+import os
 import sys
 import asyncio
+
+# Disable zeroconf Cython extension to prevent C-binary incompatibility errors on Windows Python 3.12+
+os.environ["ZEROCONF_USE_CYTHON"] = "0"
 
 # Fix for WinError 10038 and asyncio race conditions on Windows
 if sys.platform == "win32":
     if sys.version_info < (3, 12):
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 
     
     # Suppress noisy WinError 10054 (browser closed tab mid-stream) from asyncio logs
@@ -286,7 +291,8 @@ async def catch_all(request: Request, full_path: str):
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="API endpoint not found")
     index_path = Path("dist/index.html") if Path("dist/index.html").exists() else Path("index.html")
-    return FileResponse(index_path)
+    return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
 
 
 if __name__ == "__main__":
