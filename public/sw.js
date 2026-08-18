@@ -37,7 +37,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // Network-first strategy for API routes with cache fallback
+  // Network-first strategy for API routes
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(event.request)
@@ -61,28 +61,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first, fallback-to-network strategy for static assets
+  // Network-First strategy for HTML, JS, and CSS build assets
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse.ok) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {/* Offline fallback */});
-        return cachedResponse;
-      }
-      return fetch(event.request).then((networkResponse) => {
+    fetch(event.request)
+      .then((networkResponse) => {
         if (networkResponse.ok && event.request.url.startsWith('http')) {
           const clone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         }
         return networkResponse;
-      }).catch(() => {
-        if (event.request.headers.get('accept')?.includes('text/html')) {
-          return caches.match('/index.html');
-        }
-      });
-    })
+      })
+      .catch(() => {
+        return caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          if (event.request.headers.get('accept')?.includes('text/html')) {
+            return caches.match('/index.html');
+          }
+          return new Response('Network error - Resource unavailable offline', {
+            status: 503,
+            headers: { 'Content-Type': 'text/plain' }
+          });
+        });
+      })
   );
 });
+
