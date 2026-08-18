@@ -943,7 +943,26 @@ async def get_thumbnail(
             thumb_file = settings.thumbs_folder / Path(new_thumb_path.replace(chr(92), "/")).name
             
     if not thumb_file or not thumb_file.is_file():
-        raise HTTPException(status_code=404, detail="Thumbnail file not found.")
+        import hashlib
+        from fastapi import Response
+        title = media.title or "Media"
+        color_hue = int(hashlib.md5(title.encode()).hexdigest()[:6], 16) % 360
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
+  <rect width="300" height="450" fill="hsl({color_hue}, 35%, 12%)"/>
+  <rect width="300" height="450" fill="url(#g)" opacity="0.4"/>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="hsl({color_hue}, 70%, 50%)" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#0b0b0e" stop-opacity="0.8"/>
+    </linearGradient>
+  </defs>
+  <text x="50%" y="45%" dominant-baseline="middle" text-anchor="middle" fill="#ffffff" font-family="sans-serif" font-size="36" font-weight="bold">▶</text>
+  <text x="50%" y="60%" dominant-baseline="middle" text-anchor="middle" fill="#e0e0ea" font-family="sans-serif" font-size="14" font-weight="500">{title[:25]}</text>
+</svg>"""
+        return Response(content=svg.encode("utf-8"), media_type="image/svg+xml")
+
+    return FileResponse(thumb_file)
+
 
 # ── Preview (Hover Video) ─────────────────────────────────────────────────────
 
