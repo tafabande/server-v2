@@ -54,18 +54,64 @@ def get_scan_status() -> dict:
         "last_scan_at": _scan_state.get("last_scan_at", None),
     }
 
+def parse_nfo_file(path: Path) -> dict:
+    """Parse local sidecar .nfo file (Kodi/Jellyfin/Plex XML standard) for rich metadata."""
+    nfo_candidates = [
+        path.with_suffix(".nfo"),
+        path.parent / "movie.nfo",
+        path.parent / f"{path.stem}.nfo"
+    ]
+    
+    nfo_path = None
+    for cand in nfo_candidates:
+        if cand.exists() and cand.is_file():
+            nfo_path = cand
+            break
+
+    if not nfo_path:
+        return {}
+
+    try:
+        import xml.etree.ElementTree as ET
+        tree = ET.parse(nfo_path)
+        root = tree.getroot()
+        
+        meta = {}
+        title_node = root.find(".//title")
+        if title_node is not None and title_node.text:
+            meta["title"] = title_node.text.strip()
+            
+        year_node = root.find(".//year")
+        if year_node is not None and year_node.text:
+            try:
+                meta["year"] = int(year_node.text.strip())
+            except ValueError:
+                pass
+                
+        plot_node = root.find(".//plot") or root.find(".//outline")
+        if plot_node is not None and plot_node.text:
+            meta["plot"] = plot_node.text.strip()
+
+        genre_node = root.find(".//genre")
+        if genre_node is not None and genre_node.text:
+            meta["genre"] = genre_node.text.strip()
+
+        rating_node = root.find(".//rating")
+        if rating_node is not None and rating_node.text:
+            try:
+                meta["rating"] = float(rating_node.text.strip())
+            except ValueError:
+                pass
+
+        return meta
+    except Exception as e:
+        logger.debug(f"Failed to parse NFO file {nfo_path}: {e}")
+        return {}
+
 def clean_title(path: Path) -> str:
-    # Check for local NFO first
-    nfo_path = path.with_suffix(".nfo")
-    if nfo_path.exists():
-        try:
-            import xml.etree.ElementTree as ET
-            tree = ET.parse(nfo_path)
-            title_node = tree.find(".//title")
-            if title_node is not None and title_node.text:
-                return title_node.text.strip()
-        except Exception:
-            pass
+    nfo_meta = parse_nfo_file(path)
+    if "title" in nfo_meta:
+        return nfo_meta["title"]
             
     # Remove common technical tags and scene information
     import re
@@ -80,6 +126,7 @@ def clean_title(path: Path) -> str:
     
     title = raw.replace(".", " ").replace("_", " ").replace("-", " ")
     return " ".join(part for part in title.split() if part).title()
+
 
 def media_category(path: Path) -> str:
     relative = relative_shared_path(path)
