@@ -160,6 +160,14 @@ async def self_heal_data_integrity() -> None:
                 DELETE FROM collection_items
                 WHERE media_id NOT IN (SELECT id FROM media_metadata)
             """))
+
+            # 7. Self-heal soft-deleted items
+            reactivated = await session.execute(text("""
+                UPDATE media_metadata SET file_exists = 1 WHERE file_exists = 0
+            """))
+            if reactivated.rowcount:
+                logger.info(f"Self-healing: Reactivated {reactivated.rowcount} media items in database.")
+
             if orphan_col.rowcount:
                 logger.info(f"Self-healing: Removed {orphan_col.rowcount} orphaned collection items.")
 

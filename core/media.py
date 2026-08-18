@@ -1013,14 +1013,18 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
 
     result = await session.execute(select(MediaMetadata))
     for media in result.scalars():
-        if media.relative_path not in seen_paths:
+        source = media_source_path(media)
+        if source.exists() and source.is_file():
+            if not media.file_exists:
+                media.file_exists = True
+                media.last_verified_at = datetime.now(UTC)
+                logger.info(f"Scan cleanup: Reactivated existing media '{media.title}' (ID {media.id}).")
+        else:
             if media.file_exists:
-                # Soft-delete
                 media.file_exists = False
                 media.last_verified_at = datetime.now(UTC)
-                logger.warning(f"Scan cleanup: Media '{media.title}' (ID {media.id}) missing. Marked as inactive.")
+                logger.warning(f"Scan cleanup: Media '{media.title}' (ID {media.id}) missing on disk. Marked inactive.")
             else:
-                # Check if stale (older than 7 days)
                 from datetime import timedelta
                 stale_days = getattr(settings, "stale_db_days", 7)
                 cutoff = datetime.now(UTC) - timedelta(days=stale_days)
@@ -1029,11 +1033,11 @@ async def scan_media_library(session: AsyncSession, use_cache: bool = True, forc
                     if last_verified.tzinfo is None:
                         last_verified = last_verified.replace(tzinfo=UTC)
                     if last_verified < cutoff:
-                        # Hard-delete
                         await session.delete(media)
-                        logger.info(f"Scan cleanup: Stale media '{media.title}' (ID {media.id}) deleted.")
+                        logger.info(f"Scan cleanup: Stale missing media '{media.title}' (ID {media.id}) deleted.")
 
     await session.commit()
+
 
     if build_all:
         logger.info("Starting aggressive preparation of thumbnails and sprite sheets...")
