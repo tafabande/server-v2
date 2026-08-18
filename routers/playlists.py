@@ -17,7 +17,7 @@ from core.schemas import (
     PlaylistRead,
     PlaylistReorderRequest,
 )
-from core.security import get_current_user
+from core.security import get_current_user, get_optional_user
 from core.media import is_media_accessible
 
 router = APIRouter()
@@ -25,10 +25,13 @@ router = APIRouter()
 @router.get("", response_model=list[PlaylistRead])
 async def list_playlists(
     request: Request,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_optional_user)],
     session: AsyncSession = Depends(get_db),
 ) -> list[PlaylistRead]:
     """List playlists owned by the current user. Favorites is always first."""
+    if not current_user or current_user.role == "guest":
+        return []
+
     nsfw_enabled = current_user.preferences.get("nsfw") == True if current_user and current_user.preferences else False
     if request.headers.get("X-Disable-R18") == "true":
         nsfw_enabled = False
