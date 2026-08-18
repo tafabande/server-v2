@@ -43,20 +43,16 @@ async def browse(
 
     return DirectoryListing(path=relative_path, parent=parent, items=items)
 
-@router.post("/upload", response_model=MessageResponse, dependencies=[Depends(require_roles("admin", "family"))])
+@router.post("/upload", response_model=MessageResponse)
 async def upload(
     path: str | None = Query(default=None),
     pin: str | None = Query(default=None),
     upload_file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ) -> MessageResponse:
     target_dir = resolve_shared_path(path)
     await ensure_pin_for_path(session, target_dir, pin, current_user=current_user)
-    
-    if not current_user.is_adult and await is_path_adult(session, target_dir):
-        from core.exceptions import AccessDeniedError
-        raise AccessDeniedError("Access to 18+ content denied for this account.")
         
     filename = upload_file.filename or ""
     if filename.lower() in {"thumbs.db", "desktop.ini", ".ds_store"} or filename.startswith("._"):
@@ -64,25 +60,26 @@ async def upload(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="System files are not allowed.")
         
     destination = await save_upload(path, upload_file)
-    await refresh_library_view(session)
-    await log_audit(session, current_user.id, "upload", relative_shared_path(destination), {"filename": upload_file.filename})
-    logger.info("Admin %s uploaded file '%s' to '%s'", current_user.username, upload_file.filename, relative_shared_path(destination))
+    from core.media import scan_media_library
+    await scan_media_library(session, use_cache=False)
+    await broadcast_library_updated(1)
+    user_id = current_user.id if current_user else 1
+    username = current_user.username if current_user else "lan-user"
+    await log_audit(session, user_id, "upload", relative_shared_path(destination), {"filename": upload_file.filename})
+    logger.info("User %s uploaded file '%s' to '%s'", username, upload_file.filename, relative_shared_path(destination))
     return MessageResponse(message="Upload completed.")
 
-@router.post("/batch-upload", dependencies=[Depends(require_roles("admin", "family"))])
+
+@router.post("/batch-upload")
 async def batch_upload(
     path: str | None = Query(default=None),
     pin: str | None = Query(default=None),
     files: list[UploadFile] = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_user),
     session: AsyncSession = Depends(get_db),
 ):
     target_dir = resolve_shared_path(path)
     await ensure_pin_for_path(session, target_dir, pin, current_user=current_user)
-    
-    if not current_user.is_adult and await is_path_adult(session, target_dir):
-        from core.exceptions import AccessDeniedError
-        raise AccessDeniedError("Access to 18+ content denied for this account.")
         
     uploaded_count = 0
     skipped_count = 0
@@ -103,10 +100,14 @@ async def batch_upload(
             skipped_count += 1
 
     if uploaded_count > 0:
-        await refresh_library_view(session)
+        from core.media import scan_media_library
+        await scan_media_library(session, use_cache=False)
         await broadcast_library_updated(uploaded_count)
-        await log_audit(session, current_user.id, "batch_upload", relative_shared_path(target_dir), {"count": uploaded_count})
-        logger.info("Admin %s batch uploaded %d files to '%s'", current_user.username, uploaded_count, relative_shared_path(target_dir))
+        user_id = current_user.id if current_user else 1
+        username = current_user.username if current_user else "lan-user"
+        await log_audit(session, user_id, "batch_upload", relative_shared_path(target_dir), {"count": uploaded_count})
+        logger.info("User %s batch uploaded %d files to '%s'", username, uploaded_count, relative_shared_path(target_dir))
+
 
 
     return {
