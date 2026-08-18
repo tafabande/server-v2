@@ -94,15 +94,17 @@ class ApiClient {
       }
 
       this.ws.onclose = () => {
-        setTimeout(() => this.ensureWebSocket(), 3000)
+        this.ws = null
+        setTimeout(() => this.ensureWebSocket(), 10000)
       }
 
       this.ws.onerror = () => {
-        try { this.ws?.close() } catch {}
+        // Silently handle error, onclose will trigger backoff reconnect
       }
     } catch (e) {
-      console.warn('WebSocket connection error:', e)
+      // Ignore background socket errors
     }
+
   }
 
 
